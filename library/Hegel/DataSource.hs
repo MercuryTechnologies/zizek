@@ -1,8 +1,11 @@
 module Hegel.DataSource
   ( DataSource (..)
   , Status (..)
+  , Label (..)
   , newDataSource
   , generate
+  , startSpan
+  , stopSpan
   , markComplete
   ) where
 
@@ -20,6 +23,24 @@ data Status
   | Invalid
   | Overrun
   | Interesting Text
+
+data Label
+  = LabelList
+  | LabelListElement
+  | LabelSet
+  | LabelSetElement
+  | LabelMap
+  | LabelMapEntry
+  | LabelTuple
+  | LabelOneOf
+  | LabelOptional
+  | LabelFixedDict
+  | LabelFlatMap
+  | LabelFilter
+  | LabelMapped
+  | LabelSampledFrom
+  | LabelEnumVariant
+  deriving stock (Show)
 
 data DataSource = DataSource
   { stream :: !(MVar (Maybe Stream))
@@ -44,6 +65,14 @@ generate ds schema = do
           Nothing -> pure ()
         pure Nothing
       throwIO e
+
+-- | No-op stub until protocol span support is wired up.
+startSpan :: DataSource -> Label -> IO ()
+startSpan _ _ = pure ()
+
+-- | No-op stub until protocol span support is wired up.
+stopSpan :: DataSource -> Bool -> IO ()
+stopSpan _ _ = pure ()
 
 markComplete :: DataSource -> Status -> IO ()
 markComplete ds status =

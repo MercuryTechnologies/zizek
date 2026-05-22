@@ -6,29 +6,28 @@ module Hegel
   ) where
 
 import Control.Exception (throwIO)
-import Hegel.Generators (Generator (..))
+import Hegel.Generators (Generator)
 import Hegel.Outcome
 import Hegel.Runner
 
 runProperty
-  :: (Generator g)
-  => Settings
-  -> g
-  -> (Output g -> IO ())
-  -> IO (Outcome (Output g))
+  :: Settings
+  -> Generator a
+  -> (a -> IO ())
+  -> IO (Outcome a)
 runProperty = runPropertyWith
 
 runProperty_
-  :: (Generator g, Show (Output g))
+  :: Show a
   => Settings
-  -> g
-  -> (Output g -> IO ())
+  -> Generator a
+  -> (a -> IO ())
   -> IO ()
 runProperty_ settings gen body = do
   outcome <- runPropertyWith settings gen body
   case outcome of
-    Passed _                  -> pure ()
-    Failed cex msg notes      -> throwIO (PropertyFailed cex msg notes)
-    Errored exc               -> throwIO exc
-    Rejected msg              -> fail ("Property rejected all inputs: " <> show msg)
-    UnhealthyInput msg        -> fail ("Health check failed: " <> show msg)
+    Passed _             -> pure ()
+    Failed cex msg notes -> throwIO (PropertyFailed cex msg notes)
+    Errored exc          -> throwIO exc
+    Rejected msg         -> fail ("Property rejected all inputs: " <> show msg)
+    UnhealthyInput msg   -> fail ("Health check failed: " <> show msg)

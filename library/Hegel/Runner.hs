@@ -1,3 +1,5 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module Hegel.Runner
   ( Settings (..)
   , defaultSettings
@@ -13,7 +15,7 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Data.Word (Word32, Word64)
 import Hegel.DataSource (Status (..), markComplete, newDataSource)
-import Hegel.Generators (Generator (..), draw)
+import Hegel.Generators (Generator, draw)
 import Hegel.Outcome (Outcome (..), Stats (..))
 import Hegel.Protocol.Cbor
   ( asBool
@@ -53,18 +55,18 @@ data CaseResult a
   | CaseInteresting !Text !(Maybe a)
 
 runCase
-  :: forall g. (Generator g)
-  => Connection
+  :: forall a
+   . Connection
   -> Word32
-  -> g
-  -> (Output g -> IO ())
-  -> IO (CaseResult (Output g))
+  -> Generator a
+  -> (a -> IO ())
+  -> IO (CaseResult a)
 runCase conn sid gen body = do
   (_, caseQ) <- connectStream conn sid
   caseStream <- mkStream conn sid caseQ
   ds <- newDataSource caseStream
   let tc = TestCase ds
-  eVal <- try (draw tc gen) :: IO (Either SomeException (Output g))
+  eVal <- try (draw tc gen) :: IO (Either SomeException a)
   case eVal of
     Left exc -> do
       let msg = T.pack (show exc)
@@ -82,11 +84,10 @@ runCase conn sid gen body = do
           pure (CaseInteresting msg (Just val))
 
 runPropertyWith
-  :: (Generator g)
-  => Settings
-  -> g
-  -> (Output g -> IO ())
-  -> IO (Outcome (Output g))
+  :: Settings
+  -> Generator a
+  -> (a -> IO ())
+  -> IO (Outcome a)
 runPropertyWith settings gen body = do
   ses <- getOrInitSession
   let conn = ses.conn
@@ -131,11 +132,10 @@ runPropertyWith settings gen body = do
           else replayFinalCases testStream conn (fromIntegral nInteresting) gen body
 
 runEventLoop
-  :: (Generator g)
-  => Stream
+  :: Stream
   -> Connection
-  -> g
-  -> (Output g -> IO ())
+  -> Generator a
+  -> (a -> IO ())
   -> IO (Value, Word64)
 runEventLoop testStream conn gen body = go
   where
@@ -167,13 +167,12 @@ runEventLoop testStream conn gen body = go
             fail $ "runEventLoop: unknown event type: " <> T.unpack other
 
 replayFinalCases
-  :: forall g. (Generator g)
-  => Stream
+  :: Stream
   -> Connection
   -> Int
-  -> g
-  -> (Output g -> IO ())
-  -> IO (Outcome (Output g))
+  -> Generator a
+  -> (a -> IO ())
+  -> IO (Outcome a)
 replayFinalCases testStream conn n gen body = go n Nothing
   where
     ackNull = CE.encode (buildMap [("result", nullVal)])

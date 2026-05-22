@@ -1,7 +1,8 @@
 module Main (main) where
 
+import Data.Function ((&))
 import Hegel (runProperty, runProperty_)
-import Hegel.Generators.Integer (integers, withRange)
+import Hegel.Generators.Integer qualified as Integer
 import Hegel.Outcome (Outcome (..))
 import Hegel.Runner (defaultSettings)
 
@@ -14,7 +15,7 @@ main = do
 passingTest :: IO ()
 passingTest = do
   putStrLn "Running passing property..."
-  runProperty_ defaultSettings (integers @Int `withRange` (0, 100)) $ \n ->
+  runProperty_ defaultSettings (Integer.gen $ Integer.integers @Int & Integer.withRange (0, 100)) $ \n ->
     if n >= 0 && n <= 100
       then pure ()
       else error ("out of range: " <> show n)
@@ -24,12 +25,12 @@ passingTest = do
 failingTest :: IO ()
 failingTest = do
   putStrLn "Running failing property (expect shrunk counterexample)..."
-  outcome <- runProperty defaultSettings (integers @Int `withRange` (0, 100)) $ \n ->
+  outcome <- runProperty defaultSettings (Integer.gen $ Integer.integers @Int & Integer.withRange (0, 100)) $ \n ->
     if n /= 42
       then pure ()
       else error "found 42"
   case outcome of
-    Failed ce _msg _notes -> do
+    Failed ce _msg _notes ->
       putStrLn $ "FAILED (expected): counterexample = " <> show ce
     other -> do
       putStrLn $ "Unexpected outcome: " <> show other
