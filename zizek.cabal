@@ -1,0 +1,72 @@
+cabal-version: 3.0
+name: zizek
+version: 0.0.0
+synopsis: Hegel Property Tests
+description: Property-based testing for Haskell, built on Hypothesis.
+author: jkachmar
+copyright: 2026 jkachmar
+maintainer: j@mercury.com
+license: MPL-2.0
+license-file: LICENSE
+tested-with: ghc ^>=9.10 && ^>=9.12
+build-type: Simple
+
+common all
+  default-language: GHC2021
+  build-depends:
+    base ^>=4.20 || ^>=4.21 || ^>=4.22,
+  default-extensions:
+    BlockArguments
+    DeriveAnyClass
+    DerivingStrategies
+    ImportQualifiedPost
+    OverloadedRecordDot
+    OverloadedStrings
+    PatternSynonyms
+    ScopedTypeVariables
+    StrictData
+
+  ghc-options:
+    -Weverything
+    -Wno-all-missed-specialisations
+    -Wno-implicit-prelude
+    -Wno-missed-specialisations
+    -Wno-missing-export-lists
+    -Wno-missing-kind-signatures
+    -Wno-missing-safe-haskell-mode
+    -Wno-safe
+    -Wno-unsafe
+
+common library
+  import: all
+  build-depends:
+    base ^>=4.20 || ^>=4.21 || ^>=4.22,
+    patrol,
+    typed-process,
+    unliftio
+
+library
+  import: library
+  hs-source-dirs: library
+  -- cabal-gild: discover library
+  exposed-modules:
+
+  if os(osx)
+    frameworks:
+      CoreFoundation
+      IOKit
+      Security
+
+test-suite unit
+  import: library
+  type: exitcode-stdio-1.0
+  hs-source-dirs: test/unit
+  main-is: Main.hs
+  -- cabal-gild: discover test/unit --exclude=test/unit/Main.hs
+  other-modules:
+
+  build-depends:
+    hspec ^>=2.11,
+    tasty ^>=1.5,
+    tasty-hspec ^>=1.2,
+    zizek,

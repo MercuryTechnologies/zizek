@@ -1,0 +1,22 @@
+# jujutsu VCS
+.jj/*
+
+# envrc & direnv cache
+.envrc
+.direnv/*
+
+# nix build artifacts
+result
+
+# cabal-install build artifacts
+dist-newstyle/*
+cabal/*
+
+# GHC profiling artifacts
+**/*.prof*
+
+# local claude settings
+.claude/settings.local.json
+
+# misc docs
+misc/*
