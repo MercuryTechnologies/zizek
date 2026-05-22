@@ -25,6 +25,7 @@ common all
     PatternSynonyms
     ScopedTypeVariables
     StrictData
+    TypeFamilies
 
   ghc-options:
     -Weverything
@@ -32,24 +33,48 @@ common all
     -Wno-implicit-prelude
     -Wno-missed-specialisations
     -Wno-missing-export-lists
+    -Wno-missing-import-lists
     -Wno-missing-kind-signatures
+    -Wno-missing-role-annotations
     -Wno-missing-safe-haskell-mode
     -Wno-safe
     -Wno-unsafe
+    -Wno-unused-packages
 
 common library
   import: all
   build-depends:
+    async ^>=2.2,
     base ^>=4.20 || ^>=4.21 || ^>=4.22,
+    bytestring ^>=0.12,
+    containers ^>=0.7,
+    digest ^>=0.0,
     patrol,
-    typed-process,
-    unliftio
+    stm ^>=2.5,
+    stm-containers ^>=1.2,
+    text ^>=2.1,
+    typed-process ^>=0.2,
+    unliftio ^>=0.2,
+    vector ^>=0.13,
+    wireform-cbor,
 
 library
   import: library
   hs-source-dirs: library
   -- cabal-gild: discover library
   exposed-modules:
+    Hegel
+    Hegel.DataSource
+    Hegel.Generators
+    Hegel.Generators.Integer
+    Hegel.Outcome
+    Hegel.Protocol.Cbor
+    Hegel.Protocol.Connection
+    Hegel.Protocol.Packet
+    Hegel.Protocol.Stream
+    Hegel.Runner
+    Hegel.Session
+    Hegel.TestCase
 
   if os(osx)
     frameworks:

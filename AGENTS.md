@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) and other coding age
 
 ## Overview
 
-This is the Haskell library for Hegel, a universal property-based testing framework. The library communicates with a Python server (powered by Hypothesis) via Unix sockets to generate test data.
+This is the Haskell library for Hegel, a universal property-based testing framework. The library communicates with a Python server (powered by Hypothesis) over stdin/stdout pipes to a child process to generate test data.
 
 ```bash
 just check                                          # UNIMPLEMENTED: run full CI checks
@@ -23,7 +23,7 @@ Minimum supported GHC version is 9.10 (enforced in CI and hegel.cabal). If you b
 
 - `library/Hegel.hs` — Public API: 
 - `library/Hegel/Protocol.hs` — Binary protocol: packet encoding/decoding, stream multiplexing
-- `library/Hegel/Runner.hs` — Spawns hegel CLI, manages socket server
+- `library/Hegel/Runner.hs` — Spawns hegel CLI, manages the child process connection
 - `library/Hegel/Generators/` — All generator implementations
 - `library/Hegel/Generators.hs` — `Generate` typeclass + `TestCaseData`
 - `library/Hegel/TH.hs` — Template Haskell macros for deriving `Generate` instances
@@ -45,7 +45,7 @@ import Hegel.Collection qualified as Collection
 
 ### How It Works
 
-The library creates a Unix socket path and spawns the `hegel` CLI as a subprocess. The server binds to the socket and listens for the client to connect. A single persistent connection is maintained for the program run, supporting multiple test executions.
+The library spawns the `hegel` CLI as a child process and communicates over its stdin/stdout handles. A single persistent connection is maintained for the program run, supporting multiple test executions.
 
 ### Protocol
 
@@ -62,7 +62,7 @@ Generators implement `Generator a`:
 - `draw :: Generator a => a -> TestCase -> Output a` — Produce a value, where `Output` is an associated type of `Generator`
 - `asBasic` — Returns `Maybe (BasicGenerator a)` with a CBOR schema + parse function
 
-When `as_basic()` returns `Just`, generation uses a single socket request with the schema. When `Nothing` (after `map`/`filter` on non-basic generators, or `>>=`), it falls back to multiple requests wrapped in spans for shrinking.
+When `asBasic` returns `Just`, generation uses a single request with the schema. When `Nothing` (after `map`/`filter` on non-basic generators, or `>>=`), it falls back to multiple requests wrapped in spans for shrinking.
 
 NOTE: `map` on a `BasicGenerator` preserves the schema by composing the transform function, rather than losing it.
 
