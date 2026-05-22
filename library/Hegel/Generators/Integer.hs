@@ -1,11 +1,12 @@
 module Hegel.Generators.Integer
-  ( IntegerGenerator
-  , gen
-  , integers
-  , withRange
-  , minValue
-  , maxValue
-  ) where
+  ( IntegerGenerator,
+    gen,
+    integers,
+    withRange,
+    minValue,
+    maxValue,
+  )
+where
 
 import CBOR.Value (Value (..))
 import Data.Maybe (fromMaybe)
@@ -13,8 +14,8 @@ import Hegel.Generators (Generator, pattern Schema)
 import Hegel.Protocol.Cbor (ParseError (..), buildMap, intVal, textVal)
 
 data IntegerGenerator a = IntegerGenerator
-  { minVal :: Maybe a
-  , maxVal :: Maybe a
+  { minVal :: Maybe a,
+    maxVal :: Maybe a
   }
 
 integers :: IntegerGenerator a
@@ -34,14 +35,15 @@ gen cfg =
   let lo = fromMaybe minBound cfg.minVal
       hi = fromMaybe maxBound cfg.maxVal
    in Schema
-        (buildMap
-          [ ("type",      textVal "integer")
-          , ("min_value", intVal lo)
-          , ("max_value", intVal hi)
-          ])
+        ( buildMap
+            [ ("type", textVal "integer"),
+              ("min_value", intVal lo),
+              ("max_value", intVal hi)
+            ]
+        )
         parseInteger
 
 parseInteger :: (Integral a) => Value -> Either ParseError a
 parseInteger (UInt n) = Right (fromIntegral n)
 parseInteger (NInt n) = Right (fromIntegral (negate (fromIntegral n :: Integer) - 1))
-parseInteger v        = Left ParseError {expected = "integer", got = v}
+parseInteger v = Left ParseError {expected = "integer", got = v}

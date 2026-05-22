@@ -41,6 +41,7 @@
                 haskellPackages.ormolu
                 # misc dev dependencies
                 repomix
+                tokei
                 zlib.dev
                 # hegel-core server
                 self'.packages.hegel-core

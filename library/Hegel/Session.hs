@@ -1,24 +1,25 @@
 module Hegel.Session
-  ( Session (..)
-  , getOrInitSession
-  ) where
+  ( Session (..),
+    getOrInitSession,
+  )
+where
 
 import Control.Concurrent (forkIO, threadDelay)
-import Text.Read (readMaybe)
 import Data.ByteString.Char8 qualified as BS8
 import Data.Function ((&))
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Hegel.Protocol.Connection
-  ( Connection
-  , controlStream
-  , markServerExited
-  , newConnection
-  , serverHasExited
+  ( Connection,
+    controlStream,
+    markServerExited,
+    newConnection,
+    serverHasExited,
   )
 import Hegel.Protocol.Stream (Stream, mkStream, receiveReply, sendRequest)
 import System.IO (Handle, hSetBinaryMode)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Process.Typed
+import Text.Read (readMaybe)
 import UnliftIO.MVar (MVar, newMVar, withMVar)
 
 handshakeString :: BS8.ByteString
@@ -31,9 +32,9 @@ supportedProtocolHi :: (Int, Int)
 supportedProtocolHi = (0, 15)
 
 data Session = Session
-  { conn    :: !Connection
-  , control :: !(MVar Stream)
-  , process :: !(Process Handle Handle ())
+  { conn :: !Connection,
+    control :: !(MVar Stream),
+    process :: !(Process Handle Handle ())
   }
 
 globalSessionRef :: IORef (Maybe Session)
@@ -79,17 +80,18 @@ initSession = do
   rep <- receiveReply ctrl mid
   let decoded = BS8.unpack rep
   ver <- case dropPrefix "Hegel/" decoded of
-    Nothing  -> fail $ "Bad handshake response: " <> show decoded
+    Nothing -> fail $ "Bad handshake response: " <> show decoded
     Just ver -> pure ver
   parsed <- parseVersion ver
   if parsed < supportedProtocolLo || parsed > supportedProtocolHi
-    then fail $
-      "Protocol version mismatch: server reported "
-        <> ver
-        <> ", supported "
-        <> showVer supportedProtocolLo
-        <> " to "
-        <> showVer supportedProtocolHi
+    then
+      fail $
+        "Protocol version mismatch: server reported "
+          <> ver
+          <> ", supported "
+          <> showVer supportedProtocolLo
+          <> " to "
+          <> showVer supportedProtocolHi
     else pure ()
   ctrlMVar <- newMVar ctrl
   _ <- forkIO (monitorProcess conn p)
@@ -98,7 +100,7 @@ initSession = do
 dropPrefix :: String -> String -> Maybe String
 dropPrefix [] ys = Just ys
 dropPrefix (x : xs) (y : ys)
-  | x == y    = dropPrefix xs ys
+  | x == y = dropPrefix xs ys
   | otherwise = Nothing
 dropPrefix _ [] = Nothing
 
@@ -107,7 +109,7 @@ parseVersion s =
   case break (== '.') s of
     (maj, '.' : minS) -> case (readMaybe maj, readMaybe minS) of
       (Just a, Just b) -> pure (a, b)
-      _                -> fail $ "Invalid version string: " <> s
+      _ -> fail $ "Invalid version string: " <> s
     _ -> fail $ "Invalid version string: " <> s
 
 showVer :: (Int, Int) -> String
@@ -119,5 +121,5 @@ monitorProcess conn p = go
     go = do
       mec <- getExitCode p
       case mec of
-        Just _  -> markServerExited conn
+        Just _ -> markServerExited conn
         Nothing -> threadDelay 10_000 >> go

@@ -7,14 +7,16 @@ This file provides guidance to Claude Code (claude.ai/code) and other coding age
 This is the Haskell library for Hegel, a universal property-based testing framework. The library communicates with a Python server (powered by Hypothesis) over stdin/stdout pipes to a child process to generate test data.
 
 ```bash
-just check                                          # UNIMPLEMENTED: run full CI checks
-just test                                           # run tests
-just lint                                           # UNIMPLEMENTED: run linters
-just format                                         # run formatters
-just docs                                           # UNIMPLEMENTED: build and open docs
-just check-conformance                              # UNIMPLEMENTED: run python conformance tests
-just check-coverage                                 # UNIMPLEMENTED: check coverage (requires cargo-llvm-cov + llvm-tools-preview)
-cabal test hegel --test-options="--match test_name" # UNIMPLEMENTED: run a single test
+just check                                           # run format-check + build + test (CI gate)
+just test                                            # run tests
+just test suite=<name>                               # run a specific test suite
+just lint                                            # STUB: run linters (add hlint to flake.nix first)
+just format                                          # run formatters (cabal, Haskell, Nix)
+just format-check                                    # check formatting without modifying files
+just docs                                            # build API docs via haddock
+just check-conformance                               # STUB: run python conformance tests (tests/conformance/ not yet written)
+just check-coverage                                  # STUB: check coverage (add hpc-codecov to flake.nix first)
+cabal test zizek:unit --test-options="--match name"  # run a single test (requires hspec/tasty test framework)
 ```
 
 Minimum supported GHC version is 9.10 (enforced in CI and hegel.cabal). If you bump it, also bump `ci.yml`.

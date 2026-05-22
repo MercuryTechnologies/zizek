@@ -1,9 +1,11 @@
 {-# LANGUAGE ViewPatterns #-}
+
 module Hegel.Protocol.Packet
-  ( Packet (..)
-  , readPacket
-  , writePacket
-  ) where
+  ( Packet (..),
+    readPacket,
+    writePacket,
+  )
+where
 
 import Data.Bits (complement, shiftL, shiftR, (.&.), (.|.))
 import Data.ByteString (ByteString)
@@ -25,19 +27,19 @@ packetHeaderSize :: Int
 packetHeaderSize = 20
 
 data Packet = Packet
-  { stream    :: !Word32
-  , messageId :: !Word32
-  , isReply   :: !Bool
-  , payload   :: !ByteString
+  { stream :: !Word32,
+    messageId :: !Word32,
+    isReply :: !Bool,
+    payload :: !ByteString
   }
   deriving stock (Show)
 
 w32be :: Word32 -> [Word8]
 w32be w =
-  [ fromIntegral (w `shiftR` 24)
-  , fromIntegral (w `shiftR` 16 .&. 0xFF)
-  , fromIntegral (w `shiftR` 8 .&. 0xFF)
-  , fromIntegral (w .&. 0xFF)
+  [ fromIntegral (w `shiftR` 24),
+    fromIntegral (w `shiftR` 16 .&. 0xFF),
+    fromIntegral (w `shiftR` 8 .&. 0xFF),
+    fromIntegral (w .&. 0xFF)
   ]
 
 beWord32 :: ByteString -> Int -> Word32
@@ -52,32 +54,32 @@ beWord32 bs i =
 parseHeader :: ByteString -> Maybe (Word32, Word32, Word32, Int)
 parseHeader hdr
   | BS.length hdr < packetHeaderSize = Nothing
-  | beWord32 hdr 0 /= Magic          = Nothing
+  | beWord32 hdr 0 /= Magic = Nothing
   | otherwise =
       Just
-        ( beWord32 hdr 4              -- stored checksum
-        , beWord32 hdr 8              -- stream id
-        , beWord32 hdr 12             -- raw message id (reply bit intact)
-        , fromIntegral (beWord32 hdr 16) -- payload length
+        ( beWord32 hdr 4, -- stored checksum
+          beWord32 hdr 8, -- stream id
+          beWord32 hdr 12, -- raw message id (reply bit intact)
+          fromIntegral (beWord32 hdr 16) -- payload length
         )
 
-pattern ValidHeader
-  :: Word32  -- stored checksum
-  -> Word32  -- stream id
-  -> Word32  -- raw message id (reply bit intact)
-  -> Int     -- payload length
-  -> ByteString
+pattern ValidHeader ::
+  Word32 -> -- stored checksum
+  Word32 -> -- stream id
+  Word32 -> -- raw message id (reply bit intact)
+  Int -> -- payload length
+  ByteString
 pattern ValidHeader csum sid rawId payLen <- (parseHeader -> Just (csum, sid, rawId, payLen))
 
 checkTerminator :: ByteString -> IO ()
 checkTerminator bs
   | BS.null bs || BS.head bs /= Terminator = fail "readPacket: bad terminator"
-  | otherwise                               = pure ()
+  | otherwise = pure ()
 
 verifyChecksum :: ByteString -> ByteString -> Word32 -> IO ()
 verifyChecksum hdr body stored = do
   let hdrZeroed = BS.take 4 hdr <> BS.pack [0, 0, 0, 0] <> BS.drop 8 hdr
-  let actual    = crc32 (hdrZeroed <> body)
+  let actual = crc32 (hdrZeroed <> body)
   if actual /= stored
     then fail "readPacket: checksum mismatch"
     else pure ()

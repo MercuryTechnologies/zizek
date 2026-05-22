@@ -1,13 +1,14 @@
 module Hegel.DataSource
-  ( DataSource (..)
-  , Status (..)
-  , Label (..)
-  , newDataSource
-  , generate
-  , startSpan
-  , stopSpan
-  , markComplete
-  ) where
+  ( DataSource (..),
+    Status (..),
+    Label (..),
+    newDataSource,
+    generate,
+    startSpan,
+    stopSpan,
+    markComplete,
+  )
+where
 
 import CBOR.Decode qualified as CD
 import CBOR.Encode qualified as CE
@@ -54,14 +55,15 @@ generate ds schema = do
   result <- try @SomeException $
     withMVar ds.stream $ \ms -> case ms of
       Nothing -> fail "DataSource: already aborted (StopTest)"
-      Just s  -> requestCbor s $
-        buildMap [("command", textVal "generate"), ("schema", schema)]
+      Just s ->
+        requestCbor s $
+          buildMap [("command", textVal "generate"), ("schema", schema)]
   case result of
     Right v -> pure v
     Left e -> do
       modifyMVar_ ds.stream $ \ms -> do
         case ms of
-          Just s  -> closeStream s
+          Just s -> closeStream s
           Nothing -> pure ()
         pure Nothing
       throwIO e
@@ -80,23 +82,24 @@ markComplete ds status =
     Nothing -> pure Nothing
     Just s -> do
       let (statusText, origin) = case status of
-            Valid           -> ("VALID", nullVal)
-            Invalid         -> ("INVALID", nullVal)
-            Overrun         -> ("OVERRUN", nullVal)
+            Valid -> ("VALID", nullVal)
+            Invalid -> ("INVALID", nullVal)
+            Overrun -> ("OVERRUN", nullVal)
             Interesting msg -> ("INTERESTING", textVal msg)
-      let req = CE.encode $
-            buildMap
-              [ ("command", textVal "mark_complete")
-              , ("status", textVal statusText)
-              , ("origin", origin)
-              ]
+      let req =
+            CE.encode $
+              buildMap
+                [ ("command", textVal "mark_complete"),
+                  ("status", textVal statusText),
+                  ("origin", origin)
+                ]
       mid <- sendRequest s req
       rep <- receiveReply s mid
       case CD.decode rep of
-        Left err  -> fail $ "markComplete: CBOR decode: " <> err
+        Left err -> fail $ "markComplete: CBOR decode: " <> err
         Right val -> case lookupKey "error" val of
           Nothing -> pure ()
-          Just _  -> case lookupKey "type" val >>= asText of
+          Just _ -> case lookupKey "type" val >>= asText of
             Just "StopTest" -> pure ()
             other -> fail $ "markComplete: unexpected server error: " <> show other
       closeStream s

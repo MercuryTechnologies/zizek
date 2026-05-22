@@ -1,14 +1,15 @@
 module Hegel.Protocol.Connection
-  ( Connection
-  , newConnection
-  , controlStream
-  , newStream
-  , connectStream
-  , unregisterStream
-  , markServerExited
-  , serverHasExited
-  , sendPacket
-  ) where
+  ( Connection,
+    newConnection,
+    controlStream,
+    newStream,
+    connectStream,
+    unregisterStream,
+    markServerExited,
+    serverHasExited,
+    sendPacket,
+  )
+where
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVar, writeTVar)
@@ -23,18 +24,18 @@ import System.IO (Handle)
 import UnliftIO.MVar (MVar, newMVar, withMVar)
 
 data Connection = Connection
-  { connWriter  :: !(MVar Handle)
-  , connStreams  :: !(Map Word32 (TBQueue Packet))
-  , connNextId  :: !(TVar Word32)
-  , connExited  :: !(TVar Bool)
+  { connWriter :: !(MVar Handle),
+    connStreams :: !(Map Word32 (TBQueue Packet)),
+    connNextId :: !(TVar Word32),
+    connExited :: !(TVar Bool)
   }
 
 newConnection :: Handle -> Handle -> IO Connection
 newConnection rh wh = do
-  writer  <- newMVar wh
+  writer <- newMVar wh
   streams <- Map.newIO
-  nextId  <- newTVarIO 1
-  exited  <- newTVarIO False
+  nextId <- newTVarIO 1
+  exited <- newTVarIO False
   let conn = Connection writer streams nextId exited
   _ <- forkIO (readerLoop conn rh)
   pure conn
@@ -52,7 +53,7 @@ readerLoop conn rh = go
           atomically do
             mq <- Map.lookup pkt.stream conn.connStreams
             case mq of
-              Just q  -> writeTBQueue q pkt
+              Just q -> writeTBQueue q pkt
               Nothing -> pure ()
           go
 

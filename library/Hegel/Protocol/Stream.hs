@@ -1,15 +1,16 @@
 module Hegel.Protocol.Stream
-  ( Stream
-  , mkStream
-  , streamId
-  , sendRequest
-  , writeReply
-  , receiveReply
-  , receiveRequest
-  , closeStream
-  , markClosed
-  , requestCbor
-  ) where
+  ( Stream,
+    mkStream,
+    streamId,
+    sendRequest,
+    writeReply,
+    receiveReply,
+    receiveRequest,
+    closeStream,
+    markClosed,
+    requestCbor,
+  )
+where
 
 import CBOR.Decode qualified as CD
 import CBOR.Encode qualified as CE
@@ -34,21 +35,21 @@ closeStreamMessageId :: Word32
 closeStreamMessageId = (1 `shiftL` 31) - 1
 
 data Stream = Stream
-  { streamId      :: !Word32
-  , connection    :: !Connection
-  , inbox         :: !(TBQueue Packet)
-  , nextMessageId :: !(IORef Word32)
-  , replies       :: !(IORef (Map Word32 ByteString))
-  , requests      :: !(IORef [Packet])
-  , closed        :: !(IORef Bool)
+  { streamId :: !Word32,
+    connection :: !Connection,
+    inbox :: !(TBQueue Packet),
+    nextMessageId :: !(IORef Word32),
+    replies :: !(IORef (Map Word32 ByteString)),
+    requests :: !(IORef [Packet]),
+    closed :: !(IORef Bool)
   }
 
 mkStream :: Connection -> Word32 -> TBQueue Packet -> IO Stream
 mkStream connection streamId inbox = do
   nextMessageId <- newIORef 1
-  replies       <- newIORef Map.empty
-  requests      <- newIORef []
-  closed        <- newIORef False
+  replies <- newIORef Map.empty
+  requests <- newIORef []
+  closed <- newIORef False
   pure Stream {streamId, connection, inbox, nextMessageId, replies, requests, closed}
 
 checkClosed :: Stream -> IO ()
@@ -106,12 +107,14 @@ closeStream :: Stream -> IO ()
 closeStream s = do
   markClosed s
   unregisterStream s.connection s.streamId
-  sendPacket s.connection Packet
-    { stream    = s.streamId
-    , messageId = closeStreamMessageId
-    , isReply   = False
-    , payload   = closeStreamPayload
-    }
+  sendPacket
+    s.connection
+    Packet
+      { stream = s.streamId,
+        messageId = closeStreamMessageId,
+        isReply = False,
+        payload = closeStreamPayload
+      }
 
 -- | Encode a Value as CBOR, send as a request, await the reply,
 -- decode it, and return the "result" field (or the whole map on success).
@@ -122,7 +125,7 @@ requestCbor s msg = do
   mid <- sendRequest s pay
   rep <- receiveReply s mid
   case CD.decode rep of
-    Left err  -> fail $ "requestCbor: CBOR decode: " <> err
+    Left err -> fail $ "requestCbor: CBOR decode: " <> err
     Right val -> case lookupKey "error" val of
       Just errVal -> do
         let errType = maybe "" id (lookupKey "type" errVal >>= asText)

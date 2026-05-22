@@ -14,7 +14,8 @@ build-type: Simple
 common all
   default-language: GHC2021
   build-depends:
-    base ^>=4.20 || ^>=4.21 || ^>=4.22,
+    base ^>=4.20 || ^>=4.21 || ^>=4.22
+
   default-extensions:
     BlockArguments
     DeriveAnyClass
@@ -89,7 +90,6 @@ test-suite unit
   main-is: Main.hs
   -- cabal-gild: discover test/unit --exclude=test/unit/Main.hs
   other-modules:
-
   build-depends:
     hspec ^>=2.11,
     tasty ^>=1.5,

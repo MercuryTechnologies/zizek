@@ -1,17 +1,18 @@
 module Hegel.Protocol.Cbor
-  ( ParseError (..)
-  , lookupKey
-  , buildMap
-  , textVal
-  , intVal
-  , boolVal
-  , nullVal
-  , asText
-  , asInt
-  , asBool
-  , asWord32
-  , asWord64
-  ) where
+  ( ParseError (..),
+    lookupKey,
+    buildMap,
+    textVal,
+    intVal,
+    boolVal,
+    nullVal,
+    asText,
+    asInt,
+    asBool,
+    asWord32,
+    asWord64,
+  )
+where
 
 import CBOR.Value (Value (..))
 import Control.Exception (Exception)
@@ -20,8 +21,8 @@ import Data.Vector qualified as V
 import Data.Word (Word32, Word64)
 
 data ParseError = ParseError
-  { expected :: !Text
-  , got      :: !Value
+  { expected :: !Text,
+    got :: !Value
   }
   deriving stock (Show)
 
@@ -43,7 +44,7 @@ textVal = TextString
 
 intVal :: (Integral a) => a -> Value
 intVal n
-  | n >= 0    = UInt (fromIntegral n)
+  | n >= 0 = UInt (fromIntegral n)
   | otherwise = NInt (fromIntegral (negate n - 1))
 
 boolVal :: Bool -> Value
@@ -54,21 +55,21 @@ nullVal = Null
 
 asText :: Value -> Maybe Text
 asText (TextString t) = Just t
-asText _              = Nothing
+asText _ = Nothing
 
 asInt :: Value -> Maybe Int
-asInt (UInt n)  = Just (fromIntegral n)
-asInt (NInt n)  = Just (negate (fromIntegral n) - 1)
-asInt _         = Nothing
+asInt (UInt n) = Just (fromIntegral n)
+asInt (NInt n) = Just (negate (fromIntegral n) - 1)
+asInt _ = Nothing
 
 asBool :: Value -> Maybe Bool
 asBool (Bool b) = Just b
-asBool _        = Nothing
+asBool _ = Nothing
 
 asWord32 :: Value -> Maybe Word32
 asWord32 (UInt n) = Just (fromIntegral n)
-asWord32 _        = Nothing
+asWord32 _ = Nothing
 
 asWord64 :: Value -> Maybe Word64
 asWord64 (UInt n) = Just n
-asWord64 _        = Nothing
+asWord64 _ = Nothing

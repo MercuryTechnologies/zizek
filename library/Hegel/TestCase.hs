@@ -1,6 +1,7 @@
 module Hegel.TestCase
-  ( TestCase (..)
-  ) where
+  ( TestCase (..),
+  )
+where
 
 import Hegel.DataSource (DataSource)
 
