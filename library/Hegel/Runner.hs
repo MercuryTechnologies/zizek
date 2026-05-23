@@ -42,7 +42,6 @@ import Hegel.Protocol.Stream
 import Hegel.Session (Session (..), getOrInitSession)
 import Hegel.TestCase (TestCase (..))
 import UnliftIO.Exception (tryAny)
-import UnliftIO.MVar (withMVar)
 
 data Settings = Settings
   { testCases :: !Int,
@@ -126,11 +125,10 @@ runPropertyWith settings gen body = do
             ("phases", phasesVal)
           ]
 
-  withMVar ses.control \ctrl -> do
-    result <- requestCbor ctrl runTestMsg
-    case result of
-      Bool True -> pure ()
-      other -> fail $ "run_test: unexpected reply: " <> show other
+  result <- requestCbor ses.control runTestMsg
+  case result of
+    Bool True -> pure ()
+    other -> fail $ "run_test: unexpected reply: " <> show other
 
   (results, nInteresting, nInvalid) <- runEventLoop testStream conn gen body
 

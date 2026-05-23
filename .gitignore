@@ -19,4 +19,5 @@ cabal/*
 .claude/settings.local.json
 
 # misc docs
-misc/*
+refs/*
+notes/*
