@@ -69,6 +69,7 @@ library
     Hegel.Generators
     Hegel.Generators.Integer
     Hegel.Outcome
+    Hegel.Phase
     Hegel.Protocol.Cbor
     Hegel.Protocol.Connection
     Hegel.Protocol.Packet

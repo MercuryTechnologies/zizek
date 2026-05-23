@@ -1,15 +1,16 @@
 module Main (main) where
 
 import Data.Function ((&))
-import Hegel (runProperty, runProperty_)
+import Hegel (Phase (..), runProperty, runProperty_)
 import Hegel.Generators.Integer qualified as Integer
 import Hegel.Outcome (Outcome (..))
-import Hegel.Runner (defaultSettings)
+import Hegel.Runner (Settings (..), defaultSettings)
 
 main :: IO ()
 main = do
   passingTest
   failingTest
+  limitedPhasesTest
 
 -- All integers in [0,100] should be in [0,100].
 passingTest :: IO ()
@@ -30,8 +31,18 @@ failingTest = do
       then pure ()
       else error "found 42"
   case outcome of
-    Failed ce _msg _notes ->
+    Failed {counterexample = ce} ->
       putStrLn $ "FAILED (expected): counterexample = " <> show ce
     other -> do
       putStrLn $ "Unexpected outcome: " <> show other
       error "failingTest: expected Failed outcome"
+
+-- Confirm settings.phases is wired through: Generate-only skips reuse/shrink phases.
+limitedPhasesTest :: IO ()
+limitedPhasesTest = do
+  putStrLn "Running limited-phases property (Generate only)..."
+  runProperty_ (defaultSettings {phases = [Generate]}) (Integer.gen $ Integer.integers @Int & Integer.withRange (0, 100)) $ \n ->
+    if n >= 0 && n <= 100
+      then pure ()
+      else error ("out of range: " <> show n)
+  putStrLn "PASSED"

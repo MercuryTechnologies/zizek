@@ -11,16 +11,16 @@ module Hegel.Protocol.Connection
   )
 where
 
-import Control.Concurrent (forkIO)
+import Control.Concurrent.Async (async, link)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVar, writeTVar)
 import Control.Concurrent.STM.TBQueue (TBQueue, newTBQueueIO, writeTBQueue)
-import Control.Exception (SomeException, try)
 import Data.Bits (shiftL, (.|.))
 import Data.Word (Word32)
 import Hegel.Protocol.Packet (Packet (..), readPacket, writePacket)
 import StmContainers.Map (Map)
 import StmContainers.Map qualified as Map
 import System.IO (Handle)
+import UnliftIO.Exception (tryAny)
 import UnliftIO.MVar (MVar, newMVar, withMVar)
 
 data Connection = Connection
@@ -37,14 +37,15 @@ newConnection rh wh = do
   nextId <- newTVarIO 1
   exited <- newTVarIO False
   let conn = Connection writer streams nextId exited
-  _ <- forkIO (readerLoop conn rh)
+  a <- async (readerLoop conn rh)
+  link a
   pure conn
 
 readerLoop :: Connection -> Handle -> IO ()
 readerLoop conn rh = go
   where
     go = do
-      result <- try (readPacket rh) :: IO (Either SomeException Packet)
+      result <- tryAny (readPacket rh)
       case result of
         Left _ -> atomically do
           writeTVar conn.connExited True

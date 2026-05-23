@@ -13,10 +13,10 @@ where
 import CBOR.Decode qualified as CD
 import CBOR.Encode qualified as CE
 import CBOR.Value (Value (..))
-import Control.Exception (SomeException, throwIO, try)
 import Data.Text (Text)
 import Hegel.Protocol.Cbor (asText, buildMap, lookupKey, nullVal, textVal)
 import Hegel.Protocol.Stream (Stream, closeStream, receiveReply, requestCbor, sendRequest)
+import UnliftIO.Exception (throwIO, tryAny)
 import UnliftIO.MVar (MVar, modifyMVar_, newMVar, withMVar)
 
 data Status
@@ -52,7 +52,7 @@ newDataSource s = DataSource <$> newMVar (Just s)
 
 generate :: DataSource -> Value -> IO Value
 generate ds schema = do
-  result <- try @SomeException $
+  result <- tryAny $
     withMVar ds.stream $ \ms -> case ms of
       Nothing -> fail "DataSource: already aborted (StopTest)"
       Just s ->

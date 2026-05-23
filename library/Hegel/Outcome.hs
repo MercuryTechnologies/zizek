@@ -16,7 +16,7 @@ data Stats = Stats
 
 data Outcome a
   = Passed Stats
-  | Failed a Text [Text]
+  | Failed {counterexample :: !a, message :: !Text, notes :: ![Text]}
   | Errored SomeException
   | Rejected Text
   | UnhealthyInput Text

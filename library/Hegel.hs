@@ -2,6 +2,7 @@ module Hegel
   ( runProperty,
     runProperty_,
     module Hegel.Outcome,
+    module Hegel.Phase,
     module Hegel.Runner,
   )
 where
@@ -9,6 +10,7 @@ where
 import Control.Exception (throwIO)
 import Hegel.Generators (Generator)
 import Hegel.Outcome
+import Hegel.Phase
 import Hegel.Runner
 
 runProperty ::
@@ -28,7 +30,7 @@ runProperty_ settings gen body = do
   outcome <- runPropertyWith settings gen body
   case outcome of
     Passed _ -> pure ()
-    Failed cex msg notes -> throwIO (PropertyFailed cex msg notes)
+    Failed {counterexample, message, notes} -> throwIO (PropertyFailed counterexample message notes)
     Errored exc -> throwIO exc
     Rejected msg -> fail ("Property rejected all inputs: " <> show msg)
     UnhealthyInput msg -> fail ("Health check failed: " <> show msg)
