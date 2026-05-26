@@ -73,6 +73,7 @@ library
     Hegel.Phase
     Hegel.Protocol.Cbor
     Hegel.Protocol.Connection
+    Hegel.Protocol.Error
     Hegel.Protocol.Packet
     Hegel.Protocol.Stream
     Hegel.Runner
@@ -104,6 +105,8 @@ test-suite unit
   main-is: Main.hs
   -- cabal-gild: discover tests/unit --exclude=tests/unit/Main.hs
   other-modules:
+    SessionRecovery
+
   build-depends:
     hspec ^>=2.11,
     tasty ^>=1.5,

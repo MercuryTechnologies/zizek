@@ -12,7 +12,9 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Digest.CRC32 (crc32)
 import Data.Word (Word32, Word8)
+import Hegel.Protocol.Error (ProtocolError (..))
 import System.IO (Handle, hFlush)
+import UnliftIO.Exception (throwIO)
 
 pattern Magic :: Word32
 pattern Magic = 0x4845474C
@@ -73,7 +75,7 @@ pattern ValidHeader csum sid rawId payLen <- (parseHeader -> Just (csum, sid, ra
 
 checkTerminator :: ByteString -> IO ()
 checkTerminator bs
-  | BS.null bs || BS.head bs /= Terminator = fail "readPacket: bad terminator"
+  | BS.null bs || BS.head bs /= Terminator = throwIO BadTerminator
   | otherwise = pure ()
 
 verifyChecksum :: ByteString -> ByteString -> Word32 -> IO ()
@@ -81,7 +83,7 @@ verifyChecksum hdr body stored = do
   let hdrZeroed = BS.take 4 hdr <> BS.pack [0, 0, 0, 0] <> BS.drop 8 hdr
   let actual = crc32 (hdrZeroed <> body)
   if actual /= stored
-    then fail "readPacket: checksum mismatch"
+    then throwIO ChecksumMismatch
     else pure ()
 
 writePacket :: Handle -> Packet -> IO ()
@@ -116,14 +118,4 @@ readPacket h = do
       let isRep = rawId .&. ReplyBit /= 0
       let msgId = rawId .&. complement ReplyBit
       pure Packet {stream = sid, messageId = msgId, isReply = isRep, payload = body}
-    _ -> fail $ "readPacket: bad magic 0x" <> showHex32 (beWord32 hdr 0)
-
-showHex32 :: Word32 -> String
-showHex32 n = go 8 n ""
-  where
-    digits :: String
-    digits = "0123456789abcdef"
-    go 0 _ acc = acc
-    go k x acc =
-      let d = fromIntegral (x `shiftR` ((k - 1) * 4)) .&. (0xF :: Int)
-       in go (k - 1) x (digits !! d : acc)
+    _ -> throwIO (BadMagic (beWord32 hdr 0))

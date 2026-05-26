@@ -32,6 +32,7 @@ import Hegel.Protocol.Cbor
     textVal,
   )
 import Hegel.Protocol.Connection (Connection, connectStream, newStream)
+import Hegel.Protocol.Error (ConnectionClosedError (..), ProtocolError (..))
 import Hegel.Protocol.Stream
   ( Stream,
     mkStream,
@@ -39,9 +40,9 @@ import Hegel.Protocol.Stream
     requestCbor,
     writeReply,
   )
-import Hegel.Session (Session (..), getOrInitSession)
+import Hegel.Session (Session (..), getOrInitSession, invalidateSession)
 import Hegel.TestCase (TestCase (..))
-import UnliftIO.Exception (Handler (..), catches, tryAny)
+import UnliftIO.Exception (Handler (..), catches, throwIO, tryAny)
 
 data Settings = Settings
   { testCases :: !Int,
@@ -108,7 +109,23 @@ runPropertyWith ::
   Generator a ->
   (a -> IO ()) ->
   IO (Outcome a)
-runPropertyWith settings gen body = do
+runPropertyWith settings gen body =
+  runProperty' settings gen body
+    `catches` [ Handler \(e :: ConnectionClosedError) -> recover (toException e),
+                Handler \(e :: ProtocolError) -> recover (toException e)
+              ]
+  where
+    recover :: SomeException -> IO (Outcome a)
+    recover se = do
+      invalidateSession
+      pure (Errored se)
+
+runProperty' ::
+  Settings ->
+  Generator a ->
+  (a -> IO ()) ->
+  IO (Outcome a)
+runProperty' settings gen body = do
   ses <- getOrInitSession
   let conn = ses.conn
 
@@ -134,7 +151,7 @@ runPropertyWith settings gen body = do
   result <- requestCbor ses.control runTestMsg
   case result of
     Bool True -> pure ()
-    other -> fail $ "run_test: unexpected reply: " <> show other
+    other -> throwIO (UnexpectedReply "run_test" other)
 
   (results, nInteresting, nInvalid) <- runEventLoop testStream conn gen body
 
@@ -165,18 +182,18 @@ runEventLoop testStream conn gen body = go
     go = do
       (evId, evBytes) <- receiveRequest testStream
       case CD.decode evBytes of
-        Left err -> fail $ "runEventLoop: CBOR decode failed: " <> err
+        Left err -> throwIO (CborDecodeFailure "runEventLoop" err)
         Right evt -> case lookupKey "event" evt >>= asText of
-          Nothing -> fail "runEventLoop: event missing 'event' field"
+          Nothing -> throwIO (MissingField "runEventLoop" "event")
           Just "test_case" -> do
             sid <-
               maybe
-                (fail "runEventLoop: test_case missing stream_id")
+                (throwIO (MissingField "test_case" "stream_id"))
                 pure
                 (lookupKey "stream_id" evt >>= asWord32)
             let isFinal = maybe False id (lookupKey "is_final" evt >>= asBool)
             if isFinal
-              then fail "runEventLoop: unexpected is_final=true during main loop"
+              then throwIO (ProtocolStateViolation "unexpected is_final=true during main loop")
               else do
                 writeReply testStream evId ackNull
                 _ <- runCase conn sid gen body
@@ -188,7 +205,7 @@ runEventLoop testStream conn gen body = go
             let nInvalid = maybe 0 id (lookupKey "invalid_test_cases" r >>= asWord64)
             pure (r, nInteresting, nInvalid)
           Just other ->
-            fail $ "runEventLoop: unknown event type: " <> T.unpack other
+            throwIO (UnknownEvent other)
 
 replayFinalCases ::
   Stream ->
@@ -208,16 +225,16 @@ replayFinalCases testStream conn n nInvalid gen body = go n Nothing
     go k mFail = do
       (evId, evBytes) <- receiveRequest testStream
       case CD.decode evBytes of
-        Left err -> fail $ "replayFinalCases: CBOR decode: " <> err
+        Left err -> throwIO (CborDecodeFailure "replayFinalCases" err)
         Right evt -> do
           sid <-
             maybe
-              (fail "replayFinalCases: test_case missing stream_id")
+              (throwIO (MissingField "test_case" "stream_id"))
               pure
               (lookupKey "stream_id" evt >>= asWord32)
           let isFinal = maybe False id (lookupKey "is_final" evt >>= asBool)
           if not isFinal
-            then fail "replayFinalCases: expected is_final=true"
+            then throwIO (ProtocolStateViolation "expected is_final=true")
             else pure ()
           writeReply testStream evId ackNull
           result <- runCase conn sid gen body

@@ -15,8 +15,9 @@ import CBOR.Encode qualified as CE
 import CBOR.Value (Value (..))
 import Data.Text (Text)
 import Hegel.Protocol.Cbor (asText, boolVal, buildMap, intVal, lookupKey, nullVal, textVal)
+import Hegel.Protocol.Error (ProtocolError (..))
 import Hegel.Protocol.Stream (Stream, closeStream, requestCbor, requestRaw, sendRequest)
-import UnliftIO.Exception (finally, onException)
+import UnliftIO.Exception (finally, onException, throwIO)
 
 data Status
   = Valid
@@ -101,12 +102,12 @@ markComplete ds status =
                 ]
       rep <- requestRaw ds.stream req
       case CD.decode rep of
-        Left err -> fail $ "markComplete: CBOR decode: " <> err
+        Left err -> throwIO (CborDecodeFailure "markComplete" err)
         Right val -> case lookupKey "error" val of
           Nothing -> pure ()
           Just _ -> case lookupKey "type" val >>= asText of
             Just "StopTest" -> pure ()
-            other -> fail $ "markComplete: unexpected server error: " <> show other
+            _ -> throwIO (UnexpectedReply "markComplete" val)
   )
     `finally` closeStream ds.stream
   where

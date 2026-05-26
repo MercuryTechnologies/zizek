@@ -5,12 +5,14 @@ import Hegel (Phase (..), runProperty, runProperty_)
 import Hegel.Generators.Integer qualified as Integer
 import Hegel.Outcome (Outcome (..))
 import Hegel.Runner (Settings (..), defaultSettings)
+import SessionRecovery (sessionRecoveryTest)
 
 main :: IO ()
 main = do
   passingTest
   failingTest
   limitedPhasesTest
+  sessionRecoveryTest
 
 -- All integers in [0,100] should be in [0,100].
 passingTest :: IO ()

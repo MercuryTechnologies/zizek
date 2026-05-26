@@ -14,7 +14,7 @@ where
 import CBOR.Decode qualified as CD
 import CBOR.Encode qualified as CE
 import CBOR.Value (Value (..))
-import Control.Concurrent.STM (atomically)
+import Control.Concurrent.STM (atomically, orElse)
 import Control.Concurrent.STM.TBQueue (TBQueue, readTBQueue)
 import Data.Bits (shiftL)
 import Data.ByteString (ByteString)
@@ -25,9 +25,10 @@ import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Word (Word32)
 import Hegel.Protocol.Cbor (asText, lookupKey)
-import Hegel.Protocol.Connection (Connection, sendPacket, unregisterStream)
+import Hegel.Protocol.Connection (Connection, awaitServerExited, sendPacket, unregisterStream)
+import Hegel.Protocol.Error (ConnectionClosedError (..), ProtocolError (..))
 import Hegel.Protocol.Packet (Packet (..))
-import UnliftIO.Exception (finally)
+import UnliftIO.Exception (finally, throwIO)
 import UnliftIO.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 
 closeStreamPayload :: ByteString
@@ -81,7 +82,7 @@ sendRequest s pay = modifyMVar_ s.state \st ->
 requestRaw :: Stream -> ByteString -> IO ByteString
 requestRaw s pay = modifyMVar s.state \st ->
   if st.closed
-    then fail "stream is closed"
+    then throwIO StreamClosed
     else do
       let mid = st.nextMessageId
       sendPacket s.connection Packet {stream = s.streamId, messageId = mid, isReply = False, payload = pay}
@@ -91,23 +92,29 @@ requestRaw s pay = modifyMVar s.state \st ->
       Just rep ->
         pure (st {replies = Map.delete mid st.replies, nextMessageId = mid + 1}, rep)
       Nothing -> do
-        pkt <- atomically (readTBQueue s.inbox)
-        let st' =
-              if pkt.isReply
-                then st {replies = Map.insert pkt.messageId pkt.payload st.replies}
-                else st {requests = st.requests Seq.|> pkt}
-        go mid st'
+        mPkt <-
+          atomically $
+            (Just <$> readTBQueue s.inbox)
+              `orElse` (Nothing <$ awaitServerExited s.connection)
+        case mPkt of
+          Nothing -> throwIO (ConnectionClosedError "stream inbox abandoned")
+          Just pkt -> do
+            let st' =
+                  if pkt.isReply
+                    then st {replies = Map.insert pkt.messageId pkt.payload st.replies}
+                    else st {requests = st.requests Seq.|> pkt}
+            go mid st'
 
 requestCbor :: Stream -> Value -> IO Value
 requestCbor s msg = do
   let pay = CE.encode msg
   rep <- requestRaw s pay
   case CD.decode rep of
-    Left err -> fail $ "requestCbor: CBOR decode: " <> err
+    Left err -> throwIO (CborDecodeFailure "requestCbor" err)
     Right val -> case lookupKey "error" val of
       Just errVal -> do
         let errType = maybe "" id (lookupKey "type" errVal >>= asText)
-        fail $ "Server error (" <> show errType <> "): " <> show errVal
+        throwIO (RequestError "requestCbor" errType errVal)
       Nothing ->
         pure $ maybe val id (lookupKey "result" val)
 
@@ -118,18 +125,24 @@ writeReply s mid pay =
 receiveRequest :: Stream -> IO (Word32, ByteString)
 receiveRequest s = modifyMVar s.state \st ->
   if st.closed
-    then fail "stream is closed"
+    then throwIO StreamClosed
     else go st
   where
     go st = case Seq.viewl st.requests of
       p Seq.:< rest -> pure (st {requests = rest}, (p.messageId, p.payload))
       Seq.EmptyL -> do
-        pkt <- atomically (readTBQueue s.inbox)
-        let st' =
-              if pkt.isReply
-                then st {replies = Map.insert pkt.messageId pkt.payload st.replies}
-                else st {requests = st.requests Seq.|> pkt}
-        go st'
+        mPkt <-
+          atomically $
+            (Just <$> readTBQueue s.inbox)
+              `orElse` (Nothing <$ awaitServerExited s.connection)
+        case mPkt of
+          Nothing -> throwIO (ConnectionClosedError "stream inbox abandoned")
+          Just pkt -> do
+            let st' =
+                  if pkt.isReply
+                    then st {replies = Map.insert pkt.messageId pkt.payload st.replies}
+                    else st {requests = st.requests Seq.|> pkt}
+            go st'
 
 -- | Idempotent: a second call after the first succeeds is a no-op.
 -- Uses 'finally' rather than 'uninterruptibleMask_' because 'sendPacket'

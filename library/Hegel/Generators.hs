@@ -26,7 +26,7 @@ module Hegel.Generators
   )
 where
 
-import CBOR.Value (Value (Array, NInt, UInt))
+import CBOR.Value (Value (Array, NInt, Null, UInt))
 import Control.Exception (Exception, throwIO)
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NE
@@ -125,7 +125,7 @@ instance Monad Generator where
   (>>=) = Bind
 
 unitSchema :: Value
-unitSchema = buildMap [("type", textVal "none")]
+unitSchema = buildMap [("type", textVal "constant"), ("value", Null)]
 
 tupleSchema :: [Value] -> Value
 tupleSchema elems =

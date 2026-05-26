@@ -1,12 +1,15 @@
 module Hegel.Session
   ( Session (..),
     getOrInitSession,
+    invalidateSession,
   )
 where
 
-import Control.Concurrent.Async (Async, async, link, waitCatch)
+import Control.Concurrent.Async (Async, async, cancel, link, waitCatch)
 import Data.ByteString.Char8 qualified as BS8
+import Data.Foldable (for_)
 import Data.Function ((&))
+import Data.Text qualified as T
 import Hegel.Protocol.Connection
   ( Connection,
     controlStream,
@@ -14,6 +17,7 @@ import Hegel.Protocol.Connection
     newConnection,
     serverHasExited,
   )
+import Hegel.Protocol.Error (ProtocolError (..))
 import Hegel.Protocol.Stream (Stream, mkStream, requestRaw)
 import System.IO (Handle, hSetBinaryMode)
 import System.IO.Unsafe (unsafePerformIO)
@@ -89,18 +93,17 @@ initSession = do
     rep <- requestRaw ctrl handshakeString
     let decoded = BS8.unpack rep
     ver <- case dropPrefix "Hegel/" decoded of
-      Nothing -> fail $ "Bad handshake response: " <> show decoded
+      Nothing -> throwIO (HandshakeFailure (T.pack $ "Bad handshake response: " <> show decoded))
       Just v -> pure v
     parsed <- parseVersion ver
     if parsed < supportedProtocolLo || parsed > supportedProtocolHi
       then
-        fail $
-          "Protocol version mismatch: server reported "
-            <> ver
-            <> ", supported "
-            <> showVer supportedProtocolLo
-            <> " to "
-            <> showVer supportedProtocolHi
+        throwIO
+          ( VersionMismatch
+              (T.pack ver)
+              (T.pack (showVer supportedProtocolLo))
+              (T.pack (showVer supportedProtocolHi))
+          )
       else pure ()
     -- link propagates unexpected crashes from the monitor async during
     -- the initSession call; it is a no-op once initSession returns since
@@ -121,11 +124,20 @@ parseVersion s =
   case break (== '.') s of
     (maj, '.' : minS) -> case (readMaybe maj, readMaybe minS) of
       (Just a, Just b) -> pure (a, b)
-      _ -> fail $ "Invalid version string: " <> s
-    _ -> fail $ "Invalid version string: " <> s
+      _ -> throwIO (HandshakeFailure (T.pack $ "Invalid version string: " <> s))
+    _ -> throwIO (HandshakeFailure (T.pack $ "Invalid version string: " <> s))
 
 showVer :: (Int, Int) -> String
 showVer (maj, mn) = show maj <> "." <> show mn
+
+invalidateSession :: IO ()
+invalidateSession = do
+  mAsync <- modifyMVar globalSession \m -> pure (Nothing, m)
+  for_ mAsync \a -> do
+    cancel a
+    waitCatch a >>= \case
+      Right ses -> stopProcess ses.process
+      Left _ -> pure ()
 
 monitorProcess :: Connection -> Process Handle Handle () -> IO ()
 monitorProcess conn p = waitExitCode p *> markServerExited conn

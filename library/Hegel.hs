@@ -3,6 +3,7 @@ module Hegel
     runProperty_,
     module Hegel.Outcome,
     module Hegel.Phase,
+    module Hegel.Protocol.Error,
     module Hegel.Runner,
   )
 where
@@ -11,6 +12,7 @@ import Control.Exception (throwIO)
 import Hegel.Generators (Generator)
 import Hegel.Outcome
 import Hegel.Phase
+import Hegel.Protocol.Error
 import Hegel.Runner
 
 runProperty ::

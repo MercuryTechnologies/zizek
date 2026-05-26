@@ -5,6 +5,7 @@ module Hegel.Protocol.Connection
     newStream,
     connectStream,
     unregisterStream,
+    awaitServerExited,
     markServerExited,
     serverHasExited,
     sendPacket,
@@ -12,7 +13,7 @@ module Hegel.Protocol.Connection
 where
 
 import Control.Concurrent.Async (async, link)
-import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVar, writeTVar)
+import Control.Concurrent.STM (STM, TVar, atomically, check, newTVarIO, readTVar, writeTVar)
 import Control.Concurrent.STM.TBQueue (TBQueue, newTBQueueIO, writeTBQueue)
 import Data.Bits (shiftL, (.|.))
 import Data.Word (Word32)
@@ -84,6 +85,12 @@ registerQueue conn sid = do
 unregisterStream :: Connection -> Word32 -> IO ()
 unregisterStream conn sid =
   atomically $ Map.delete sid conn.connStreams
+
+-- | Retry (block) until the server exits. For use with 'orElse' in STM.
+awaitServerExited :: Connection -> STM ()
+awaitServerExited conn = do
+  exited <- readTVar conn.connExited
+  check exited
 
 markServerExited :: Connection -> IO ()
 markServerExited conn = atomically $ writeTVar conn.connExited True
