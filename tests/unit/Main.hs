@@ -1,11 +1,11 @@
 module Main (main) where
 
 import Data.Function ((&))
+import GeneratorSchemas (generatorSchemasTests)
 import Hegel (Phase (..), runProperty, runProperty_)
 import Hegel.Generators.Integer qualified as Integer
 import Hegel.Outcome (Outcome (..))
 import Hegel.Runner (Settings (..), defaultSettings)
-import GeneratorSchemas (generatorSchemasTests)
 import SessionRecovery (sessionRecoveryTest)
 
 main :: IO ()

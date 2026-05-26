@@ -15,6 +15,7 @@ generatorSchemasTests = do
   pureTest
   apBasicTest
   singleLeafApTest
+  trailingPureApTest
   mapFusionTest
   oneOfBasicTest
   nestedApOneOfTest
@@ -52,6 +53,19 @@ singleLeafApTest = do
     if n >= 1 && n <= 11
       then pure ()
       else error ("singleLeafApTest: out of range: " <> show n)
+  putStrLn "PASSED"
+
+-- Ap ga (Pure a) — generalised single-leaf optimisation (no TUPLE span when Pure is on the right)
+trailingPureApTest :: IO ()
+trailingPureApTest = do
+  putStrLn "Running trailingPureApTest..."
+  -- fmap const gives a non-basic generator producing a function; <*> pure () exercises
+  -- the ga <*> pure a path that previously emitted a spurious TUPLE span
+  let g = fmap const (filtered even (intR (0, 20))) <*> pure ()
+  runProperty_ defaultSettings g $ \n ->
+    if even n && n >= 0 && n <= 20
+      then pure ()
+      else error ("trailingPureApTest: expected even in [0,20], got " <> show n)
   putStrLn "PASSED"
 
 -- fmap fusion: fmap f (Map g x) = Map (f . g) x
