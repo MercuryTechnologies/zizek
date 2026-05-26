@@ -16,7 +16,7 @@ just format-check                                    # check formatting without 
 just docs                                            # build API docs via haddock
 just check-conformance                               # run python conformance tests (builds binaries, then runs pytest tests/conformance/)
 just check-coverage                                  # STUB: check coverage (add hpc-codecov to flake.nix first)
-cabal test zizek:unit --test-options="--match name"  # run a single test (requires hspec/tasty test framework)
+cabal test zizek:unit --test-options='--pattern "name"'  # run a single test (tasty --pattern glob)
 ```
 
 Minimum supported GHC version is 9.10 (enforced in CI and hegel.cabal). If you bump it, also bump `ci.yml`.

@@ -1,4 +1,4 @@
-module GeneratorSchemas (generatorSchemasTests) where
+module GeneratorSchemas (spec) where
 
 import Data.Function ((&))
 import Data.List.NonEmpty (NonEmpty (..))
@@ -6,133 +6,65 @@ import Hegel (runProperty_)
 import Hegel.Generators (Generator, assume, filtered, oneOf)
 import Hegel.Generators.Integer qualified as Integer
 import Hegel.Runner (defaultSettings)
+import Hegel.Session (invalidateSession)
+import Test.Hspec
 
 intR :: (Int, Int) -> Generator Int
 intR r = Integer.gen $ Integer.integers @Int & Integer.withRange r
 
-generatorSchemasTests :: IO ()
-generatorSchemasTests = do
-  pureTest
-  apBasicTest
-  singleLeafApTest
-  trailingPureApTest
-  mapFusionTest
-  oneOfBasicTest
-  nestedApOneOfTest
-  bindFallbackTest
-  filteredTest
-  assumeTest
+spec :: Spec
+spec = before_ invalidateSession $ do
+  it "pure yields the constant value" $
+    runProperty_ defaultSettings (pure (42 :: Int)) (`shouldBe` 42)
 
--- Pure a — exercises unitSchema {"type":"constant","value":null}
-pureTest :: IO ()
-pureTest = do
-  putStrLn "Running pureTest..."
-  runProperty_ defaultSettings (pure (42 :: Int)) $ \n ->
-    if n == 42
-      then pure ()
-      else error ("pureTest: expected 42, got " <> show n)
-  putStrLn "PASSED"
+  it "ap of two basics generates pairs within both ranges" $ do
+    let g = (,) <$> intR (0, 10) <*> intR (0, 10)
+    runProperty_ defaultSettings g $ \(a, b) -> do
+      a `shouldSatisfy` (\x -> x >= 0 && x <= 10)
+      b `shouldSatisfy` (\x -> x >= 0 && x <= 10)
 
--- Ap of two basics — exercises tupleSchema
-apBasicTest :: IO ()
-apBasicTest = do
-  putStrLn "Running apBasicTest..."
-  let g = (,) <$> intR (0, 10) <*> intR (0, 10)
-  runProperty_ defaultSettings g $ \(a, b) ->
-    if a >= 0 && a <= 10 && b >= 0 && b <= 10
-      then pure ()
-      else error ("apBasicTest: out of range: " <> show (a, b))
-  putStrLn "PASSED"
+  it "ap (pure f) g uses single-leaf optimisation" $ do
+    let g = pure (+ 1) <*> intR (0, 10)
+    runProperty_ defaultSettings g $ \n ->
+      n `shouldSatisfy` (\x -> x >= 1 && x <= 11)
 
--- Ap (Pure f) ga — single-leaf optimisation (no TUPLE span, no tuple schema)
-singleLeafApTest :: IO ()
-singleLeafApTest = do
-  putStrLn "Running singleLeafApTest..."
-  let g = pure (+ 1) <*> intR (0, 10)
-  runProperty_ defaultSettings g $ \n ->
-    if n >= 1 && n <= 11
-      then pure ()
-      else error ("singleLeafApTest: out of range: " <> show n)
-  putStrLn "PASSED"
+  it "ap g (pure a) uses single-leaf optimisation without TUPLE span" $ do
+    let g = fmap const (filtered even (intR (0, 20))) <*> pure ()
+    runProperty_ defaultSettings g $ \n -> do
+      n `shouldSatisfy` even
+      n `shouldSatisfy` (\x -> x >= 0 && x <= 20)
 
--- Ap ga (Pure a) — generalised single-leaf optimisation (no TUPLE span when Pure is on the right)
-trailingPureApTest :: IO ()
-trailingPureApTest = do
-  putStrLn "Running trailingPureApTest..."
-  -- fmap const gives a non-basic generator producing a function; <*> pure () exercises
-  -- the ga <*> pure a path that previously emitted a spurious TUPLE span
-  let g = fmap const (filtered even (intR (0, 20))) <*> pure ()
-  runProperty_ defaultSettings g $ \n ->
-    if even n && n >= 0 && n <= 20
-      then pure ()
-      else error ("trailingPureApTest: expected even in [0,20], got " <> show n)
-  putStrLn "PASSED"
+  it "fmap fuses: fmap f (fmap g x) = fmap (f . g) x" $ do
+    let g = fmap (+ 1) (fmap (* 2) (intR (0, 10)))
+    runProperty_ defaultSettings g $ \n -> do
+      n `shouldSatisfy` (\x -> x >= 1 && x <= 21)
+      n `shouldSatisfy` odd
 
--- fmap fusion: fmap f (Map g x) = Map (f . g) x
-mapFusionTest :: IO ()
-mapFusionTest = do
-  putStrLn "Running mapFusionTest..."
-  let g = fmap (+ 1) (fmap (* 2) (intR (0, 10)))
-  runProperty_ defaultSettings g $ \n ->
-    if n >= 1 && n <= 21 && odd n
-      then pure ()
-      else error ("mapFusionTest: unexpected value: " <> show n)
-  putStrLn "PASSED"
+  it "oneOf of all-basic generators uses oneOfSchema" $ do
+    let g = oneOf (intR (0, 10) :| [intR (20, 30)])
+    runProperty_ defaultSettings g $ \n ->
+      n `shouldSatisfy` (\x -> (x >= 0 && x <= 10) || (x >= 20 && x <= 30))
 
--- OneOf of all-basic generators — exercises oneOfSchema
-oneOfBasicTest :: IO ()
-oneOfBasicTest = do
-  putStrLn "Running oneOfBasicTest..."
-  let g = oneOf (intR (0, 10) :| [intR (20, 30)])
-  runProperty_ defaultSettings g $ \n ->
-    if (n >= 0 && n <= 10) || (n >= 20 && n <= 30)
-      then pure ()
-      else error ("oneOfBasicTest: out of range: " <> show n)
-  putStrLn "PASSED"
+  it "nested ap + oneOf produces correct schema nesting" $ do
+    let g = (,) <$> oneOf (intR (0, 5) :| [intR (10, 15)]) <*> intR (0, 10)
+    runProperty_ defaultSettings g $ \(a, b) -> do
+      a `shouldSatisfy` (\x -> (x >= 0 && x <= 5) || (x >= 10 && x <= 15))
+      b `shouldSatisfy` (\x -> x >= 0 && x <= 10)
 
--- Nested Ap + OneOf — schema nesting
-nestedApOneOfTest :: IO ()
-nestedApOneOfTest = do
-  putStrLn "Running nestedApOneOfTest..."
-  let g = (,) <$> oneOf (intR (0, 5) :| [intR (10, 15)]) <*> intR (0, 10)
-  runProperty_ defaultSettings g $ \(a, b) ->
-    if ((a >= 0 && a <= 5) || (a >= 10 && a <= 15)) && b >= 0 && b <= 10
-      then pure ()
-      else error ("nestedApOneOfTest: out of range: " <> show (a, b))
-  putStrLn "PASSED"
+  it "monadic bind falls back to FLAT_MAP span" $ do
+    let g = intR (0, 5) >>= \lo -> intR (lo, lo + 5)
+    runProperty_ defaultSettings g $ \n ->
+      n `shouldSatisfy` (\x -> x >= 0 && x <= 10)
 
--- Bind (monadic) fallback — exercises FLAT_MAP span
-bindFallbackTest :: IO ()
-bindFallbackTest = do
-  putStrLn "Running bindFallbackTest..."
-  let g = intR (0, 5) >>= \lo -> intR (lo, lo + 5)
-  runProperty_ defaultSettings g $ \n ->
-    if n >= 0 && n <= 10
-      then pure ()
-      else error ("bindFallbackTest: out of range: " <> show n)
-  putStrLn "PASSED"
+  it "filtered discards values that fail the predicate" $ do
+    let g = filtered even (intR (0, 20))
+    runProperty_ defaultSettings g $ \n ->
+      n `shouldSatisfy` even
 
--- filtered — exercises FILTER span and retry logic
-filteredTest :: IO ()
-filteredTest = do
-  putStrLn "Running filteredTest..."
-  let g = filtered even (intR (0, 20))
-  runProperty_ defaultSettings g $ \n ->
-    if even n
-      then pure ()
-      else error ("filteredTest: expected even, got " <> show n)
-  putStrLn "PASSED"
-
--- assume — discards test cases, run must not error
-assumeTest :: IO ()
-assumeTest = do
-  putStrLn "Running assumeTest..."
-  let g = do
-        n <- intR (0, 20)
-        assume (n /= 7)
-        pure n
-  runProperty_ defaultSettings g $ \n ->
-    if n /= 7
-      then pure ()
-      else error ("assumeTest: got 7, should have been discarded")
-  putStrLn "PASSED"
+  it "assume discards test cases that violate the assumption" $ do
+    let g = do
+          n <- intR (0, 20)
+          assume (n /= 7)
+          pure n
+    runProperty_ defaultSettings g $ \n ->
+      n `shouldNotBe` 7
