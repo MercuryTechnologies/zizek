@@ -2,6 +2,7 @@ module Hegel.Session
   ( Session (..),
     getOrInitSession,
     invalidateSession,
+    closeSession,
   )
 where
 
@@ -138,6 +139,14 @@ invalidateSession = do
     waitCatch a >>= \case
       Right ses -> stopProcess ses.process
       Left _ -> pure ()
+
+closeSession :: IO ()
+closeSession = do
+  mAsync <- modifyMVar globalSession \m -> pure (Nothing, m)
+  for_ mAsync \a ->
+    waitCatch a >>= \case
+      Left _ -> pure ()
+      Right ses -> stopProcess ses.process
 
 monitorProcess :: Connection -> Process Handle Handle () -> IO ()
 monitorProcess conn p = waitExitCode p *> markServerExited conn

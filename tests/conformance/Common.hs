@@ -8,9 +8,11 @@ module Common
 where
 
 import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
+import Control.Exception (finally)
 import Data.Aeson (ToJSON, encode)
 import Data.ByteString.Lazy qualified as BL
 import Data.Char (isUpper, toLower)
+import Hegel (closeSession)
 import Hegel.Generators (Generator)
 import Hegel.Outcome (Outcome (..))
 import Hegel.Runner (Settings (..), defaultSettings, runPropertyWith)
@@ -71,20 +73,22 @@ nonBasic "non_basic" g = g >>= pure
 nonBasic _ g = g
 
 runConformanceProperty :: Generator a -> (a -> IO ()) -> IO ()
-runConformanceProperty gen body = do
-  n <- getTestCases
-  outcome <- runPropertyWith (defaultSettings {testCases = n}) gen body
-  case outcome of
-    Passed _ -> exitSuccess
-    Rejected msg -> do
-      putStrLn ("conformance property rejected: " <> show msg)
-      exitWith (ExitFailure 1)
-    Failed {} -> do
-      putStrLn "conformance property failed"
-      exitWith (ExitFailure 1)
-    Errored e -> do
-      putStrLn ("conformance property errored: " <> show e)
-      exitWith (ExitFailure 1)
-    UnhealthyInput msg -> do
-      putStrLn ("conformance health check failed: " <> show msg)
-      exitWith (ExitFailure 1)
+runConformanceProperty gen body = run `finally` closeSession
+  where
+    run = do
+      n <- getTestCases
+      outcome <- runPropertyWith (defaultSettings {testCases = n}) gen body
+      case outcome of
+        Passed _ -> exitSuccess
+        Rejected msg -> do
+          putStrLn ("conformance property rejected: " <> show msg)
+          exitWith (ExitFailure 1)
+        Failed {} -> do
+          putStrLn "conformance property failed"
+          exitWith (ExitFailure 1)
+        Errored e -> do
+          putStrLn ("conformance property errored: " <> show e)
+          exitWith (ExitFailure 1)
+        UnhealthyInput msg -> do
+          putStrLn ("conformance health check failed: " <> show msg)
+          exitWith (ExitFailure 1)

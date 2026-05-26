@@ -1,6 +1,7 @@
 module Hegel
   ( runProperty,
     runProperty_,
+    closeSession,
     module Hegel.Outcome,
     module Hegel.Phase,
     module Hegel.Protocol.Error,
@@ -14,6 +15,7 @@ import Hegel.Outcome
 import Hegel.Phase
 import Hegel.Protocol.Error
 import Hegel.Runner
+import Hegel.Session (closeSession)
 
 runProperty ::
   Settings ->
