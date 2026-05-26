@@ -32,9 +32,10 @@ import Hegel.Protocol.Cbor
     textVal,
   )
 import Hegel.Protocol.Connection (Connection, connectStream, newStream)
-import Hegel.Protocol.Error (ConnectionClosedError (..), ProtocolError (..))
+import Hegel.Protocol.Error (ConnectionClosedError (..), ProtocolError (..), ServerError (..))
 import Hegel.Protocol.Stream
   ( Stream,
+    closeStream,
     mkStream,
     receiveRequest,
     requestCbor,
@@ -43,7 +44,7 @@ import Hegel.Protocol.Stream
 import Hegel.Session (Session, invalidateSession)
 import Hegel.Session.Internal (LiveSession (..), getOrInitLiveSession)
 import Hegel.TestCase (TestCase (..))
-import UnliftIO.Exception (Handler (..), catches, throwIO, tryAny)
+import UnliftIO.Exception (Handler (..), catches, finally, throwIO, tryAny)
 
 data Settings = Settings
   { testCases :: !Int,
@@ -86,6 +87,15 @@ runCase conn sid gen body = do
   eVal <-
     (Right <$> draw tc gen)
       `catches` [ Handler \InvalidTestCase -> pure (Left Nothing),
+                  -- StopTest means the server exhausted entropy for this case;
+                  -- the stream is already closed by generate's onException handler
+                  -- so markComplete must not be called.  Any other ServerError is
+                  -- unexpected: re-throw it so the test fails with a clear message.
+                  -- TODO: BackendCannotProceed may also warrant Invalid treatment
+                  -- if the server ever emits it during generation.
+                  Handler \(e :: ServerError) -> case e.errorType of
+                    "StopTest" -> pure (Left Nothing)
+                    _ -> throwIO e,
                   Handler \(e :: SomeException) -> pure (Left (Just e))
                 ]
   case eVal of
@@ -144,7 +154,6 @@ runProperty' ses settings gen body = do
             ("seed", maybe nullVal UInt settings.seed),
             ("stream_id", intVal testSid),
             ("database_key", nullVal), -- See misc/03-database-and-test-replay.md
-            ("database", nullVal), -- See misc/03-database-and-test-replay.md
             ("derandomize", boolVal settings.derandomize),
             ("report_multiple_failures", boolVal settings.reportMultipleFailures),
             ("suppress_health_check", suppressVal),
@@ -156,20 +165,21 @@ runProperty' ses settings gen body = do
     Bool True -> pure ()
     other -> throwIO (UnexpectedReply "run_test" other)
 
-  (results, nInteresting, nInvalid) <- runEventLoop testStream conn gen body
-
-  case lookupKey "health_check_failure" results >>= asText of
-    Just msg -> pure (UnhealthyInput msg)
-    Nothing -> case lookupKey "error" results >>= asText of
-      Just msg -> pure (Errored (toException (userError (T.unpack msg))))
-      Nothing ->
-        if nInteresting == 0
-          then
-            let nValid = maybe 0 id (lookupKey "valid_test_cases" results >>= asWord64)
-             in if nValid == 0
-                  then pure (Rejected "no valid examples found")
-                  else pure (Passed Stats {testsRun = settings.testCases, invalid = fromIntegral nInvalid})
-          else replayFinalCases testStream conn (fromIntegral nInteresting) (fromIntegral nInvalid) gen body
+  let runAndInterpret = do
+        (results, nInteresting, nInvalid) <- runEventLoop testStream conn gen body
+        case lookupKey "health_check_failure" results >>= asText of
+          Just msg -> pure (UnhealthyInput msg)
+          Nothing -> case lookupKey "error" results >>= asText of
+            Just msg -> pure (Errored (toException (userError (T.unpack msg))))
+            Nothing ->
+              if nInteresting == 0
+                then
+                  let nValid = maybe 0 id (lookupKey "valid_test_cases" results >>= asWord64)
+                   in if nValid == 0
+                        then pure (Rejected "no valid examples found")
+                        else pure (Passed Stats {testsRun = settings.testCases, invalid = fromIntegral nInvalid})
+                else replayFinalCases testStream conn (fromIntegral nInteresting) (fromIntegral nInvalid) gen body
+  runAndInterpret `finally` closeStream testStream
 
 runEventLoop ::
   Stream ->

@@ -4,6 +4,7 @@ import Data.Function ((&))
 import Data.List.NonEmpty (NonEmpty (..))
 import Hegel (runProperty_)
 import Hegel.Generators (Generator, assume, filtered, oneOf)
+import Hegel.Generators.Bool qualified as Bool
 import Hegel.Generators.Integer qualified as Integer
 import Hegel.Runner (defaultSettings)
 import Test.Hspec
@@ -16,11 +17,10 @@ spec = do
   it "pure yields the constant value" $
     runProperty_ defaultSettings (pure (42 :: Int)) (`shouldBe` 42)
 
-  it "ap of two basics generates pairs within both ranges" $ do
-    let g = (,) <$> intR (0, 10) <*> intR (0, 10)
-    runProperty_ defaultSettings g $ \(a, b) -> do
-      a `shouldSatisfy` (\x -> x >= 0 && x <= 10)
-      b `shouldSatisfy` (\x -> x >= 0 && x <= 10)
+  it "ap of two basics generates pairs from different generator types" $ do
+    let g = (,) <$> Bool.gen <*> intR (0, 10)
+    runProperty_ defaultSettings g $ \(_, n) ->
+      n `shouldSatisfy` (\x -> x >= 0 && x <= 10)
 
   it "ap (pure f) g uses single-leaf optimisation" $ do
     let g = pure (+ 1) <*> intR (0, 10)
@@ -54,6 +54,11 @@ spec = do
     let g = intR (0, 5) >>= \lo -> intR (lo, lo + 5)
     runProperty_ defaultSettings g $ \n ->
       n `shouldSatisfy` (\x -> x >= 0 && x <= 10)
+
+  it "monadic bind from Bool selects between integer ranges" $ do
+    let g = Bool.gen >>= \b -> intR (if b then (0, 5) else (10, 15))
+    runProperty_ defaultSettings g $ \n ->
+      n `shouldSatisfy` (\x -> (x >= 0 && x <= 5) || (x >= 10 && x <= 15))
 
   it "filtered discards values that fail the predicate" $ do
     let g = filtered even (intR (0, 20))

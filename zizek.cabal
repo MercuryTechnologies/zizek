@@ -68,6 +68,9 @@ library
     Hegel
     Hegel.DataSource
     Hegel.Generators
+    Hegel.Generators.Binary
+    Hegel.Generators.Bool
+    Hegel.Generators.Float
     Hegel.Generators.Integer
     Hegel.Outcome
     Hegel.Phase
@@ -86,6 +89,42 @@ library
       CoreFoundation
       IOKit
       Security
+
+executable test-booleans
+  import: library
+  hs-source-dirs:
+    tests/conformance
+    tests/conformance/booleans
+
+  main-is: Main.hs
+  other-modules: Common
+  build-depends:
+    aeson ^>=2.2,
+    zizek,
+
+executable test-binary
+  import: library
+  hs-source-dirs:
+    tests/conformance
+    tests/conformance/binary
+
+  main-is: Main.hs
+  other-modules: Common
+  build-depends:
+    aeson ^>=2.2,
+    zizek,
+
+executable test-floats
+  import: library
+  hs-source-dirs:
+    tests/conformance
+    tests/conformance/floats
+
+  main-is: Main.hs
+  other-modules: Common
+  build-depends:
+    aeson ^>=2.2,
+    zizek,
 
 executable test-integers
   import: library
@@ -109,6 +148,7 @@ test-suite unit
     BasicProperties
     GeneratorSchemas
     SessionRecovery
+    StandardGenerators
 
   build-depends:
     hspec ^>=2.11,

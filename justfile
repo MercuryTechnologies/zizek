@@ -50,8 +50,11 @@ lint:
 
 # Run the Python conformance harness against the Haskell test binaries.
 check-conformance:
-  @cabal build zizek:test-integers
+  @cabal build zizek:test-booleans zizek:test-binary zizek:test-floats zizek:test-integers
   @mkdir -p tests/conformance/bin
+  @ln -sf $(cabal list-bin zizek:test-booleans) tests/conformance/bin/test-booleans
+  @ln -sf $(cabal list-bin zizek:test-binary) tests/conformance/bin/test-binary
+  @ln -sf $(cabal list-bin zizek:test-floats) tests/conformance/bin/test-floats
   @ln -sf $(cabal list-bin zizek:test-integers) tests/conformance/bin/test-integers
   @pytest tests/conformance/
 

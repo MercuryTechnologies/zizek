@@ -1,6 +1,7 @@
 module Hegel.Protocol.Error
   ( ProtocolError (..),
     ConnectionClosedError (..),
+    ServerError (..),
   )
 where
 
@@ -27,6 +28,15 @@ data ProtocolError
   | HandshakeFailure !Text
   | VersionMismatch !Text !Text !Text -- got, lo, hi
   | StreamClosed
-  | RequestError !Text !Text !Value -- context, errorType, payload
+  deriving stock (Show)
+  deriving anyclass (Exception)
+
+-- | The server returned an application-level error response to a request.
+-- Distinct from 'ProtocolError' because these are valid protocol messages,
+-- not wire-format or state-machine violations.
+data ServerError = ServerError
+  { errorType :: !Text,
+    errorPayload :: !Value
+  }
   deriving stock (Show)
   deriving anyclass (Exception)

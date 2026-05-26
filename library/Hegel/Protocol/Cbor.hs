@@ -4,6 +4,8 @@ module Hegel.Protocol.Cbor
     buildMap,
     textVal,
     intVal,
+    floatVal,
+    doubleVal,
     boolVal,
     nullVal,
     asText,
@@ -46,6 +48,12 @@ intVal :: (Integral a) => a -> Value
 intVal n
   | n >= 0 = UInt (fromIntegral n)
   | otherwise = NInt (fromIntegral (negate n - 1))
+
+floatVal :: Float -> Value
+floatVal = Float32
+
+doubleVal :: Double -> Value
+doubleVal = Float64
 
 boolVal :: Bool -> Value
 boolVal = Bool

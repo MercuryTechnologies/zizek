@@ -136,7 +136,7 @@ initLiveSession cfg = do
           & setStdout createPipe
           -- TODO: once .hegel/ local state lands with database support,
           -- redirect to .hegel/server.<pid>-<n>.log instead of nullStream
-          -- (matches refs/hegel-rust.md:26428-26439; enables quoting the
+          -- (matches refs/hegel-core.md:26428-26439; enables quoting the
           -- path in handshake-failure diagnostics per refs/26502-26515).
           & setStderr nullStream
   let pcfg' = maybe pcfg (\env -> setEnv env pcfg) cfg.environment

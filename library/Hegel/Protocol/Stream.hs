@@ -26,7 +26,7 @@ import Data.Sequence qualified as Seq
 import Data.Word (Word32)
 import Hegel.Protocol.Cbor (asText, lookupKey)
 import Hegel.Protocol.Connection (Connection, awaitServerExited, sendPacket, unregisterStream)
-import Hegel.Protocol.Error (ConnectionClosedError (..), ProtocolError (..))
+import Hegel.Protocol.Error (ConnectionClosedError (..), ProtocolError (..), ServerError (..))
 import Hegel.Protocol.Packet (Packet (..))
 import UnliftIO.Exception (finally, throwIO)
 import UnliftIO.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
@@ -105,6 +105,8 @@ requestRaw s pay = modifyMVar s.state \st ->
                     else st {requests = st.requests Seq.|> pkt}
             go mid st'
 
+-- Error envelope shape: {"error": <payload>, "type": "<tag>"} — "type" is at
+-- the top level of the response, not nested inside the "error" value.
 requestCbor :: Stream -> Value -> IO Value
 requestCbor s msg = do
   let pay = CE.encode msg
@@ -113,8 +115,8 @@ requestCbor s msg = do
     Left err -> throwIO (CborDecodeFailure "requestCbor" err)
     Right val -> case lookupKey "error" val of
       Just errVal -> do
-        let errType = maybe "" id (lookupKey "type" errVal >>= asText)
-        throwIO (RequestError "requestCbor" errType errVal)
+        let errType = maybe "" id (lookupKey "type" val >>= asText)
+        throwIO ServerError {errorType = errType, errorPayload = errVal}
       Nothing ->
         pure $ maybe val id (lookupKey "result" val)
 

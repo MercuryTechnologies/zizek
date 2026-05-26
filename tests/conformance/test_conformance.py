@@ -29,6 +29,9 @@ INT64_MAX = 2**63 - 1
 def test_conformance(subtests):
     run_conformance_tests(
         [
+            BooleanConformance(BIN_DIR / "test-booleans"),
+            BinaryConformance(BIN_DIR / "test-binary"),
+            FloatConformance(BIN_DIR / "test-floats"),
             IntegerConformance(
                 BIN_DIR / "test-integers",
                 min_value=INT64_MIN,
@@ -37,10 +40,7 @@ def test_conformance(subtests):
         ],
         subtests,
         skip_tests=[
-            BooleanConformance,
-            FloatConformance,
             TextConformance,
-            BinaryConformance,
             ListConformance,
             SampledFromConformance,
             OneOfConformance,
