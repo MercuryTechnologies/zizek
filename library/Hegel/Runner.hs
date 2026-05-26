@@ -3,7 +3,7 @@
 module Hegel.Runner
   ( Settings (..),
     defaultSettings,
-    runPropertyWith,
+    runPropertyOn,
   )
 where
 
@@ -40,7 +40,8 @@ import Hegel.Protocol.Stream
     requestCbor,
     writeReply,
   )
-import Hegel.Session (Session (..), getOrInitSession, invalidateSession)
+import Hegel.Session (Session, invalidateSession)
+import Hegel.Session.Internal (LiveSession (..), getOrInitLiveSession)
 import Hegel.TestCase (TestCase (..))
 import UnliftIO.Exception (Handler (..), catches, throwIO, tryAny)
 
@@ -104,30 +105,32 @@ runCase conn sid gen body = do
           markComplete ds (Interesting msg)
           pure (CaseInteresting msg (Just val))
 
-runPropertyWith ::
+runPropertyOn ::
+  Session ->
   Settings ->
   Generator a ->
   (a -> IO ()) ->
   IO (Outcome a)
-runPropertyWith settings gen body =
-  runProperty' settings gen body
+runPropertyOn ses settings gen body =
+  runProperty' ses settings gen body
     `catches` [ Handler \(e :: ConnectionClosedError) -> recover (toException e),
                 Handler \(e :: ProtocolError) -> recover (toException e)
               ]
   where
     recover :: SomeException -> IO (Outcome a)
     recover se = do
-      invalidateSession
+      invalidateSession ses
       pure (Errored se)
 
 runProperty' ::
+  Session ->
   Settings ->
   Generator a ->
   (a -> IO ()) ->
   IO (Outcome a)
-runProperty' settings gen body = do
-  ses <- getOrInitSession
-  let conn = ses.conn
+runProperty' ses settings gen body = do
+  live <- getOrInitLiveSession ses
+  let conn = live.conn
 
   (testSid, testQ) <- newStream conn
   testStream <- mkStream conn testSid testQ
@@ -148,7 +151,7 @@ runProperty' settings gen body = do
             ("phases", phasesVal)
           ]
 
-  result <- requestCbor ses.control runTestMsg
+  result <- requestCbor live.control runTestMsg
   case result of
     Bool True -> pure ()
     other -> throwIO (UnexpectedReply "run_test" other)

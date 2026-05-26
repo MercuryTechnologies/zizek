@@ -1,11 +1,11 @@
 module Hegel
   ( runProperty,
     runProperty_,
-    closeSession,
     module Hegel.Outcome,
     module Hegel.Phase,
     module Hegel.Protocol.Error,
     module Hegel.Runner,
+    module Hegel.Session,
   )
 where
 
@@ -15,14 +15,14 @@ import Hegel.Outcome
 import Hegel.Phase
 import Hegel.Protocol.Error
 import Hegel.Runner
-import Hegel.Session (closeSession)
+import Hegel.Session
 
 runProperty ::
   Settings ->
   Generator a ->
   (a -> IO ()) ->
   IO (Outcome a)
-runProperty = runPropertyWith
+runProperty = runPropertyOn globalSession
 
 runProperty_ ::
   (Show a) =>
@@ -31,7 +31,7 @@ runProperty_ ::
   (a -> IO ()) ->
   IO ()
 runProperty_ settings gen body = do
-  outcome <- runPropertyWith settings gen body
+  outcome <- runPropertyOn globalSession settings gen body
   case outcome of
     Passed _ -> pure ()
     Failed {counterexample, message, notes} -> throwIO (PropertyFailed counterexample message notes)

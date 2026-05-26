@@ -3,7 +3,7 @@ module Main (main) where
 import BasicProperties qualified
 import Control.Exception (bracket_)
 import GeneratorSchemas qualified
-import Hegel (closeSession)
+import Hegel (closeSession, globalSession)
 import SessionRecovery qualified
 import Test.Tasty (defaultMain, localOption, testGroup)
 import Test.Tasty.Hspec (testSpec)
@@ -17,4 +17,4 @@ main = do
   let tree =
         localOption (NumThreads 1) $
           testGroup "zizek:unit" [basics, schemas, recovery]
-  bracket_ (pure ()) closeSession (defaultMain tree)
+  bracket_ (pure ()) (closeSession globalSession) (defaultMain tree)

@@ -78,6 +78,7 @@ library
     Hegel.Protocol.Stream
     Hegel.Runner
     Hegel.Session
+    Hegel.Session.Internal
     Hegel.TestCase
 
   if os(osx)

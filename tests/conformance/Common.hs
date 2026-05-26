@@ -12,10 +12,10 @@ import Control.Exception (finally)
 import Data.Aeson (ToJSON, encode)
 import Data.ByteString.Lazy qualified as BL
 import Data.Char (isUpper, toLower)
-import Hegel (closeSession)
+import Hegel (closeSession, globalSession, runPropertyOn)
 import Hegel.Generators (Generator)
 import Hegel.Outcome (Outcome (..))
-import Hegel.Runner (Settings (..), defaultSettings, runPropertyWith)
+import Hegel.Runner (Settings (..), defaultSettings)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..), exitSuccess, exitWith)
 import System.IO (Handle, IOMode (..), hFlush, openFile)
@@ -73,11 +73,11 @@ nonBasic "non_basic" g = g >>= pure
 nonBasic _ g = g
 
 runConformanceProperty :: Generator a -> (a -> IO ()) -> IO ()
-runConformanceProperty gen body = run `finally` closeSession
+runConformanceProperty gen body = run `finally` closeSession globalSession
   where
     run = do
       n <- getTestCases
-      outcome <- runPropertyWith (defaultSettings {testCases = n}) gen body
+      outcome <- runPropertyOn globalSession (defaultSettings {testCases = n}) gen body
       case outcome of
         Passed _ -> exitSuccess
         Rejected msg -> do
