@@ -1,15 +1,15 @@
 module BasicProperties (spec) where
 
-import Data.Function ((&))
 import Hegel (Phase (..), runProperty, runProperty_)
-import Hegel.Generators (Generator)
-import Hegel.Generators.Integer qualified as Integer
+import Hegel.Gen (Generator)
+import Hegel.Gen qualified as Gen
 import Hegel.Outcome (Outcome (..))
+import Hegel.Range qualified as Range
 import Hegel.Runner (Settings (..), defaultSettings)
 import Test.Hspec
 
 intR :: (Int, Int) -> Generator Int
-intR r = Integer.gen $ Integer.integers @Int & Integer.withRange r
+intR (lo, hi) = Gen.integer (Range.between lo hi)
 
 spec :: Spec
 spec = do

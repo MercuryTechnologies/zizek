@@ -10,7 +10,7 @@ module Hegel
 where
 
 import Control.Exception (throwIO)
-import Hegel.Generators (Generator)
+import Hegel.Gen.Internal (Generator)
 import Hegel.Outcome
 import Hegel.Phase
 import Hegel.Protocol.Error

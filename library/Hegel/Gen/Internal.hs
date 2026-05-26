@@ -1,11 +1,11 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE PatternSynonyms #-}
 
--- | Generators for property-based test data.
+-- | Core generator machinery.
 --
 -- Enable @ApplicativeDo@ in modules that build generators to get better
 -- shrinking for independent draws.
-module Hegel.Generators
+module Hegel.Gen.Internal
   ( -- * Generator type
     -- $generator
     Generator,
@@ -75,7 +75,7 @@ data Generator a where
   OneOf :: !(Maybe (BasicGenerator a)) -> NonEmpty (Generator a) -> Generator a
 
 -- | Pattern synonym for constructing a 'BasicGenerator' directly from a CBOR
--- schema and a parse function. See 'Hegel.Generators.Integer.gen' for a
+-- schema and a parse function. See 'Hegel.Gen.Integer.integer' for a
 -- worked example.
 pattern Schema :: Value -> (Value -> Either ParseError a) -> Generator a
 pattern Schema s p = Basic (BasicGenerator s p)

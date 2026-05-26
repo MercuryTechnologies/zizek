@@ -3,7 +3,7 @@ module Main (main) where
 import Common (runConformanceProperty, writeMetrics)
 import Data.Aeson (ToJSON (..))
 import GHC.Generics (Generic)
-import Hegel.Generators.Bool qualified as Bool
+import Hegel.Gen.Bool qualified as Bool
 import System.Environment (getArgs)
 import System.Exit (die)
 
@@ -17,4 +17,4 @@ main = do
   case args of
     [_] -> pure ()
     _ -> die "Usage: test-booleans '<json_params>'"
-  runConformanceProperty Bool.gen (writeMetrics . Metrics)
+  runConformanceProperty Bool.bool (writeMetrics . Metrics)

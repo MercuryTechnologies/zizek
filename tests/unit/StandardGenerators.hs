@@ -1,74 +1,62 @@
 module StandardGenerators (spec) where
 
 import Data.ByteString qualified as BS
-import Data.Function ((&))
 import Hegel (runProperty_)
-import Hegel.Generators.Binary qualified as Binary
-import Hegel.Generators.Bool qualified as Bool
-import Hegel.Generators.Float qualified as Float
+import Hegel.Gen qualified as Gen
+import Hegel.Gen.Float (FloatOptions (..))
+import Hegel.Range qualified as Range
 import Hegel.Runner (defaultSettings)
 import Test.Hspec
 
 spec :: Spec
 spec = do
-  describe "Bool.gen" $ do
+  describe "Gen.bool" $ do
     it "draws Bool values" $
-      runProperty_ defaultSettings Bool.gen $
+      runProperty_ defaultSettings Gen.bool $
         \_ -> pure ()
 
-  describe "Binary.gen" $ do
+  describe "Gen.binary" $ do
     it "draws ByteStrings" $
-      runProperty_ defaultSettings (Binary.gen Binary.binary) $
+      runProperty_ defaultSettings (Gen.binaryWith Gen.defaultBinaryOptions) $
         \_ -> pure ()
 
-    it "respects minSize" $
-      runProperty_ defaultSettings (Binary.gen Binary.binary {Binary.minSize = 5}) $ \bs ->
+    it "respects lower bound" $
+      runProperty_ defaultSettings (Gen.binary (Range.between 5 100)) $ \bs ->
         BS.length bs `shouldSatisfy` (>= 5)
 
-    it "respects maxSize" $
-      runProperty_ defaultSettings (Binary.gen Binary.binary {Binary.maxSize = Just 10}) $ \bs ->
+    it "respects upper bound" $
+      runProperty_ defaultSettings (Gen.binary (Range.between 0 10)) $ \bs ->
         BS.length bs `shouldSatisfy` (<= 10)
 
-    it "respects minSize and maxSize together"
-      $ runProperty_
-        defaultSettings
-        (Binary.gen Binary.binary {Binary.minSize = 3, Binary.maxSize = Just 7})
-      $ \bs -> do
+    it "respects both bounds" $
+      runProperty_ defaultSettings (Gen.binary (Range.between 3 7)) $ \bs -> do
         BS.length bs `shouldSatisfy` (>= 3)
         BS.length bs `shouldSatisfy` (<= 7)
 
-  describe "Float.genDouble" $ do
+  describe "Gen.double" $ do
     it "draws Double values" $
-      runProperty_ defaultSettings (Float.genDouble Float.floats) $
+      runProperty_ defaultSettings (Gen.doubleWith Gen.defaultFloatOptions) $
         \_ -> pure ()
 
-    it "respects min and max bounds"
-      $ runProperty_
-        defaultSettings
-        (Float.genDouble $ Float.floats & Float.withMinValue (-2.0) & Float.withMaxValue 3.0)
-      $ \x -> x `shouldSatisfy` (\v -> v >= -2.0 && v <= 3.0)
+    it "respects min and max bounds" $
+      runProperty_ defaultSettings (Gen.double (Range.between (-2.0) 3.0)) $ \x ->
+        x `shouldSatisfy` (\v -> v >= -2.0 && v <= 3.0)
 
-    it "respects min bound"
-      $ runProperty_
-        defaultSettings
-        (Float.genDouble $ Float.floats & Float.withMinValue 0.0)
-      $ \x -> x `shouldSatisfy` (>= 0.0)
+    it "respects min bound" $
+      runProperty_ defaultSettings (Gen.doubleWith Gen.defaultFloatOptions {minValue = Just 0.0}) $ \x ->
+        x `shouldSatisfy` (>= 0.0)
 
-    it "respects max bound"
-      $ runProperty_
-        defaultSettings
-        (Float.genDouble $ Float.floats & Float.withMaxValue 0.0)
-      $ \x -> x `shouldSatisfy` (<= 0.0)
+    it "respects max bound" $
+      runProperty_ defaultSettings (Gen.doubleWith Gen.defaultFloatOptions {maxValue = Just 0.0}) $ \x ->
+        x `shouldSatisfy` (<= 0.0)
 
-    it "generates exact value when min equals max"
-      $ runProperty_
-        defaultSettings
-        (Float.genDouble $ Float.floats & Float.withMinValue 3.14 & Float.withMaxValue 3.14)
-      $ \x -> x `shouldBe` 3.14
+    it "generates exact value when min equals max" $
+      runProperty_ defaultSettings (Gen.double (Range.singleton 3.14)) $ \x ->
+        x `shouldBe` 3.14
 
-  describe "Float.genFloat" $ do
+  describe "Gen.float" $ do
     it "draws Float values" $
-      runProperty_ defaultSettings (Float.genFloat Float.floats) $
+      runProperty_ defaultSettings (Gen.floatWith Gen.defaultFloatOptions) $
         \_ -> pure ()
 
 -- StopTest (server entropy exhausted mid-case) is exercised end-to-end by

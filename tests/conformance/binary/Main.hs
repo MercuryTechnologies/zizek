@@ -5,7 +5,8 @@ import Data.Aeson (FromJSON (..), Options (..), defaultOptions, eitherDecodeStri
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
 import GHC.Generics (Generic)
-import Hegel.Generators.Binary qualified as Binary
+import Hegel.Gen qualified as Gen
+import Hegel.Gen.Binary (BinaryOptions (..))
 import System.Environment (getArgs)
 import System.Exit (die)
 
@@ -25,7 +26,5 @@ main = do
     [j] -> pure j
     _ -> die "Usage: test-binary '<json_params>'"
   params <- either die pure (eitherDecodeStrict' @Params (BS8.pack j))
-  let g =
-        Binary.gen $
-          Binary.binary {Binary.minSize = params.minSize, Binary.maxSize = params.maxSize}
+  let g = Gen.binaryWith BinaryOptions {minSize = params.minSize, maxSize = params.maxSize}
   runConformanceProperty g \bs -> writeMetrics (object ["length" .= BS.length bs])

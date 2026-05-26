@@ -20,6 +20,7 @@ common all
     BlockArguments
     DeriveAnyClass
     DerivingStrategies
+    DuplicateRecordFields
     ImportQualifiedPost
     LambdaCase
     OverloadedRecordDot
@@ -67,11 +68,12 @@ library
   exposed-modules:
     Hegel
     Hegel.DataSource
-    Hegel.Generators
-    Hegel.Generators.Binary
-    Hegel.Generators.Bool
-    Hegel.Generators.Float
-    Hegel.Generators.Integer
+    Hegel.Gen
+    Hegel.Gen.Binary
+    Hegel.Gen.Bool
+    Hegel.Gen.Float
+    Hegel.Gen.Integer
+    Hegel.Gen.Internal
     Hegel.Outcome
     Hegel.Phase
     Hegel.Protocol.Cbor
@@ -79,6 +81,7 @@ library
     Hegel.Protocol.Error
     Hegel.Protocol.Packet
     Hegel.Protocol.Stream
+    Hegel.Range
     Hegel.Runner
     Hegel.Session
     Hegel.Session.Internal

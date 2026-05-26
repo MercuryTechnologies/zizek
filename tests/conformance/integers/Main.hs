@@ -5,7 +5,8 @@ import Data.Aeson (FromJSON (..), Options (..), ToJSON (..), defaultOptions, eit
 import Data.ByteString.Char8 qualified as BS
 import Data.Int (Int64)
 import GHC.Generics (Generic)
-import Hegel.Generators.Integer qualified as Integer
+import Hegel.Gen qualified as Gen
+import Hegel.Gen.Integer (IntegerOptions (..))
 import System.Environment (getArgs)
 import System.Exit (die)
 
@@ -33,9 +34,5 @@ main = do
     [j] -> pure j
     _ -> die "Usage: test-integers '<json_params>'"
   params <- either die pure (eitherDecodeStrict' @Params (BS.pack j))
-  let g =
-        Integer.gen
-          . maybe id Integer.minValue params.minValue
-          . maybe id Integer.maxValue params.maxValue
-          $ Integer.integers @Int64
+  let g = Gen.integerWith @Int64 IntegerOptions {minValue = params.minValue, maxValue = params.maxValue}
   runConformanceProperty g (writeMetrics . Metrics)

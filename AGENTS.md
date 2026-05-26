@@ -19,16 +19,20 @@ just check-coverage                                  # STUB: check coverage (add
 cabal test zizek:unit --test-options='--pattern "name"'  # run a single test (tasty --pattern glob)
 ```
 
-Minimum supported GHC version is 9.10 (enforced in CI and hegel.cabal). If you bump it, also bump `ci.yml`.
+Minimum supported GHC version is 9.10 (enforced in CI and `zizek.cabal`). If you bump it, also bump `ci.yml`.
 
 ## Package Structure
 
-- `library/Hegel.hs` — Public API: 
+- `library/Hegel.hs` — Public API
 - `library/Hegel/Protocol.hs` — Binary protocol: packet encoding/decoding, stream multiplexing
 - `library/Hegel/Runner.hs` — Spawns hegel CLI, manages the child process connection
-- `library/Hegel/Generators/` — All generator implementations
-- `library/Hegel/Generators.hs` — `Generate` typeclass + `TestCaseData`
-- `library/Hegel/TH.hs` — Template Haskell macros for deriving `Generate` instances
+- `library/Hegel/Range.hs` — `Range a` bounds type used by generators
+- `library/Hegel/Gen.hs` — Umbrella re-export; designed for `import Hegel.Gen qualified as Gen`
+- `library/Hegel/Gen/Internal.hs` — `Generator` GADT, `BasicGenerator`, `pattern Schema`, combinators (`oneOf`, `filtered`, `assume`, `draw`)
+- `library/Hegel/Gen/Bool.hs` — `bool :: Generator Bool`
+- `library/Hegel/Gen/Integer.hs` — `integer`, `boundedIntegers`, `integerWith`, `IntegerOptions`
+- `library/Hegel/Gen/Float.hs` — `float`, `double`, `floatWith`, `doubleWith`, `FloatOptions`
+- `library/Hegel/Gen/Binary.hs` — `binary`, `binaryWith`, `BinaryOptions`
 
 ## Module Style
 
@@ -58,15 +62,15 @@ CBOR-encoded binary protocol over multiplexed streams. For each test:
 4. Client sends `mark_complete` with status (VALID, INVALID, or INTERESTING)
 5. After all test cases, server sends `test_done` with results
 
-### `Generator` Typeclass and `BasicGenerator`
+### `Generator` GADT and `BasicGenerator`
 
-Generators implement `Generator a`:
-- `draw :: Generator a => a -> TestCase -> Output a` — Produce a value, where `Output` is an associated type of `Generator`
-- `asBasic` — Returns `Maybe (BasicGenerator a)` with a CBOR schema + parse function
+`Generator a` is a GADT (not a typeclass) defined in `Hegel.Gen.Internal`. Key operations:
+- `draw :: Generator a -> TestCase -> IO a` — Produce a value from a live test case
+- `asBasic :: Generator a -> Maybe (BasicGenerator a)` — Returns a CBOR schema + parse function when the generator can be satisfied in a single round-trip
 
-When `asBasic` returns `Just`, generation uses a single request with the schema. When `Nothing` (after `map`/`filter` on non-basic generators, or `>>=`), it falls back to multiple requests wrapped in spans for shrinking.
+When `asBasic` returns `Just`, generation uses a single request with the schema. When `Nothing` (after `>>=` on non-basic generators, or `filtered`), it falls back to multiple requests wrapped in spans for shrinking.
 
-NOTE: `map` on a `BasicGenerator` preserves the schema by composing the transform function, rather than losing it.
+`fmap` on a `BasicGenerator` preserves the schema by composing the transform into the parse function, rather than promoting to a non-basic generator.
 
 ### Server Session
 
@@ -78,7 +82,7 @@ Spans (`start_span`/`stop_span`) group related generation calls so Hypothesis ca
 
 ### Collections
 
-Server-managed collections use `Collection.new`/`Collection.more`/`Collection.reject` protocol commands. The `Collection` record in `Hegel.Collection` handles dynamic sizing via the `more()` protocol with lazy initialization.
+Server-managed collections use `Collection.new`/`Collection.more`/`Collection.reject` protocol commands. The Collection protocol is not yet implemented in this library; it is planned for a future phase.
 
 ### Conformance Tests
 

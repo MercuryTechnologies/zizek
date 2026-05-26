@@ -2,9 +2,9 @@ module SessionRecovery (spec) where
 
 import Control.Concurrent.Async (async)
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar, tryPutMVar)
-import Data.Function ((&))
-import Hegel.Generators.Integer qualified as Integer
+import Hegel.Gen qualified as Gen
 import Hegel.Outcome (Outcome (..))
+import Hegel.Range qualified as Range
 import Hegel.Runner (Settings (..), defaultSettings, runPropertyOn)
 import Hegel.Session (defaultSessionConfig, withSession)
 import Hegel.Session.Internal (liveProcess)
@@ -24,7 +24,7 @@ spec =
         runPropertyOn
           ses
           defaultSettings {testCases = 10_000}
-          (Integer.gen $ Integer.integers @Int & Integer.withRange (0, 100))
+          (Gen.integer @Int (Range.between 0 100))
           \_ -> tryPutMVar started () >> pure ()
       outcome `shouldSatisfy` \case
         Errored _ -> True
@@ -33,7 +33,7 @@ spec =
         runPropertyOn
           ses
           defaultSettings
-          (Integer.gen $ Integer.integers @Int & Integer.withRange (0, 100))
+          (Gen.integer @Int (Range.between 0 100))
           \_ -> pure ()
       outcome2 `shouldSatisfy` \case
         Passed _ -> True

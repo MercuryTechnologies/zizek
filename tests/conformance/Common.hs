@@ -13,7 +13,7 @@ import Data.Aeson (ToJSON, encode)
 import Data.ByteString.Lazy qualified as BL
 import Data.Char (isUpper, toLower)
 import Hegel (closeSession, globalSession, runPropertyOn)
-import Hegel.Generators (Generator)
+import Hegel.Gen.Internal (Generator)
 import Hegel.Outcome (Outcome (..))
 import Hegel.Runner (Settings (..), defaultSettings)
 import System.Environment (lookupEnv)
@@ -65,7 +65,7 @@ writeMetrics v = do
 
 -- | Force the generator into the compositional (non-basic) fallback path by
 -- wrapping it with a trivial monadic bind when @mode == "non_basic"@. This
--- makes 'Hegel.Generators.asBasic' return 'Nothing', exercising the
+-- makes the generator fall back to the non-basic path, exercising the
 -- multi-request span path instead of the single-request CBOR schema path.
 -- See the Rust analogue: @hegel_conformance::maybe_non_basic@.
 nonBasic :: String -> Generator a -> Generator a

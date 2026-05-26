@@ -16,7 +16,7 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Data.Word (Word32, Word64)
 import Hegel.DataSource (Status (..), markComplete, newDataSource)
-import Hegel.Generators (Generator, InvalidTestCase (..), draw)
+import Hegel.Gen.Internal (Generator, InvalidTestCase (..), draw)
 import Hegel.Outcome (Outcome (..), Stats (..))
 import Hegel.Phase (Phase (..), toWire)
 import Hegel.Protocol.Cbor
