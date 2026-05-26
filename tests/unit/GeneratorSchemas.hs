@@ -6,14 +6,13 @@ import Hegel (runProperty_)
 import Hegel.Generators (Generator, assume, filtered, oneOf)
 import Hegel.Generators.Integer qualified as Integer
 import Hegel.Runner (defaultSettings)
-import Hegel.Session (invalidateSession)
 import Test.Hspec
 
 intR :: (Int, Int) -> Generator Int
 intR r = Integer.gen $ Integer.integers @Int & Integer.withRange r
 
 spec :: Spec
-spec = before_ invalidateSession $ do
+spec = do
   it "pure yields the constant value" $
     runProperty_ defaultSettings (pure (42 :: Int)) (`shouldBe` 42)
 

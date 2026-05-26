@@ -6,14 +6,13 @@ import Hegel.Generators (Generator)
 import Hegel.Generators.Integer qualified as Integer
 import Hegel.Outcome (Outcome (..))
 import Hegel.Runner (Settings (..), defaultSettings)
-import Hegel.Session (invalidateSession)
 import Test.Hspec
 
 intR :: (Int, Int) -> Generator Int
 intR r = Integer.gen $ Integer.integers @Int & Integer.withRange r
 
 spec :: Spec
-spec = before_ invalidateSession $ do
+spec = do
   it "all integers in [0,100] are in [0,100]" $
     runProperty_ defaultSettings (intR (0, 100)) $ \n ->
       n `shouldSatisfy` (\x -> x >= 0 && x <= 100)

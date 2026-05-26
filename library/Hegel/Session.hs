@@ -82,7 +82,11 @@ initSession = do
         proc "hegel" ["--verbosity", "normal"]
           & setStdin createPipe
           & setStdout createPipe
-          & setStderr inherit
+          -- TODO: once .hegel/ local state lands with database support,
+          -- redirect to .hegel/server.<pid>-<n>.log instead of nullStream
+          -- (matches refs/hegel-rust.md:26428-26439; enables quoting the
+          -- path in handshake-failure diagnostics per refs/26502-26515).
+          & setStderr nullStream
   bracketOnError (startProcess cfg) stopProcess \p -> do
     let rh = getStdout p
         wh = getStdin p
