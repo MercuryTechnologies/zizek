@@ -1,4 +1,4 @@
-hs_dirs  := "library test"
+hs_dirs  := "library tests"
 nix_dirs := "."
 
 # Format cabal, Haskell, and Nix sources in one shot.
@@ -50,8 +50,10 @@ lint:
 
 # Run the Python conformance harness against the Haskell test binaries.
 check-conformance:
-  @echo "check-conformance: not yet implemented — tests/conformance/ does not exist yet"
-  @exit 1
+  @cabal build zizek:test-integers
+  @mkdir -p tests/conformance/bin
+  @ln -sf $(cabal list-bin zizek:test-integers) tests/conformance/bin/test-integers
+  @pytest tests/conformance/
 
 # Build with coverage and produce a report (add hpc-codecov to flake.nix first).
 check-coverage:

@@ -25,6 +25,13 @@
 
       devShells = forAllSystems (
         { pkgs, self', ... }:
+        let
+          python = pkgs.python3.withPackages (ps: [
+            self'.packages.hegel-core
+            ps.pytest
+            ps."pytest-subtests"
+          ]);
+        in
         {
           default = pkgs.mkShell {
             buildInputs =
@@ -43,8 +50,8 @@
                 repomix
                 tokei
                 zlib.dev
-                # hegel-core server
-                self'.packages.hegel-core
+                # python interpreter with hegel-core + conformance test deps
+                python
               ]
               ++ lib.optionals stdenv.hostPlatform.isDarwin [
                 apple-sdk_15

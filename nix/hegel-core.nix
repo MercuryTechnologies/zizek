@@ -19,7 +19,7 @@ let
     doCheck = false;
   };
 in
-python3Packages.buildPythonApplication rec {
+python3Packages.buildPythonPackage rec {
   pname = "hegel-core";
   version = "0.9.1";
   format = "wheel";

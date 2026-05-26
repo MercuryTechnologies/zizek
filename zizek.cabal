@@ -21,6 +21,7 @@ common all
     DeriveAnyClass
     DerivingStrategies
     ImportQualifiedPost
+    LambdaCase
     OverloadedRecordDot
     OverloadedStrings
     PatternSynonyms
@@ -84,12 +85,24 @@ library
       IOKit
       Security
 
+executable test-integers
+  import: library
+  hs-source-dirs:
+    tests/conformance
+    tests/conformance/integers
+
+  main-is: Main.hs
+  other-modules: Common
+  build-depends:
+    aeson ^>=2.2,
+    zizek,
+
 test-suite unit
   import: library
   type: exitcode-stdio-1.0
-  hs-source-dirs: test/unit
+  hs-source-dirs: tests/unit
   main-is: Main.hs
-  -- cabal-gild: discover test/unit --exclude=test/unit/Main.hs
+  -- cabal-gild: discover tests/unit --exclude=tests/unit/Main.hs
   other-modules:
   build-depends:
     hspec ^>=2.11,

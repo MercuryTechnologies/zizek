@@ -18,6 +18,12 @@ cabal/*
 # local claude settings
 .claude/settings.local.json
 
+# conformance test binaries (built by just check-conformance)
+tests/conformance/bin/
+
+# python bytecode cache
+__pycache__/
+
 # misc docs
 refs/*
 notes/*

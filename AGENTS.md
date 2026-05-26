@@ -14,7 +14,7 @@ just lint                                            # STUB: run linters (add hl
 just format                                          # run formatters (cabal, Haskell, Nix)
 just format-check                                    # check formatting without modifying files
 just docs                                            # build API docs via haddock
-just check-conformance                               # STUB: run python conformance tests (tests/conformance/ not yet written)
+just check-conformance                               # run python conformance tests (builds binaries, then runs pytest tests/conformance/)
 just check-coverage                                  # STUB: check coverage (add hpc-codecov to flake.nix first)
 cabal test zizek:unit --test-options="--match name"  # run a single test (requires hspec/tasty test framework)
 ```
