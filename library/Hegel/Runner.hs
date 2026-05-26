@@ -10,13 +10,13 @@ where
 import CBOR.Decode qualified as CD
 import CBOR.Encode qualified as CE
 import CBOR.Value (Value (..))
-import Control.Exception (toException)
+import Control.Exception (SomeException, toException)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Data.Word (Word32, Word64)
 import Hegel.DataSource (Status (..), markComplete, newDataSource)
-import Hegel.Generators (Generator, draw)
+import Hegel.Generators (Generator, InvalidTestCase (..), draw)
 import Hegel.Outcome (Outcome (..), Stats (..))
 import Hegel.Phase (Phase (..), toWire)
 import Hegel.Protocol.Cbor
@@ -41,7 +41,7 @@ import Hegel.Protocol.Stream
   )
 import Hegel.Session (Session (..), getOrInitSession)
 import Hegel.TestCase (TestCase (..))
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (Handler (..), catches, tryAny)
 
 data Settings = Settings
   { testCases :: !Int,
@@ -66,6 +66,7 @@ defaultSettings =
 
 data CaseResult a
   = CaseValid
+  | CaseInvalid
   | CaseInteresting !Text !(Maybe a)
 
 runCase ::
@@ -80,9 +81,14 @@ runCase conn sid gen body = do
   caseStream <- mkStream conn sid caseQ
   ds <- newDataSource caseStream
   let tc = TestCase ds
-  eVal <- tryAny (draw tc gen)
+  eVal <-
+    (Right <$> draw tc gen)
+      `catches` [ Handler \InvalidTestCase -> pure (Left Nothing),
+                  Handler \(e :: SomeException) -> pure (Left (Just e))
+                ]
   case eVal of
-    Left exc -> do
+    Left Nothing -> pure CaseInvalid
+    Left (Just exc) -> do
       let msg = T.pack (show exc)
       markComplete ds (Interesting msg)
       pure (CaseInteresting msg Nothing)
@@ -217,6 +223,8 @@ replayFinalCases testStream conn n nInvalid gen body = go n Nothing
           result <- runCase conn sid gen body
           case result of
             CaseValid ->
+              go (k - 1) mFail
+            CaseInvalid ->
               go (k - 1) mFail
             CaseInteresting _ Nothing ->
               go (k - 1) mFail

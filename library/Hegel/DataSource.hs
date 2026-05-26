@@ -14,8 +14,8 @@ import CBOR.Decode qualified as CD
 import CBOR.Encode qualified as CE
 import CBOR.Value (Value (..))
 import Data.Text (Text)
-import Hegel.Protocol.Cbor (asText, buildMap, lookupKey, nullVal, textVal)
-import Hegel.Protocol.Stream (Stream, closeStream, requestCbor, requestRaw)
+import Hegel.Protocol.Cbor (asText, boolVal, buildMap, intVal, lookupKey, nullVal, textVal)
+import Hegel.Protocol.Stream (Stream, closeStream, requestCbor, requestRaw, sendRequest)
 import UnliftIO.Exception (finally, onException)
 
 data Status
@@ -42,6 +42,23 @@ data Label
   | LabelEnumVariant
   deriving stock (Show)
 
+labelValue :: Label -> Int
+labelValue LabelList = 1
+labelValue LabelListElement = 2
+labelValue LabelSet = 3
+labelValue LabelSetElement = 4
+labelValue LabelMap = 5
+labelValue LabelMapEntry = 6
+labelValue LabelTuple = 7
+labelValue LabelOneOf = 8
+labelValue LabelOptional = 9
+labelValue LabelFixedDict = 10
+labelValue LabelFlatMap = 11
+labelValue LabelFilter = 12
+labelValue LabelMapped = 13
+labelValue LabelSampledFrom = 14
+labelValue LabelEnumVariant = 15
+
 data DataSource = DataSource
   { stream :: !Stream
   }
@@ -56,13 +73,21 @@ generate ds schema =
     (buildMap [("command", textVal "generate"), ("schema", schema)])
     `onException` closeStream ds.stream
 
--- | No-op stub until protocol span support is wired up.
 startSpan :: DataSource -> Label -> IO ()
-startSpan _ _ = pure ()
+startSpan ds label =
+  sendRequest ds.stream . CE.encode $
+    buildMap
+      [ ("command", textVal "start_span"),
+        ("label", intVal (labelValue label))
+      ]
 
--- | No-op stub until protocol span support is wired up.
 stopSpan :: DataSource -> Bool -> IO ()
-stopSpan _ _ = pure ()
+stopSpan ds discard =
+  sendRequest ds.stream . CE.encode $
+    buildMap
+      [ ("command", textVal "stop_span"),
+        ("discard", boolVal discard)
+      ]
 
 markComplete :: DataSource -> Status -> IO ()
 markComplete ds status =

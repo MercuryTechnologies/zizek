@@ -2,6 +2,7 @@ module Hegel.Protocol.Stream
   ( Stream,
     mkStream,
     streamId,
+    sendRequest,
     requestRaw,
     requestCbor,
     writeReply,
@@ -27,7 +28,7 @@ import Hegel.Protocol.Cbor (asText, lookupKey)
 import Hegel.Protocol.Connection (Connection, sendPacket, unregisterStream)
 import Hegel.Protocol.Packet (Packet (..))
 import UnliftIO.Exception (finally)
-import UnliftIO.MVar (MVar, modifyMVar, newMVar)
+import UnliftIO.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 
 closeStreamPayload :: ByteString
 closeStreamPayload = BS.singleton 0xFE
@@ -60,6 +61,19 @@ mkStream connection streamId inbox = do
           closed = False
         }
   pure Stream {streamId, connection, inbox, state}
+
+-- | Fire-and-forget send: enqueue the payload on the stream without waiting
+-- for a reply. No-ops silently when the stream is already closed.
+sendRequest :: Stream -> ByteString -> IO ()
+sendRequest s pay = modifyMVar_ s.state \st ->
+  if st.closed
+    then pure st
+    else do
+      let mid = st.nextMessageId
+      sendPacket
+        s.connection
+        Packet {stream = s.streamId, messageId = mid, isReply = False, payload = pay}
+      pure st {nextMessageId = mid + 1}
 
 -- | Send a raw request and block until the matching reply arrives.
 -- Holds the stream's state lock for the entire duration; streams are

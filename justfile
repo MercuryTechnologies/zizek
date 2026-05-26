@@ -23,7 +23,7 @@ test suite="unit":
 
 # Count lines of code in library, test, and nix sources.
 loc:
-  @tokei library test nix
+  @tokei {{hs_dirs}} nix
 
 # Build API docs with links to Hackage for dependencies.
 # Note: source-repository-package deps (wireform-*) are not on Hackage; their links will 404.
