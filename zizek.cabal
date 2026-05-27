@@ -149,6 +149,15 @@ executable test-origin-deduplication
     zizek,
     zizek:conformance-utils,
 
+executable test-sampled-from
+  import: library
+  hs-source-dirs: tests/conformance/sampled-from
+  main-is: Main.hs
+  build-depends:
+    aeson ^>=2.2,
+    zizek,
+    zizek:conformance-utils,
+
 test-suite unit
   import: library
   type: exitcode-stdio-1.0

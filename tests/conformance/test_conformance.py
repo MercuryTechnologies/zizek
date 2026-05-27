@@ -38,12 +38,12 @@ def test_conformance(subtests):
                 max_value=INT64_MAX,
             ),
             OriginDeduplicationConformance(BIN_DIR / "test-origin-deduplication"),
+            SampledFromConformance(BIN_DIR / "test-sampled-from"),
         ],
         subtests,
         skip_tests=[
             TextConformance,
             ListConformance,
-            SampledFromConformance,
             OneOfConformance,
             DictConformance,
             StopTestOnGenerateConformance,
