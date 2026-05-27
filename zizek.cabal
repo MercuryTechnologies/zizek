@@ -158,6 +158,15 @@ executable test-sampled-from
     zizek,
     zizek:conformance-utils,
 
+executable test-one-of
+  import: library
+  hs-source-dirs: tests/conformance/one-of
+  main-is: Main.hs
+  build-depends:
+    aeson ^>=2.2,
+    zizek,
+    zizek:conformance-utils,
+
 test-suite unit
   import: library
   type: exitcode-stdio-1.0

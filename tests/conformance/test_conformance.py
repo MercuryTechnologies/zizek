@@ -39,12 +39,12 @@ def test_conformance(subtests):
             ),
             OriginDeduplicationConformance(BIN_DIR / "test-origin-deduplication"),
             SampledFromConformance(BIN_DIR / "test-sampled-from"),
+            OneOfConformance(BIN_DIR / "test-one-of"),
         ],
         subtests,
         skip_tests=[
             TextConformance,
             ListConformance,
-            OneOfConformance,
             DictConformance,
             StopTestOnGenerateConformance,
             StopTestOnMarkCompleteConformance,

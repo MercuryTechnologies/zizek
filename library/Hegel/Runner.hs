@@ -15,20 +15,22 @@ import Hegel.Session.Internal (LiveSession (..), liveSession)
 import UnliftIO.Exception (Handler (..), catches)
 
 runPropertyOn ::
+  forall a.
   Session ->
   Settings ->
   Generator a ->
   (a -> IO ()) ->
   IO (Outcome a)
 runPropertyOn ses settings gen body =
-  ( do
-      live <- liveSession ses
-      runTest live.client settings gen body
-  )
+  run
     `catches` [ Handler \(e :: ConnectionClosedError) -> recover (toException e),
                 Handler \(e :: ProtocolError) -> recover (toException e)
               ]
   where
+    run :: IO (Outcome a)
+    run = do
+      live <- liveSession ses
+      runTest live.client settings gen body
     recover :: SomeException -> IO (Outcome a)
     recover se = do
       invalidateSession ses

@@ -35,7 +35,7 @@ runProperty_ ::
   (a -> IO ()) ->
   IO ()
 runProperty_ settings gen body = do
-  outcome <- runPropertyOn globalSession settings gen body
+  outcome <- runProperty settings gen body
   case outcome of
     Passed _ -> pure ()
     Failed {counterexample, message, notes} -> throwIO (PropertyFailed counterexample message notes)

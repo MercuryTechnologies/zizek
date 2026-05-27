@@ -6,6 +6,7 @@ module ConformanceUtils
     nonBasic,
     runConformanceProperty,
     runConformancePropertyExpectFailures,
+    runConformancePropertyPaired,
     writeEmptyMetrics,
     writeMetrics,
   )
@@ -13,11 +14,13 @@ where
 
 import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
 import Control.Exception (finally)
+import Control.Monad (unless)
 import Data.Aeson (FromJSON, Options (..), ToJSON, defaultOptions, eitherDecodeStrict', encode, object)
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BL
 import Data.Char (isUpper, toLower)
-import Hegel (closeSession, globalSession, runPropertyOn)
+import Data.IORef (newIORef, readIORef, writeIORef)
+import Hegel (closeSession, globalSession, runProperty)
 import Hegel.Gen.Internal (Generator)
 import Hegel.Outcome (Outcome (..))
 import Hegel.Runner (Settings (..), defaultSettings)
@@ -89,7 +92,7 @@ writeMetrics v = do
       hFlush h
 
 -- | Append an empty JSON object to the metrics file, if one is configured.
--- 
+--
 -- Used by tests that need to keep client and server metric line counts paired
 -- without emitting per-test-case data.
 writeEmptyMetrics :: IO ()
@@ -100,7 +103,7 @@ writeEmptyMetrics = writeMetrics (object [])
 --
 -- This exercises the multi-request span path instead of the single-request
 -- CBOR schema path.
--- 
+--
 -- See the Rust analogue: @hegel_conformance::maybe_non_basic@.
 nonBasic :: String -> Generator a -> Generator a
 nonBasic "non_basic" g = g >>= pure
@@ -112,7 +115,55 @@ runConformanceProperty gen body = run `finally` closeSession globalSession
   where
     run = do
       n <- getTestCases
-      outcome <- runPropertyOn globalSession (defaultSettings {testCases = n}) gen body
+      outcome <- runProperty (defaultSettings {testCases = n}) gen body
+      case outcome of
+        Passed _ -> exitSuccess
+        Rejected msg -> do
+          putStrLn ("conformance property rejected: " <> show msg)
+          exitWith (ExitFailure 1)
+        Failed {} -> do
+          putStrLn "conformance property failed"
+          exitWith (ExitFailure 1)
+        Errored e -> do
+          putStrLn ("conformance property errored: " <> show e)
+          exitWith (ExitFailure 1)
+        UnhealthyInput msg -> do
+          putStrLn ("conformance health check failed: " <> show msg)
+          exitWith (ExitFailure 1)
+
+-- | Conformance runner that guarantees a client metric line per test case the
+-- server records, even when the generator rejects (e.g. exhausted
+-- 'Hegel.Gen.filtered' retries). Mirrors the @defer EnsureMetric()@ pattern
+-- from @hegel-go@'s @internal/conformance/helpers.go@.
+--
+-- The body returns @Just m@ to emit @m@ as the case's metric, or @Nothing@ to
+-- skip (rare; usually return @Just@). After each test case completes the
+-- finalizer checks whether the body wrote a metric; if not, it appends an
+-- empty @{}@ line so the client and server metric files stay 1:1.
+runConformancePropertyPaired ::
+  forall a m.
+  (ToJSON m) =>
+  Generator a ->
+  (a -> Maybe m) ->
+  IO ()
+runConformancePropertyPaired gen toMetric =
+  run `finally` closeSession globalSession
+  where
+    run = do
+      n <- getTestCases
+      wroteRef <- newIORef False
+      let body v = case toMetric v of
+            Just m -> writeMetrics m *> writeIORef wroteRef True
+            Nothing -> pure ()
+          finalizer = do
+            wrote <- readIORef wroteRef
+            unless wrote writeEmptyMetrics
+            writeIORef wroteRef False
+      outcome <-
+        runProperty
+          (defaultSettings {testCases = n, perCaseFinalizer = finalizer})
+          gen
+          body
       case outcome of
         Passed _ -> exitSuccess
         Rejected msg -> do
@@ -139,7 +190,7 @@ runConformancePropertyExpectFailures gen body = run `finally` closeSession globa
   where
     run = do
       n <- getTestCases
-      outcome <- runPropertyOn globalSession (defaultSettings {testCases = n}) gen body
+      outcome <- runProperty (defaultSettings {testCases = n}) gen body
       case outcome of
         Passed _ -> exitSuccess
         Failed {} -> exitSuccess

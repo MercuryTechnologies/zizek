@@ -78,15 +78,13 @@ newDataSource :: Stream -> IO DataSource
 newDataSource s = pure (DataSource s)
 
 generate :: DataSource -> Value -> IO Value
-generate ds schema =
-  ( requestCbor
-      ds.stream
-      (buildMap [("command", textVal "generate"), ("schema", schema)])
-      `catch` \(e :: ServerError) -> case e.errorType of
-        "StopTest" -> throwIO DataExhausted
-        _ -> throwIO e
-  )
-    `onException` closeStream ds.stream
+generate ds schema = req `onException` closeStream ds.stream
+  where
+    req = requestCbor ds.stream payload `catch` mapStopTest
+    payload = buildMap [("command", textVal "generate"), ("schema", schema)]
+    mapStopTest (e :: ServerError) = case e.errorType of
+      "StopTest" -> throwIO DataExhausted
+      _ -> throwIO e
 
 startSpan :: DataSource -> Label -> IO ()
 startSpan ds label =
@@ -105,8 +103,9 @@ stopSpan ds discard =
       ]
 
 markComplete :: DataSource -> Status -> IO ()
-markComplete ds status =
-  ( do
+markComplete ds status = send `finally` closeStream ds.stream
+  where
+    send = do
       let req =
             CE.encode $
               buildMap
@@ -122,9 +121,6 @@ markComplete ds status =
           Just _ -> case lookupKey "type" val >>= asText of
             Just "StopTest" -> pure ()
             _ -> throwIO (UnexpectedReply "markComplete" val)
-  )
-    `finally` closeStream ds.stream
-  where
     (statusText, origin) = case status of
       Valid -> ("VALID", nullVal)
       Invalid -> ("INVALID", nullVal)

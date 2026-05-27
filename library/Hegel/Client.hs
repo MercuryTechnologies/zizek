@@ -72,9 +72,26 @@ data Settings = Settings
     derandomize :: !Bool,
     phases :: ![Phase],
     reportMultipleFailures :: !Bool,
-    suppressHealthCheck :: ![Text]
+    suppressHealthCheck :: ![Text],
+    perCaseFinalizer :: !(IO ())
   }
-  deriving stock (Show)
+
+instance Show Settings where
+  showsPrec p s =
+    showParen (p > 10) $
+      showString "Settings {testCases = "
+        . shows s.testCases
+        . showString ", seed = "
+        . shows s.seed
+        . showString ", derandomize = "
+        . shows s.derandomize
+        . showString ", phases = "
+        . shows s.phases
+        . showString ", reportMultipleFailures = "
+        . shows s.reportMultipleFailures
+        . showString ", suppressHealthCheck = "
+        . shows s.suppressHealthCheck
+        . showString ", perCaseFinalizer = <<function>>}"
 
 defaultSettings :: Settings
 defaultSettings =
@@ -84,7 +101,8 @@ defaultSettings =
       derandomize = False,
       phases = [Explicit, Reuse, Generate, Target, Shrink],
       reportMultipleFailures = False,
-      suppressHealthCheck = []
+      suppressHealthCheck = [],
+      perCaseFinalizer = pure ()
     }
 
 -- | Open the control stream, perform the handshake, and return a validated
@@ -145,7 +163,7 @@ runTest client settings gen body = do
 
   let runAndInterpret = do
         (results, nInteresting, nInvalid) <-
-          runEventLoop testStream client.connection gen body
+          runEventLoop testStream client.connection gen body settings.perCaseFinalizer
         case lookupKey "health_check_failure" results >>= asText of
           Just msg -> pure (UnhealthyInput msg)
           Nothing -> case lookupKey "error" results >>= asText of
@@ -172,6 +190,7 @@ runTest client settings gen body = do
                     (fromIntegral nInvalid)
                     gen
                     body
+                    settings.perCaseFinalizer
   runAndInterpret `finally` closeStream testStream
 
 -- ---------------------------------------------------------------------------
@@ -189,42 +208,46 @@ runCase ::
   Word32 ->
   Generator a ->
   (a -> IO ()) ->
+  IO () ->
   IO (CaseResult a)
-runCase conn sid gen body = do
-  (_, caseQ) <- connectStream conn sid
-  caseStream <- mkStream conn sid caseQ
-  ds <- newDataSource caseStream
-  let tc = TestCase ds
-  eVal <-
-    (Right <$> draw tc gen)
-      `catches` [ Handler \AssumeRejected -> pure (Left Nothing),
-                  Handler \DataExhausted -> pure (Left Nothing),
-                  Handler \(e :: SomeException) -> pure (Left (Just e))
-                ]
-  case eVal of
-    Left Nothing -> pure CaseInvalid
-    Left (Just exc) -> do
-      let msg = originOf exc
-      markComplete ds (Interesting msg)
-      pure (CaseInteresting msg Nothing)
-    Right val -> do
-      eRes <- tryAny (body val)
-      case eRes of
-        Right () -> do
-          markComplete ds Valid
-          pure CaseValid
-        Left exc -> do
+runCase conn sid gen body finalizer = run `finally` finalizer
+  where
+    run = do
+      (_, caseQ) <- connectStream conn sid
+      caseStream <- mkStream conn sid caseQ
+      ds <- newDataSource caseStream
+      let tc = TestCase ds
+      eVal <-
+        (Right <$> draw tc gen)
+          `catches` [ Handler \AssumeRejected -> pure (Left Nothing),
+                      Handler \DataExhausted -> pure (Left Nothing),
+                      Handler \(e :: SomeException) -> pure (Left (Just e))
+                    ]
+      case eVal of
+        Left Nothing -> pure CaseInvalid
+        Left (Just exc) -> do
           let msg = originOf exc
           markComplete ds (Interesting msg)
-          pure (CaseInteresting msg (Just val))
+          pure (CaseInteresting msg Nothing)
+        Right val -> do
+          eRes <- tryAny (body val)
+          case eRes of
+            Right () -> do
+              markComplete ds Valid
+              pure CaseValid
+            Left exc -> do
+              let msg = originOf exc
+              markComplete ds (Interesting msg)
+              pure (CaseInteresting msg (Just val))
 
 runEventLoop ::
   Stream ->
   Connection ->
   Generator a ->
   (a -> IO ()) ->
+  IO () ->
   IO (Value, Word64, Word64)
-runEventLoop testStream conn gen body = go
+runEventLoop testStream conn gen body finalizer = go
   where
     ackNull = CE.encode (buildMap [("result", nullVal)])
     ackTrue = CE.encode (buildMap [("result", boolVal True)])
@@ -246,7 +269,7 @@ runEventLoop testStream conn gen body = go
               then throwIO (ProtocolStateViolation "unexpected is_final=true during main loop")
               else do
                 writeReply testStream evId ackNull
-                _ <- runCase conn sid gen body
+                _ <- runCase conn sid gen body finalizer
                 go
           Just "test_done" -> do
             writeReply testStream evId ackTrue
@@ -264,8 +287,9 @@ replayFinalCases ::
   Int ->
   Generator a ->
   (a -> IO ()) ->
+  IO () ->
   IO (Outcome a)
-replayFinalCases testStream conn n nInvalid gen body = go n Nothing
+replayFinalCases testStream conn n nInvalid gen body finalizer = go n Nothing
   where
     ackNull = CE.encode (buildMap [("result", nullVal)])
 
@@ -287,7 +311,7 @@ replayFinalCases testStream conn n nInvalid gen body = go n Nothing
             then throwIO (ProtocolStateViolation "expected is_final=true")
             else pure ()
           writeReply testStream evId ackNull
-          result <- runCase conn sid gen body
+          result <- runCase conn sid gen body finalizer
           case result of
             CaseValid -> go (k - 1) mFail
             CaseInvalid -> go (k - 1) mFail
