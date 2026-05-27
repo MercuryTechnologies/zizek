@@ -1,15 +1,15 @@
 module GeneratorSchemas (spec) where
 
+import Data.Function ((&))
 import Data.List.NonEmpty (NonEmpty (..))
 import Hegel (runProperty_)
 import Hegel.Gen (Generator)
 import Hegel.Gen qualified as Gen
-import Hegel.Range qualified as Range
 import Hegel.Runner (defaultSettings)
 import Test.Hspec
 
 intR :: (Int, Int) -> Generator Int
-intR (lo, hi) = Gen.integer (Range.between lo hi)
+intR (lo, hi) = Gen.integer & Gen.min lo & Gen.max hi & Gen.build
 
 spec :: Spec
 spec = do
@@ -17,7 +17,7 @@ spec = do
     runProperty_ defaultSettings (pure (42 :: Int)) (`shouldBe` 42)
 
   it "ap of two basics generates pairs from different generator types" $ do
-    let g = (,) <$> Gen.bool <*> intR (0, 10)
+    let g = (,) <$> (Gen.bool & Gen.build) <*> intR (0, 10)
     runProperty_ defaultSettings g $ \(_, n) ->
       n `shouldSatisfy` (\x -> x >= 0 && x <= 10)
 
@@ -55,7 +55,7 @@ spec = do
       n `shouldSatisfy` (\x -> x >= 0 && x <= 10)
 
   it "monadic bind from Bool selects between integer ranges" $ do
-    let g = Gen.bool >>= \b -> intR (if b then (0, 5) else (10, 15))
+    let g = (Gen.bool & Gen.build) >>= \b -> intR (if b then (0, 5) else (10, 15))
     runProperty_ defaultSettings g $ \n ->
       n `shouldSatisfy` (\x -> (x >= 0 && x <= 5) || (x >= 10 && x <= 15))
 

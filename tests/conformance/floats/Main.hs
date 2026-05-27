@@ -3,10 +3,10 @@ module Main (main) where
 import Common (camelToSnake, runConformanceProperty, writeMetrics)
 import Data.Aeson (FromJSON (..), Options (..), defaultOptions, eitherDecodeStrict', genericParseJSON, object, (.=))
 import Data.ByteString.Char8 qualified as BS
+import Data.Function ((&))
 import Data.Maybe (fromMaybe)
 import GHC.Generics (Generic)
 import Hegel.Gen qualified as Gen
-import Hegel.Gen.Float (FloatOptions (..))
 import System.Environment (getArgs)
 import System.Exit (die)
 
@@ -34,15 +34,14 @@ main = do
     _ -> die "Usage: test-floats '<json_params>'"
   params <- either die pure (eitherDecodeStrict' @Params (BS.pack j))
   let g =
-        Gen.doubleWith
-          FloatOptions
-            { minValue = params.minValue,
-              maxValue = params.maxValue,
-              excludeMin = params.excludeMin,
-              excludeMax = params.excludeMax,
-              allowNan = fromMaybe True params.allowNan,
-              allowInfinity = fromMaybe True params.allowInfinity
-            }
+        Gen.double
+          & maybe id Gen.min params.minValue
+          & maybe id Gen.max params.maxValue
+          & (if params.excludeMin then Gen.exclusiveMin else id)
+          & (if params.excludeMax then Gen.exclusiveMax else id)
+          & (if fromMaybe True params.allowNan then id else Gen.disallowNan)
+          & (if fromMaybe True params.allowInfinity then id else Gen.disallowInfinity)
+          & Gen.build
   runConformanceProperty g \v ->
     writeMetrics $
       object

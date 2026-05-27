@@ -3,43 +3,54 @@
 -- Designed for qualified import:
 --
 -- > import Hegel.Gen qualified as Gen
--- > import Hegel.Range qualified as Range
 --
--- which brings @Gen.bool@, @Gen.integer@, @Gen.oneOf@, etc. into scope.
+-- which brings @Gen.bool@, @Gen.integer@, @Gen.double@, @Gen.build@, etc.
+-- into scope. Build a generator by chaining modifiers and materialising with
+-- @Gen.build@:
 --
--- The @*Options@ types (@'Hegel.Gen.Integer.IntegerOptions'@,
--- @'Hegel.Gen.Float.FloatOptions'@, @'Hegel.Gen.Binary.BinaryOptions'@) are
--- intentionally /not/ re-exported here to avoid record-field ambiguity when
--- multiple options types share field names (e.g. @minValue@). Import them
--- directly from their per-type modules when you need to build custom options:
---
--- > import Hegel.Gen.Float (FloatOptions (..))
+-- > -- simplest form
+-- > gen1 = Gen.bool & Gen.build
+-- >
+-- > -- numeric bounds
+-- > gen2 = Gen.integer @Int & Gen.min 0 & Gen.max 100 & Gen.build
+-- >
+-- > -- float with constraints
+-- > gen3 = Gen.double & Gen.min 0 & Gen.max 1 & Gen.disallowNan & Gen.build
+-- >
+-- > -- sized binary
+-- > gen4 = Gen.binary & Gen.minSize 4 & Gen.maxSize 64 & Gen.build
 module Hegel.Gen
   ( -- * Core types
     Generator,
     BasicGenerator (..),
     pattern Schema,
 
+    -- * Builder classes
+    Build (build),
+    HasMin (min),
+    HasMax (max),
+    HasSize (minSize, maxSize),
+
     -- * Boolean
+    BoolBuilder,
     bool,
 
     -- * Integer
-    defaultIntegerOptions,
+    IntegerBuilder,
     integer,
-    boundedIntegers,
-    integerWith,
 
     -- * Float
-    defaultFloatOptions,
+    FloatBuilder,
     float,
     double,
-    floatWith,
-    doubleWith,
+    exclusiveMin,
+    exclusiveMax,
+    disallowNan,
+    disallowInfinity,
 
     -- * Binary
-    defaultBinaryOptions,
+    BinaryBuilder,
     binary,
-    binaryWith,
 
     -- * Combinators
     draw,
@@ -53,25 +64,19 @@ module Hegel.Gen
   )
 where
 
-import Hegel.Gen.Binary
-  ( binary,
-    binaryWith,
-    defaultBinaryOptions,
-  )
-import Hegel.Gen.Bool (bool)
+import Hegel.Gen.Binary (BinaryBuilder, binary)
+import Hegel.Gen.Bool (BoolBuilder, bool)
+import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasSize (..))
 import Hegel.Gen.Float
-  ( defaultFloatOptions,
+  ( FloatBuilder,
+    disallowInfinity,
+    disallowNan,
     double,
-    doubleWith,
+    exclusiveMax,
+    exclusiveMin,
     float,
-    floatWith,
   )
-import Hegel.Gen.Integer
-  ( boundedIntegers,
-    defaultIntegerOptions,
-    integer,
-    integerWith,
-  )
+import Hegel.Gen.Integer (IntegerBuilder, integer)
 import Hegel.Gen.Internal
   ( BasicGenerator (..),
     Generator,

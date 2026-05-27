@@ -26,13 +26,13 @@ Minimum supported GHC version is 9.10 (enforced in CI and `zizek.cabal`). If you
 - `library/Hegel.hs` — Public API
 - `library/Hegel/Protocol.hs` — Binary protocol: packet encoding/decoding, stream multiplexing
 - `library/Hegel/Runner.hs` — Spawns hegel CLI, manages the child process connection
-- `library/Hegel/Range.hs` — `Range a` bounds type used by generators
 - `library/Hegel/Gen.hs` — Umbrella re-export; designed for `import Hegel.Gen qualified as Gen`
 - `library/Hegel/Gen/Internal.hs` — `Generator` GADT, `BasicGenerator`, `pattern Schema`, combinators (`oneOf`, `filtered`, `assume`, `draw`)
-- `library/Hegel/Gen/Bool.hs` — `bool :: Generator Bool`
-- `library/Hegel/Gen/Integer.hs` — `integer`, `boundedIntegers`, `integerWith`, `IntegerOptions`
-- `library/Hegel/Gen/Float.hs` — `float`, `double`, `floatWith`, `doubleWith`, `FloatOptions`
-- `library/Hegel/Gen/Binary.hs` — `binary`, `binaryWith`, `BinaryOptions`
+- `library/Hegel/Gen/Builder.hs` — `Build`, `HasMin`, `HasMax`, `HasSize` typeclasses
+- `library/Hegel/Gen/Bool.hs` — `bool :: BoolBuilder`
+- `library/Hegel/Gen/Integer.hs` — `integer :: IntegerBuilder a` (implements `HasMin`, `HasMax`, `Build`)
+- `library/Hegel/Gen/Float.hs` — `float :: FloatBuilder Float`, `double :: FloatBuilder Double`; `exclusiveMin`, `exclusiveMax`, `disallowNan`, `disallowInfinity` modifiers
+- `library/Hegel/Gen/Binary.hs` — `binary :: BinaryBuilder` (implements `HasSize`, `Build`)
 
 ## Module Style
 
@@ -46,6 +46,23 @@ import Hegel.Collection qualified as Collection
 ```
 
 ...which brings `Collection.new :: TestCase -> Collection` into scope.
+
+### Generator builder pattern
+
+Generators are built via a fluent builder API. `Gen.integer`, `Gen.double`, etc. are *builders* that accumulate constraints via `&`-chained modifiers and materialise with `& Gen.build`:
+
+```haskell
+import Data.Function ((&))
+import Hegel.Gen qualified as Gen
+
+g1 = Gen.integer @Int & Gen.min 0 & Gen.max 100      & Gen.build
+g2 = Gen.double       & Gen.min 0 & Gen.max 1        & Gen.build
+g3 = Gen.double       & Gen.disallowNan              & Gen.build
+g4 = Gen.binary       & Gen.minSize 4 & Gen.maxSize 64 & Gen.build
+g5 = Gen.bool                                        & Gen.build
+```
+
+The `Build`, `HasMin`, `HasMax`, and `HasSize` typeclasses in `Hegel.Gen.Builder` provide the modifier vocabulary. Float-only modifiers (`exclusiveMin`, `exclusiveMax`, `disallowNan`, `disallowInfinity`) are plain functions on `FloatBuilder a`. Applying an inapplicable modifier (e.g. `Gen.uuid & Gen.min 0`) is a type error. There are no `*Options` records on the public API.
 
 ## Architecture
 

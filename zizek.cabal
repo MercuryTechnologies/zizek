@@ -71,6 +71,7 @@ library
     Hegel.Gen
     Hegel.Gen.Binary
     Hegel.Gen.Bool
+    Hegel.Gen.Builder
     Hegel.Gen.Float
     Hegel.Gen.Integer
     Hegel.Gen.Internal
@@ -81,7 +82,6 @@ library
     Hegel.Protocol.Error
     Hegel.Protocol.Packet
     Hegel.Protocol.Stream
-    Hegel.Range
     Hegel.Runner
     Hegel.Session
     Hegel.Session.Internal

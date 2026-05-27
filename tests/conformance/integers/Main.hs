@@ -3,10 +3,10 @@ module Main (main) where
 import Common (camelToSnake, runConformanceProperty, writeMetrics)
 import Data.Aeson (FromJSON (..), Options (..), ToJSON (..), defaultOptions, eitherDecodeStrict', genericParseJSON, genericToJSON)
 import Data.ByteString.Char8 qualified as BS
+import Data.Function ((&))
 import Data.Int (Int64)
 import GHC.Generics (Generic)
 import Hegel.Gen qualified as Gen
-import Hegel.Gen.Integer (IntegerOptions (..))
 import System.Environment (getArgs)
 import System.Exit (die)
 
@@ -34,5 +34,9 @@ main = do
     [j] -> pure j
     _ -> die "Usage: test-integers '<json_params>'"
   params <- either die pure (eitherDecodeStrict' @Params (BS.pack j))
-  let g = Gen.integerWith @Int64 IntegerOptions {minValue = params.minValue, maxValue = params.maxValue}
+  let g =
+        Gen.integer @Int64
+          & maybe id Gen.min params.minValue
+          & maybe id Gen.max params.maxValue
+          & Gen.build
   runConformanceProperty g (writeMetrics . Metrics)
