@@ -1,14 +1,11 @@
 module Main (main) where
 
-import Common (camelToSnake, runConformanceProperty, writeMetrics)
-import Data.Aeson (FromJSON (..), Options (..), defaultOptions, eitherDecodeStrict', genericParseJSON, object, (.=))
-import Data.ByteString.Char8 qualified as BS
+import ConformanceUtils (aesonOpts, decodeArgs, runConformanceProperty, writeMetrics)
+import Data.Aeson (FromJSON (..), genericParseJSON, object, (.=))
 import Data.Function ((&))
 import Data.Maybe (fromMaybe)
 import GHC.Generics (Generic)
 import Hegel.Gen qualified as Gen
-import System.Environment (getArgs)
-import System.Exit (die)
 
 data Params = Params
   { minValue :: Maybe Double,
@@ -20,19 +17,12 @@ data Params = Params
   }
   deriving stock (Generic)
 
-aesonOpts :: Options
-aesonOpts = defaultOptions {fieldLabelModifier = camelToSnake}
-
 instance FromJSON Params where
   parseJSON = genericParseJSON aesonOpts
 
 main :: IO ()
 main = do
-  args <- getArgs
-  j <- case args of
-    [j] -> pure j
-    _ -> die "Usage: test-floats '<json_params>'"
-  params <- either die pure (eitherDecodeStrict' @Params (BS.pack j))
+  params <- decodeArgs @Params
   let g =
         Gen.double
           & maybe id Gen.min params.minValue

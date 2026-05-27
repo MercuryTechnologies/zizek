@@ -84,7 +84,7 @@ module Hegel.Gen
     just,
 
     -- * Exceptions
-    InvalidTestCase (..),
+    AssumeRejected (..),
     UnexpectedResponse (..),
   )
 where
@@ -118,9 +118,9 @@ import Hegel.Gen.Integer
     word8,
   )
 import Hegel.Gen.Internal
-  ( BasicGenerator (..),
+  ( AssumeRejected (..),
+    BasicGenerator (..),
     Generator,
-    InvalidTestCase (..),
     UnexpectedResponse (..),
     assume,
     discard,

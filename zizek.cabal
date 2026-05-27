@@ -67,6 +67,7 @@ library
   -- cabal-gild: discover library
   exposed-modules:
     Hegel
+    Hegel.Assertion
     Hegel.Client
     Hegel.DataSource
     Hegel.Gen
@@ -94,53 +95,59 @@ library
       IOKit
       Security
 
-executable test-booleans
+library conformance-utils
   import: library
-  hs-source-dirs:
-    tests/conformance
-    tests/conformance/booleans
-
-  main-is: Main.hs
-  other-modules: Common
+  visibility: private
+  hs-source-dirs: tests/conformance/lib
+  exposed-modules: ConformanceUtils
   build-depends:
     aeson ^>=2.2,
     zizek,
+
+executable test-booleans
+  import: library
+  hs-source-dirs: tests/conformance/booleans
+  main-is: Main.hs
+  build-depends:
+    aeson ^>=2.2,
+    zizek,
+    zizek:conformance-utils,
 
 executable test-binary
   import: library
-  hs-source-dirs:
-    tests/conformance
-    tests/conformance/binary
-
+  hs-source-dirs: tests/conformance/binary
   main-is: Main.hs
-  other-modules: Common
   build-depends:
     aeson ^>=2.2,
     zizek,
+    zizek:conformance-utils,
 
 executable test-floats
   import: library
-  hs-source-dirs:
-    tests/conformance
-    tests/conformance/floats
-
+  hs-source-dirs: tests/conformance/floats
   main-is: Main.hs
-  other-modules: Common
   build-depends:
     aeson ^>=2.2,
     zizek,
+    zizek:conformance-utils,
 
 executable test-integers
   import: library
-  hs-source-dirs:
-    tests/conformance
-    tests/conformance/integers
-
+  hs-source-dirs: tests/conformance/integers
   main-is: Main.hs
-  other-modules: Common
   build-depends:
     aeson ^>=2.2,
     zizek,
+    zizek:conformance-utils,
+
+executable test-origin-deduplication
+  import: library
+  hs-source-dirs: tests/conformance/origin-deduplication
+  main-is: Main.hs
+  build-depends:
+    aeson ^>=2.2,
+    zizek,
+    zizek:conformance-utils,
 
 test-suite unit
   import: library

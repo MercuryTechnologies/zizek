@@ -18,8 +18,9 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Data.Word (Word32, Word64)
-import Hegel.DataSource (Status (..), markComplete, newDataSource)
-import Hegel.Gen.Internal (Generator, InvalidTestCase (..), draw)
+import Hegel.Assertion (originOf)
+import Hegel.DataSource (DataExhausted (..), Status (..), markComplete, newDataSource)
+import Hegel.Gen.Internal (AssumeRejected (..), Generator, draw)
 import Hegel.Outcome (Outcome (..), Stats (..))
 import Hegel.Phase (Phase (..), toWire)
 import Hegel.Protocol.Cbor
@@ -35,7 +36,7 @@ import Hegel.Protocol.Cbor
     textVal,
   )
 import Hegel.Protocol.Connection (Connection, connectStream, controlStream, newStream)
-import Hegel.Protocol.Error (ProtocolError (..), ServerError (..))
+import Hegel.Protocol.Error (ProtocolError (..))
 import Hegel.Protocol.Stream
   ( Stream,
     closeStream,
@@ -196,16 +197,14 @@ runCase conn sid gen body = do
   let tc = TestCase ds
   eVal <-
     (Right <$> draw tc gen)
-      `catches` [ Handler \InvalidTestCase -> pure (Left Nothing),
-                  Handler \(e :: ServerError) -> case e.errorType of
-                    "StopTest" -> pure (Left Nothing)
-                    _ -> throwIO e,
+      `catches` [ Handler \AssumeRejected -> pure (Left Nothing),
+                  Handler \DataExhausted -> pure (Left Nothing),
                   Handler \(e :: SomeException) -> pure (Left (Just e))
                 ]
   case eVal of
     Left Nothing -> pure CaseInvalid
     Left (Just exc) -> do
-      let msg = T.pack (show exc)
+      let msg = originOf exc
       markComplete ds (Interesting msg)
       pure (CaseInteresting msg Nothing)
     Right val -> do
@@ -215,7 +214,7 @@ runCase conn sid gen body = do
           markComplete ds Valid
           pure CaseValid
         Left exc -> do
-          let msg = T.pack (show exc)
+          let msg = originOf exc
           markComplete ds (Interesting msg)
           pure (CaseInteresting msg (Just val))
 

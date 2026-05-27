@@ -37,6 +37,7 @@ def test_conformance(subtests):
                 min_value=INT64_MIN,
                 max_value=INT64_MAX,
             ),
+            OriginDeduplicationConformance(BIN_DIR / "test-origin-deduplication"),
         ],
         subtests,
         skip_tests=[
@@ -45,7 +46,6 @@ def test_conformance(subtests):
             SampledFromConformance,
             OneOfConformance,
             DictConformance,
-            OriginDeduplicationConformance,
             StopTestOnGenerateConformance,
             StopTestOnMarkCompleteConformance,
             ErrorResponseConformance,

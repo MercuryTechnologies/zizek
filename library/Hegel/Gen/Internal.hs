@@ -28,7 +28,7 @@ module Hegel.Gen.Internal
 
     -- * Exceptions
     -- $exceptions
-    InvalidTestCase (..),
+    AssumeRejected (..),
     UnexpectedResponse (..),
   )
 where
@@ -276,14 +276,14 @@ assume :: Bool -> Generator ()
 assume True = Pure ()
 assume False = Draw \tc -> do
   markComplete tc.dataSource Invalid
-  throwIO InvalidTestCase
+  throwIO AssumeRejected
 
 -- | Discard the current test case unconditionally. Polymorphic in the result
 -- type so it can appear anywhere in a monadic generator expression.
 discard :: Generator a
 discard = Draw \tc -> do
   markComplete tc.dataSource Invalid
-  throwIO InvalidTestCase
+  throwIO AssumeRejected
 
 -- | Apply a function to values drawn from a generator, retrying up to 3 times
 -- when the function returns 'Nothing'. Discards the test case when all retries
@@ -300,7 +300,7 @@ mapMaybe f g = Draw \tc -> go tc (3 :: Int)
           stopSpan tc.dataSource True
           if n > 1
             then go tc (n - 1)
-            else markComplete tc.dataSource Invalid *> throwIO InvalidTestCase
+            else markComplete tc.dataSource Invalid *> throwIO AssumeRejected
 
 -- | Draw a 'Just' value from a 'Maybe' generator, discarding test cases where
 -- 'Nothing' is drawn.
@@ -322,7 +322,7 @@ filtered p g = Draw \tc -> go tc (3 :: Int)
           stopSpan tc.dataSource True
           if n > 1
             then go tc (n - 1)
-            else markComplete tc.dataSource Invalid *> throwIO InvalidTestCase
+            else markComplete tc.dataSource Invalid *> throwIO AssumeRejected
 
 -- | Choose unconditionally among the given generators, with @hegel-core@
 -- driving the selection. When all alternatives are basic, a single request
@@ -381,12 +381,12 @@ either ga gb = oneOf ((Left <$> ga) :| [Right <$> gb])
 -- Thrown as control flow rather than error signalling; the server is notified
 -- before they are thrown so the runner can handle them cleanly.
 
--- | Thrown when a test case is deliberately discarded, either via 'assume'
--- or by an exhausted 'filtered'.
-data InvalidTestCase = InvalidTestCase
+-- | Thrown when a test case is deliberately discarded, either via 'assume' or
+-- 'discard', or by an exhausted 'filtered'\/'mapMaybe' retry budget.
+data AssumeRejected = AssumeRejected
   deriving stock (Show)
 
-instance Exception InvalidTestCase
+instance Exception AssumeRejected
 
 -- | Thrown when @hegel-core@ returns a value that cannot be parsed according
 -- to the schema that was sent.

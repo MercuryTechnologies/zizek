@@ -2,6 +2,7 @@ module Hegel.DataSource
   ( DataSource (..),
     Status (..),
     Label (..),
+    DataExhausted (..),
     newDataSource,
     generate,
     startSpan,
@@ -13,11 +14,20 @@ where
 import CBOR.Decode qualified as CD
 import CBOR.Encode qualified as CE
 import CBOR.Value (Value (..))
+import Control.Exception (Exception)
 import Data.Text (Text)
 import Hegel.Protocol.Cbor (asText, boolVal, buildMap, intVal, lookupKey, nullVal, textVal)
-import Hegel.Protocol.Error (ProtocolError (..))
+import Hegel.Protocol.Error (ProtocolError (..), ServerError (..))
 import Hegel.Protocol.Stream (Stream, closeStream, requestCbor, requestRaw, sendRequest)
-import UnliftIO.Exception (finally, onException, throwIO)
+import UnliftIO.Exception (catch, finally, onException, throwIO)
+
+-- | Thrown when the server signals @StopTest@ in response to a 'generate'
+-- request — i.e. it has run out of entropy budget for the current test case.
+-- The runner treats this the same as a deliberate discard.
+data DataExhausted = DataExhausted
+  deriving stock (Show)
+
+instance Exception DataExhausted
 
 data Status
   = Valid
@@ -69,9 +79,13 @@ newDataSource s = pure (DataSource s)
 
 generate :: DataSource -> Value -> IO Value
 generate ds schema =
-  requestCbor
-    ds.stream
-    (buildMap [("command", textVal "generate"), ("schema", schema)])
+  ( requestCbor
+      ds.stream
+      (buildMap [("command", textVal "generate"), ("schema", schema)])
+      `catch` \(e :: ServerError) -> case e.errorType of
+        "StopTest" -> throwIO DataExhausted
+        _ -> throwIO e
+  )
     `onException` closeStream ds.stream
 
 startSpan :: DataSource -> Label -> IO ()
