@@ -1,6 +1,7 @@
 module Hegel
   ( runProperty,
     runProperty_,
+    module Hegel.Client,
     module Hegel.Outcome,
     module Hegel.Phase,
     module Hegel.Protocol.Error,
@@ -10,6 +11,7 @@ module Hegel
 where
 
 import Control.Exception (throwIO)
+import Hegel.Client
 import Hegel.Gen.Internal (Generator)
 import Hegel.Outcome
 import Hegel.Phase

@@ -89,8 +89,6 @@ module Hegel.Gen
   )
 where
 
-import Prelude hiding (either, maybe)
-
 import Hegel.Gen.Binary (BinaryBuilder, binary)
 import Hegel.Gen.Bool (BoolBuilder, bool)
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasSize (..))
@@ -137,3 +135,4 @@ import Hegel.Gen.Internal
     oneOf,
     pattern Schema,
   )
+import Prelude hiding (either, maybe)

@@ -37,7 +37,6 @@ import CBOR.Value (Value (Array, NInt, Null, UInt))
 import Control.Exception (Exception, throwIO)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.List.NonEmpty qualified as NE
-import Prelude hiding (either, maybe)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hegel.DataSource
@@ -55,6 +54,7 @@ import Hegel.Protocol.Cbor
     textVal,
   )
 import Hegel.TestCase (TestCase (..))
+import Prelude hiding (either, maybe)
 
 -- $generator
 -- A 'Generator' describes how to produce a value for a test case; generators

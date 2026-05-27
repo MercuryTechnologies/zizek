@@ -4,6 +4,7 @@ import BasicProperties qualified
 import Control.Exception (bracket_)
 import GeneratorSchemas qualified
 import Hegel (closeSession, globalSession)
+import PipelinedRequests qualified
 import SessionRecovery qualified
 import StandardGenerators qualified
 import Test.Tasty (defaultMain, testGroup)
@@ -15,5 +16,6 @@ main = do
   schemas <- testSpec "generator schemas" GeneratorSchemas.spec
   standards <- testSpec "standard generators" StandardGenerators.spec
   recovery <- testSpec "session recovery" SessionRecovery.spec
-  let tree = testGroup "zizek:unit" [basics, schemas, standards, recovery]
+  pipelined <- testSpec "pipelined requests" PipelinedRequests.spec
+  let tree = testGroup "zizek:unit" [basics, schemas, standards, recovery, pipelined]
   bracket_ (pure ()) (closeSession globalSession) (defaultMain tree)

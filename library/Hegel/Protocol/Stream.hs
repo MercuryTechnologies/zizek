@@ -1,9 +1,14 @@
 module Hegel.Protocol.Stream
   ( Stream,
+    PendingRequest,
     mkStream,
     streamId,
     sendRequest,
+    request,
+    await,
     requestRaw,
+    requestCborPending,
+    awaitCbor,
     requestCbor,
     writeReply,
     receiveRequest,
@@ -14,11 +19,21 @@ where
 import CBOR.Decode qualified as CD
 import CBOR.Encode qualified as CE
 import CBOR.Value (Value (..))
-import Control.Concurrent.STM (atomically, orElse)
+import Control.Concurrent.STM
+  ( TVar,
+    atomically,
+    modifyTVar',
+    newTVarIO,
+    orElse,
+    readTVar,
+    readTVarIO,
+    writeTVar,
+  )
 import Control.Concurrent.STM.TBQueue (TBQueue, readTBQueue)
 import Data.Bits (shiftL)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Sequence (Seq)
@@ -29,7 +44,6 @@ import Hegel.Protocol.Connection (Connection, awaitServerExited, sendPacket, unr
 import Hegel.Protocol.Error (ConnectionClosedError (..), ProtocolError (..), ServerError (..))
 import Hegel.Protocol.Packet (Packet (..))
 import UnliftIO.Exception (finally, throwIO)
-import UnliftIO.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 
 closeStreamPayload :: ByteString
 closeStreamPayload = BS.singleton 0xFE
@@ -37,122 +51,162 @@ closeStreamPayload = BS.singleton 0xFE
 closeStreamMessageId :: Word32
 closeStreamMessageId = (1 `shiftL` 31) - 1
 
-data StreamState = StreamState
-  { nextMessageId :: !Word32,
-    replies :: !(Map Word32 ByteString),
-    requests :: !(Seq Packet),
-    closed :: !Bool
-  }
-
 data Stream = Stream
   { streamId :: !Word32,
     connection :: !Connection,
     inbox :: !(TBQueue Packet),
-    state :: !(MVar StreamState)
+    nextMessageId :: !(TVar Word32),
+    replies :: !(TVar (Map Word32 ByteString)),
+    requests :: !(TVar (Seq Packet)),
+    closed :: !(TVar Bool)
+  }
+
+-- | A handle to an in-flight request. Call 'await' to block until the reply
+-- arrives. The result is cached so 'await' is safe to call multiple times.
+data PendingRequest = PendingRequest
+  { prStream :: !Stream,
+    prMessageId :: !Word32,
+    prCached :: !(IORef (Maybe ByteString))
   }
 
 mkStream :: Connection -> Word32 -> TBQueue Packet -> IO Stream
 mkStream connection streamId inbox = do
-  state <-
-    newMVar
-      StreamState
-        { nextMessageId = 1,
-          replies = Map.empty,
-          requests = Seq.empty,
-          closed = False
-        }
-  pure Stream {streamId, connection, inbox, state}
+  nextMessageId <- newTVarIO 1
+  replies <- newTVarIO Map.empty
+  requests <- newTVarIO Seq.empty
+  closed <- newTVarIO False
+  pure Stream {streamId, connection, inbox, nextMessageId, replies, requests, closed}
 
--- | Fire-and-forget send: enqueue the payload on the stream without waiting
--- for a reply. No-ops silently when the stream is already closed.
+-- | Fire-and-forget send. Silently no-ops when the stream is closed.
 sendRequest :: Stream -> ByteString -> IO ()
-sendRequest s pay = modifyMVar_ s.state \st ->
-  if st.closed
-    then pure st
+sendRequest s pay = do
+  isClosed <- readTVarIO s.closed
+  if isClosed
+    then pure ()
     else do
-      let mid = st.nextMessageId
+      mid <- atomically $ do
+        mid <- readTVar s.nextMessageId
+        writeTVar s.nextMessageId (mid + 1)
+        pure mid
       sendPacket
         s.connection
         Packet {stream = s.streamId, messageId = mid, isReply = False, payload = pay}
-      pure st {nextMessageId = mid + 1}
 
--- | Send a raw request and block until the matching reply arrives.
--- Holds the stream's state lock for the entire duration; streams are
--- single-threaded by design.
-requestRaw :: Stream -> ByteString -> IO ByteString
-requestRaw s pay = modifyMVar s.state \st ->
-  if st.closed
+-- | Send a request and return a handle to the pending reply without blocking.
+request :: Stream -> ByteString -> IO PendingRequest
+request s pay = do
+  isClosed <- readTVarIO s.closed
+  if isClosed
     then throwIO StreamClosed
     else do
-      let mid = st.nextMessageId
-      sendPacket s.connection Packet {stream = s.streamId, messageId = mid, isReply = False, payload = pay}
-      go mid st
-  where
-    go mid st = case Map.lookup mid st.replies of
-      Just rep ->
-        pure (st {replies = Map.delete mid st.replies, nextMessageId = mid + 1}, rep)
-      Nothing -> do
-        mPkt <-
-          atomically $
-            (Just <$> readTBQueue s.inbox)
-              `orElse` (Nothing <$ awaitServerExited s.connection)
-        case mPkt of
-          Nothing -> throwIO (ConnectionClosedError "stream inbox abandoned")
-          Just pkt -> do
-            let st' =
-                  if pkt.isReply
-                    then st {replies = Map.insert pkt.messageId pkt.payload st.replies}
-                    else st {requests = st.requests Seq.|> pkt}
-            go mid st'
+      mid <- atomically $ do
+        mid <- readTVar s.nextMessageId
+        writeTVar s.nextMessageId (mid + 1)
+        pure mid
+      sendPacket
+        s.connection
+        Packet {stream = s.streamId, messageId = mid, isReply = False, payload = pay}
+      ref <- newIORef Nothing
+      pure PendingRequest {prStream = s, prMessageId = mid, prCached = ref}
 
--- Error envelope shape: {"error": <payload>, "type": "<tag>"} — "type" is at
--- the top level of the response, not nested inside the "error" value.
-requestCbor :: Stream -> Value -> IO Value
-requestCbor s msg = do
-  let pay = CE.encode msg
-  rep <- requestRaw s pay
+-- | Block until the reply to a pending request arrives. Caches the result;
+-- idempotent.
+await :: PendingRequest -> IO ByteString
+await pr = do
+  mCached <- readIORef pr.prCached
+  case mCached of
+    Just bs -> pure bs
+    Nothing -> do
+      bs <- drainUntilReply pr.prStream pr.prMessageId
+      writeIORef pr.prCached (Just bs)
+      pure bs
+
+-- Pump packets from the inbox, routing each to the replies or requests TVar,
+-- until the reply for the given message ID arrives.
+drainUntilReply :: Stream -> Word32 -> IO ByteString
+drainUntilReply s mid = do
+  mReply <- atomically $ do
+    m <- readTVar s.replies
+    case Map.lookup mid m of
+      Just bs -> writeTVar s.replies (Map.delete mid m) >> pure (Just bs)
+      Nothing -> pure Nothing
+  case mReply of
+    Just bs -> pure bs
+    Nothing -> do
+      mPkt <-
+        atomically $
+          (Just <$> readTBQueue s.inbox)
+            `orElse` (Nothing <$ awaitServerExited s.connection)
+      case mPkt of
+        Nothing -> throwIO (ConnectionClosedError "stream inbox abandoned")
+        Just pkt -> do
+          atomically $
+            if pkt.isReply
+              then modifyTVar' s.replies (Map.insert pkt.messageId pkt.payload)
+              else modifyTVar' s.requests (Seq.|> pkt)
+          drainUntilReply s mid
+
+-- | Send a raw request and block until the matching reply arrives.
+requestRaw :: Stream -> ByteString -> IO ByteString
+requestRaw s pay = request s pay >>= await
+
+-- | Send a CBOR-encoded request and return a 'PendingRequest' handle.
+requestCborPending :: Stream -> Value -> IO PendingRequest
+requestCborPending s msg = request s (CE.encode msg)
+
+-- | Block until the reply to a CBOR pending request arrives; unwrap the
+-- result envelope or throw 'ServerError'.
+awaitCbor :: PendingRequest -> IO Value
+awaitCbor pr = do
+  rep <- await pr
   case CD.decode rep of
-    Left err -> throwIO (CborDecodeFailure "requestCbor" err)
+    Left err -> throwIO (CborDecodeFailure "awaitCbor" err)
     Right val -> case lookupKey "error" val of
       Just errVal -> do
         let errType = maybe "" id (lookupKey "type" val >>= asText)
         throwIO ServerError {errorType = errType, errorPayload = errVal}
-      Nothing ->
-        pure $ maybe val id (lookupKey "result" val)
+      Nothing -> pure $ maybe val id (lookupKey "result" val)
+
+-- | Send a CBOR-encoded request and block until the decoded reply arrives.
+requestCbor :: Stream -> Value -> IO Value
+requestCbor s msg = requestCborPending s msg >>= awaitCbor
 
 writeReply :: Stream -> Word32 -> ByteString -> IO ()
 writeReply s mid pay =
-  sendPacket s.connection Packet {stream = s.streamId, messageId = mid, isReply = True, payload = pay}
+  sendPacket
+    s.connection
+    Packet {stream = s.streamId, messageId = mid, isReply = True, payload = pay}
 
+-- | Receive the next server-initiated request on this stream.
 receiveRequest :: Stream -> IO (Word32, ByteString)
-receiveRequest s = modifyMVar s.state \st ->
-  if st.closed
-    then throwIO StreamClosed
-    else go st
-  where
-    go st = case Seq.viewl st.requests of
-      p Seq.:< rest -> pure (st {requests = rest}, (p.messageId, p.payload))
-      Seq.EmptyL -> do
-        mPkt <-
+receiveRequest s = do
+  mPkt <- atomically $ do
+    reqs <- readTVar s.requests
+    case Seq.viewl reqs of
+      p Seq.:< rest -> writeTVar s.requests rest >> pure (Just (p.messageId, p.payload))
+      Seq.EmptyL -> pure Nothing
+  case mPkt of
+    Just r -> pure r
+    Nothing -> do
+      mPkt' <-
+        atomically $
+          (Just <$> readTBQueue s.inbox)
+            `orElse` (Nothing <$ awaitServerExited s.connection)
+      case mPkt' of
+        Nothing -> throwIO (ConnectionClosedError "stream inbox abandoned")
+        Just pkt -> do
           atomically $
-            (Just <$> readTBQueue s.inbox)
-              `orElse` (Nothing <$ awaitServerExited s.connection)
-        case mPkt of
-          Nothing -> throwIO (ConnectionClosedError "stream inbox abandoned")
-          Just pkt -> do
-            let st' =
-                  if pkt.isReply
-                    then st {replies = Map.insert pkt.messageId pkt.payload st.replies}
-                    else st {requests = st.requests Seq.|> pkt}
-            go st'
+            if pkt.isReply
+              then modifyTVar' s.replies (Map.insert pkt.messageId pkt.payload)
+              else modifyTVar' s.requests (Seq.|> pkt)
+          receiveRequest s
 
--- | Idempotent: a second call after the first succeeds is a no-op.
--- Uses 'finally' rather than 'uninterruptibleMask_' because 'sendPacket'
--- can block indefinitely if the child stops draining stdin.
+-- | Close the stream. Idempotent.
 closeStream :: Stream -> IO ()
 closeStream s = do
-  alreadyClosed <- modifyMVar s.state \st ->
-    pure (st {closed = True}, st.closed)
+  alreadyClosed <- atomically $ do
+    c <- readTVar s.closed
+    if c then pure True else writeTVar s.closed True >> pure False
   if alreadyClosed
     then pure ()
     else

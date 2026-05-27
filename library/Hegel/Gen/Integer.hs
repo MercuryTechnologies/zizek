@@ -90,15 +90,19 @@ parseInteger v = Left ParseError {expected = "integer", got = v}
 -- of the type.
 enumBounded :: forall a. (Bounded a, Enum a) => Generator a
 enumBounded =
-  toEnum <$> build IntegerBuilder
-    { bMin = Just (fromEnum (minBound :: a))
-    , bMax = Just (fromEnum (maxBound :: a))
-    }
+  toEnum
+    <$> build
+      IntegerBuilder
+        { bMin = Just (fromEnum (minBound :: a)),
+          bMax = Just (fromEnum (maxBound :: a))
+        }
 
 -- | Generate a value of an enumeration within the given inclusive range.
 enum :: (Enum a) => a -> a -> Generator a
 enum lo hi =
-  toEnum <$> build IntegerBuilder
-    { bMin = Just (fromEnum lo)
-    , bMax = Just (fromEnum hi)
-    }
+  toEnum
+    <$> build
+      IntegerBuilder
+        { bMin = Just (fromEnum lo),
+          bMax = Just (fromEnum hi)
+        }

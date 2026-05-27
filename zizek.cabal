@@ -67,6 +67,7 @@ library
   -- cabal-gild: discover library
   exposed-modules:
     Hegel
+    Hegel.Client
     Hegel.DataSource
     Hegel.Gen
     Hegel.Gen.Binary
@@ -150,6 +151,7 @@ test-suite unit
   other-modules:
     BasicProperties
     GeneratorSchemas
+    PipelinedRequests
     SessionRecovery
     StandardGenerators
 
