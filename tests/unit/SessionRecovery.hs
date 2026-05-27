@@ -24,7 +24,7 @@ spec =
         runPropertyOn
           ses
           defaultSettings {testCases = 10_000}
-          (Gen.integer @Int & Gen.min 0 & Gen.max 100 & Gen.build)
+          (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
           \_ -> tryPutMVar started () >> pure ()
       outcome `shouldSatisfy` \case
         Errored _ -> True
@@ -33,7 +33,7 @@ spec =
         runPropertyOn
           ses
           defaultSettings
-          (Gen.integer @Int & Gen.min 0 & Gen.max 100 & Gen.build)
+          (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
           \_ -> pure ()
       outcome2 `shouldSatisfy` \case
         Passed _ -> True

@@ -35,7 +35,7 @@ main = do
     _ -> die "Usage: test-integers '<json_params>'"
   params <- either die pure (eitherDecodeStrict' @Params (BS.pack j))
   let g =
-        Gen.integer @Int64
+        Gen.int64
           & maybe id Gen.min params.minValue
           & maybe id Gen.max params.maxValue
           & Gen.build

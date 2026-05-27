@@ -38,6 +38,20 @@ module Hegel.Gen
     -- * Integer
     IntegerBuilder,
     integer,
+    int,
+    int8,
+    int16,
+    int32,
+    int64,
+    word,
+    word8,
+    word16,
+    word32,
+    word64,
+
+    -- * Enumeration
+    enum,
+    enumBounded,
 
     -- * Float
     FloatBuilder,
@@ -52,17 +66,30 @@ module Hegel.Gen
     BinaryBuilder,
     binary,
 
-    -- * Combinators
-    draw,
+    -- * Choice
     oneOf,
-    filtered,
+    element,
+    frequency,
+
+    -- * Maybe & Either
+    maybe,
+    either,
+
+    -- * Conditional
+    draw,
     assume,
+    discard,
+    filtered,
+    mapMaybe,
+    just,
 
     -- * Exceptions
     InvalidTestCase (..),
     UnexpectedResponse (..),
   )
 where
+
+import Prelude hiding (either, maybe)
 
 import Hegel.Gen.Binary (BinaryBuilder, binary)
 import Hegel.Gen.Bool (BoolBuilder, bool)
@@ -76,15 +103,37 @@ import Hegel.Gen.Float
     exclusiveMin,
     float,
   )
-import Hegel.Gen.Integer (IntegerBuilder, integer)
+import Hegel.Gen.Integer
+  ( IntegerBuilder,
+    enum,
+    enumBounded,
+    int,
+    int16,
+    int32,
+    int64,
+    int8,
+    integer,
+    word,
+    word16,
+    word32,
+    word64,
+    word8,
+  )
 import Hegel.Gen.Internal
   ( BasicGenerator (..),
     Generator,
     InvalidTestCase (..),
     UnexpectedResponse (..),
     assume,
+    discard,
     draw,
+    either,
+    element,
     filtered,
+    frequency,
+    just,
+    mapMaybe,
+    maybe,
     oneOf,
     pattern Schema,
   )

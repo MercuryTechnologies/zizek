@@ -16,8 +16,15 @@ module Hegel.Gen.Internal
     -- $combinators
     draw,
     assume,
+    discard,
     filtered,
+    mapMaybe,
+    just,
     oneOf,
+    element,
+    frequency,
+    maybe,
+    either,
 
     -- * Exceptions
     -- $exceptions
@@ -28,8 +35,9 @@ where
 
 import CBOR.Value (Value (Array, NInt, Null, UInt))
 import Control.Exception (Exception, throwIO)
-import Data.List.NonEmpty (NonEmpty)
+import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.List.NonEmpty qualified as NE
+import Prelude hiding (either, maybe)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hegel.DataSource
@@ -270,6 +278,35 @@ assume False = Draw \tc -> do
   markComplete tc.dataSource Invalid
   throwIO InvalidTestCase
 
+-- | Discard the current test case unconditionally. Polymorphic in the result
+-- type so it can appear anywhere in a monadic generator expression.
+discard :: Generator a
+discard = Draw \tc -> do
+  markComplete tc.dataSource Invalid
+  throwIO InvalidTestCase
+
+-- | Apply a function to values drawn from a generator, retrying up to 3 times
+-- when the function returns 'Nothing'. Discards the test case when all retries
+-- are exhausted.
+mapMaybe :: (a -> Prelude.Maybe b) -> Generator a -> Generator b
+mapMaybe f g = Draw \tc -> go tc (3 :: Int)
+  where
+    go tc n = do
+      startSpan tc.dataSource LabelFilter
+      v <- runGenerator tc g
+      case f v of
+        Prelude.Just b -> stopSpan tc.dataSource False *> pure b
+        Prelude.Nothing -> do
+          stopSpan tc.dataSource True
+          if n > 1
+            then go tc (n - 1)
+            else markComplete tc.dataSource Invalid *> throwIO InvalidTestCase
+
+-- | Draw a 'Just' value from a 'Maybe' generator, discarding test cases where
+-- 'Nothing' is drawn.
+just :: Generator (Prelude.Maybe a) -> Generator a
+just = mapMaybe Prelude.id
+
 -- | Filter values drawn from a generator, retrying up to 3 times before
 -- discarding the test case entirely. The retry cap prevents runaway rejection
 -- sampling; exhaustion is treated the same as 'assume' 'False'.
@@ -293,6 +330,52 @@ filtered p g = Draw \tc -> go tc (3 :: Int)
 -- branch at runtime.
 oneOf :: NonEmpty (Generator a) -> Generator a
 oneOf = mkOneOf
+
+-- | Generate one of the given values.
+element :: NonEmpty a -> Generator a
+element = oneOf . fmap pure
+
+-- | Draw a weighted index in @[0, total weight)@ and dispatch to the
+-- corresponding branch via prefix-sum lookup. Each branch's share of the
+-- index range is proportional to its weight.
+--
+-- All weights must be positive.
+frequency :: NonEmpty (Int, Generator a) -> Generator a
+frequency pairs
+  | any ((<= 0) . fst) pairs = error "Gen.frequency: all weights must be positive"
+  | otherwise = Draw \tc -> do
+      let total = sum (fmap fst pairs)
+          indexSchema =
+            buildMap
+              [ ("type", textVal "integer"),
+                ("min_value", intVal (0 :: Int)),
+                ("max_value", intVal (total - 1))
+              ]
+      startSpan tc.dataSource LabelOneOf
+      raw <- generate tc.dataSource indexSchema
+      i <- case parseIndex raw of
+        Right k -> pure k
+        Left err -> throwIO UnexpectedResponse {sentSchema = indexSchema, received = raw, cause = err}
+      let chosen = prefixSelect i pairs
+      v <- runGenerator tc chosen
+      stopSpan tc.dataSource False
+      pure v
+  where
+    prefixSelect :: Int -> NonEmpty (Int, Generator a) -> Generator a
+    prefixSelect n ((w, g) :| rest)
+      | n < w = g
+      | otherwise = case rest of
+          [] -> error "Gen.frequency: prefix-sum invariant violated (unreachable)"
+          (x : xs) -> prefixSelect (n - w) (x :| xs)
+
+-- | Generate either 'Nothing' or 'Just' a value from the given generator.
+maybe :: Generator a -> Generator (Maybe a)
+maybe g = oneOf (pure Nothing :| [Just <$> g])
+
+-- | Generate a 'Left' value from the first generator or a 'Right' value
+-- from the second.
+either :: Generator a -> Generator b -> Generator (Either a b)
+either ga gb = oneOf ((Left <$> ga) :| [Right <$> gb])
 
 -- $exceptions
 -- Thrown as control flow rather than error signalling; the server is notified
