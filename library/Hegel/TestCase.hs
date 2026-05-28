@@ -1,3 +1,5 @@
+{-# LANGUAGE ViewPatterns #-}
+
 -- | Per-test-case state and the protocol commands a generator can send
 -- through it.
 module Hegel.TestCase
@@ -24,7 +26,7 @@ import CBOR.Encode qualified as CE
 import CBOR.Value (Value (..))
 import Control.Exception (Exception)
 import Data.Text (Text)
-import Hegel.Protocol.Cbor (asText, boolVal, buildMap, intVal, lookupKey, nullVal, textVal)
+import Hegel.Protocol.Cbor (asText, buildMap, lookupKey, (.=))
 import Hegel.Protocol.Error (ProtocolError (..), ServerError (..))
 import Hegel.Protocol.Stream (Stream, closeStream, requestCbor, requestRaw, sendRequest)
 import UnliftIO.Exception (catch, finally, onException, throwIO)
@@ -93,32 +95,27 @@ labelValue LabelEnumVariant = 15
 -- | Ask the server to produce a value matching the given CBOR schema;
 -- throws 'TestStopped' on @StopTest@.
 generate :: TestCase -> Value -> IO Value
-generate tc schema = req `onException` closeStream tc.stream
+generate tc sch = req `onException` closeStream tc.stream
   where
-    req = requestCbor tc.stream payload `catch` mapStopTest
-    payload = buildMap [("command", textVal "generate"), ("schema", schema)]
+    req =
+      requestCbor tc.stream (buildMap ["command" .= ("generate" :: Text), "schema" .= sch])
+        `catch` mapStopTest
     mapStopTest (e :: ServerError) = case e.errorType of
       "StopTest" -> throwIO TestStopped
       _ -> throwIO e
 
 -- | Open a span that groups related draws under the given 'Label'.
 startSpan :: TestCase -> Label -> IO ()
-startSpan tc label =
+startSpan tc (labelValue -> label) =
   sendRequest tc.stream . CE.encode $
-    buildMap
-      [ ("command", textVal "start_span"),
-        ("label", intVal (labelValue label))
-      ]
+    buildMap ["command" .= ("start_span" :: Text), "label" .= label]
 
 -- | Close the most-recently-opened span. Pass 'True' to mark the span as
 -- discarded so the server doesn't try to shrink within it.
 stopSpan :: TestCase -> Bool -> IO ()
-stopSpan tc discard =
+stopSpan tc isDiscard =
   sendRequest tc.stream . CE.encode $
-    buildMap
-      [ ("command", textVal "stop_span"),
-        ("discard", boolVal discard)
-      ]
+    buildMap ["command" .= ("stop_span" :: Text), "discard" .= isDiscard]
 
 -- | Send the final 'Status' for this test case and close the stream.
 markComplete :: TestCase -> Status -> IO ()
@@ -128,9 +125,9 @@ markComplete tc status = send `finally` closeStream tc.stream
       let req =
             CE.encode $
               buildMap
-                [ ("command", textVal "mark_complete"),
-                  ("status", textVal statusText),
-                  ("origin", origin)
+                [ "command" .= ("mark_complete" :: Text),
+                  "status" .= statusText,
+                  "origin" .= originVal
                 ]
       rep <- requestRaw tc.stream req
       case CD.decode rep of
@@ -140,8 +137,9 @@ markComplete tc status = send `finally` closeStream tc.stream
           Just _ -> case lookupKey "type" val >>= asText of
             Just "StopTest" -> pure ()
             _ -> throwIO (UnexpectedReply "markComplete" val)
-    (statusText, origin) = case status of
-      Valid -> ("VALID", nullVal)
-      Invalid -> ("INVALID", nullVal)
-      Overrun -> ("OVERRUN", nullVal)
-      Interesting msg -> ("INTERESTING", textVal msg)
+    statusText :: Text
+    (statusText, originVal) = case status of
+      Valid -> ("VALID", Null)
+      Invalid -> ("INVALID", Null)
+      Overrun -> ("OVERRUN", Null)
+      Interesting msg -> ("INTERESTING", TextString msg)

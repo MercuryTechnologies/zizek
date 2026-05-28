@@ -19,7 +19,6 @@
 module Hegel.Gen
   ( -- * Core types
     BasicGenerator (..),
-    pattern Schema,
 
     -- * Builder classes
     Build (build),
@@ -128,6 +127,5 @@ import Hegel.Gen.Internal
     mapMaybe,
     maybe,
     oneOf,
-    pattern Schema,
   )
 import Prelude hiding (either, maybe)

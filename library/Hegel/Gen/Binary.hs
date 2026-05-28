@@ -12,8 +12,9 @@ where
 import CBOR.Value (Value (..))
 import Data.ByteString (ByteString)
 import Hegel.Gen.Builder (Build (..), HasSize (..))
-import Hegel.Gen.Internal (pattern Schema)
-import Hegel.Protocol.Cbor (ParseError (..), buildMap, intVal, textVal)
+import Hegel.Gen.Internal (basic)
+import Hegel.Protocol.Cbor (ParseError (..))
+import Hegel.Schema qualified as Schema
 
 data BinaryBuilder = BinaryBuilder
   { bMinSize :: !Int,
@@ -29,13 +30,7 @@ instance HasSize BinaryBuilder where
   maxSize n b = b {bMaxSize = Just n}
 
 instance Build BinaryBuilder ByteString where
-  build b =
-    let pairs =
-          [ ("type", textVal "binary"),
-            ("min_size", intVal b.bMinSize)
-          ]
-            ++ foldMap (\hi -> [("max_size", intVal hi)]) b.bMaxSize
-     in Schema (buildMap pairs) parseBinary
+  build b = basic (Schema.binary b.bMinSize b.bMaxSize) parseBinary
 
 parseBinary :: Value -> Either ParseError ByteString
 parseBinary (ByteString bs) = Right bs

@@ -7,6 +7,8 @@ module Hegel.Protocol.Cbor
     -- * Maps
     lookupKey,
     buildMap,
+    (.=),
+    (.=?),
 
     -- * Constructors
     textVal,
@@ -25,6 +27,7 @@ module Hegel.Protocol.Cbor
   )
 where
 
+import CBOR.Class (ToCBOR (..))
 import CBOR.Value (Value (..))
 import Control.Exception (Exception)
 import Data.Text (Text)
@@ -38,7 +41,7 @@ data ParseError = ParseError
     -- | The value that was actually received.
     got :: !Value
   }
-  deriving stock (Show)
+  deriving stock (Eq, Show)
 
 instance Exception ParseError
 
@@ -54,6 +57,31 @@ lookupKey _ _ = Nothing
 -- | Build a CBOR 'Map' from key/value pairs.
 buildMap :: [(Text, Value)] -> Value
 buildMap pairs = Map (V.fromList [(TextString k, v) | (k, v) <- pairs])
+
+-- | Pair a wire key with a value via 'toCBOR'. Mirrors aeson's
+-- @('Data.Aeson..=')@. Use with 'buildMap':
+--
+-- > buildMap
+-- >   [ "type"      .= ("integer" :: Text)
+-- >   , "min_value" .= (0 :: Int)
+-- >   , "max_value" .= (100 :: Int)
+-- >   ]
+(.=) :: (ToCBOR a) => Text -> a -> (Text, Value)
+k .= v = (k, toCBOR v)
+
+infixr 8 .=
+
+-- | Like @('.=')@, but yields 'Nothing' when the value is absent so the
+-- key can be omitted from the map entirely. Group optional fields with
+-- 'Data.Maybe.catMaybes' and splice into 'buildMap' with @(<>)@:
+--
+-- > buildMap $
+-- >   [ "min_size" .= s.minSize ]
+-- >   <> catMaybes ["max_size" .=? s.maxSize]
+(.=?) :: (ToCBOR a) => Text -> Maybe a -> Maybe (Text, Value)
+k .=? mv = fmap (k .=) mv
+
+infixr 8 .=?
 
 textVal :: Text -> Value
 textVal = TextString

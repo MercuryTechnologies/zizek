@@ -28,13 +28,15 @@ module Hegel.Gen.Integer
   )
 where
 
+import CBOR.Class (ToCBOR (..))
 import CBOR.Value (Value (..))
 import Data.Int (Int16, Int32, Int64, Int8)
 import Data.Maybe (fromMaybe)
 import Data.Word (Word16, Word32, Word64, Word8)
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..))
-import Hegel.Gen.Internal (Gen, pattern Schema)
-import Hegel.Protocol.Cbor (ParseError (..), buildMap, intVal, textVal)
+import Hegel.Gen.Internal (Gen, basic)
+import Hegel.Protocol.Cbor (ParseError (..))
+import Hegel.Schema qualified as Schema
 
 data IntegralBuilder a = IntegralBuilder
   { bMin :: Maybe a,
@@ -120,18 +122,11 @@ instance HasMin (IntegralBuilder a) a where
 instance HasMax (IntegralBuilder a) a where
   max hi b = b {bMax = Just hi}
 
-instance (Bounded a, Integral a) => Build (IntegralBuilder a) a where
+instance (Bounded a, Integral a, ToCBOR a) => Build (IntegralBuilder a) a where
   build b =
     let lo = fromMaybe minBound b.bMin
         hi = fromMaybe maxBound b.bMax
-     in Schema
-          ( buildMap
-              [ ("type", textVal "integer"),
-                ("min_value", intVal lo),
-                ("max_value", intVal hi)
-              ]
-          )
-          parseInteger
+     in basic (Schema.integer lo hi) parseInteger
 
 parseInteger :: (Integral a) => Value -> Either ParseError a
 parseInteger (UInt n) = Right (fromIntegral n)

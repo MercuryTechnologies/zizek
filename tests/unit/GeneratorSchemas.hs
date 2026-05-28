@@ -76,12 +76,35 @@ spec = do
     runProperty_ defaultSettings g $ \n ->
       n `shouldNotBe` 7
 
+  it "ap chain of length 3 produces flat schemaParts, not nested" $ do
+    let g = (,,) <$> (Gen.bool & Gen.build) <*> intR (0, 10) <*> (Gen.bool & Gen.build)
+    case g of
+      Ap (Just bg) _ _ -> length bg.schemaParts `shouldBe` 3
+      _ -> expectationFailure "expected Ap with basic schema"
+
+  it "ap chain of length 3 parser round-trips a 3-element array" $ do
+    let g = (,,) <$> (Gen.bool & Gen.build) <*> intR (0, 10) <*> (Gen.bool & Gen.build)
+    case g of
+      Ap (Just bg) _ _ ->
+        bg.parse (Array (V.fromList [Bool True, UInt 5, Bool False]))
+          `shouldBe` Right (True, 5 :: Int, False)
+      _ -> expectationFailure "expected Ap with basic schema"
+
   it "basicAp parser rejects arrays longer than 2 elements" $ do
     let g = (,) <$> (Gen.bool & Gen.build) <*> (Gen.bool & Gen.build)
     case g of
       Ap (Just bg) _ _ ->
         case bg.parse (Array (V.fromList [Bool True, Bool False, Bool False])) of
           Left err -> T.unpack err.expected `shouldContain` "2-element array"
+          Right _ -> expectationFailure "expected parse error"
+      _ -> expectationFailure "expected Ap with basic schema"
+
+  it "basicAp parser rejects arrays of wrong arity for length-3 chain" $ do
+    let g = (,,) <$> (Gen.bool & Gen.build) <*> intR (0, 10) <*> (Gen.bool & Gen.build)
+    case g of
+      Ap (Just bg) _ _ ->
+        case bg.parse (Array (V.fromList [Bool True, UInt 5, Bool False, Bool True])) of
+          Left err -> T.unpack err.expected `shouldContain` "3-element array"
           Right _ -> expectationFailure "expected parse error"
       _ -> expectationFailure "expected Ap with basic schema"
 

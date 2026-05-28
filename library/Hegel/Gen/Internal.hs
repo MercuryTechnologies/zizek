@@ -1,12 +1,11 @@
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE PatternSynonyms #-}
 
 -- | Core generator machinery.
 module Hegel.Gen.Internal
   ( -- * Generator type
     Gen (..),
     BasicGenerator (..),
-    pattern Schema,
+    basic,
 
     -- * Combinators
     -- $combinators
@@ -29,18 +28,15 @@ module Hegel.Gen.Internal
   )
 where
 
-import CBOR.Value (Value (Array, NInt, Null, UInt))
+import CBOR.Class (ToCBOR (..))
+import CBOR.Value (Value (Array, NInt, UInt))
 import Control.Exception (Exception, throwIO)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Vector qualified as V
-import Hegel.Protocol.Cbor
-  ( ParseError (..),
-    buildMap,
-    intVal,
-    textVal,
-  )
+import Hegel.Protocol.Cbor (ParseError (..))
+import Hegel.Schema qualified as Schema
 import Hegel.TestCase
   ( Label (..),
     Status (..),
@@ -52,17 +48,33 @@ import Hegel.TestCase
   )
 import Prelude hiding (either, maybe)
 
--- | A 'Gen' that can be expressed as a single schema request to
--- @hegel@. Construct one with the 'Schema' pattern synonym.
+-- | A 'Gen' that can be expressed as a single schema request to @hegel@.
+-- Construct one with 'basic'.
 data BasicGenerator a = BasicGenerator
-  { -- | CBOR schema sent to the server.
-    schema :: !Value,
+  { -- | One or more schema parts. A singleton represents a scalar
+    -- generator; multiple parts represent an already-flattened tuple.
+    schemaParts :: !(NonEmpty Value),
     -- | Converts the server's response back to @a@.
     parse :: Value -> Either ParseError a
   }
 
 instance Functor BasicGenerator where
   fmap f bg = bg {parse = fmap f . bg.parse}
+
+-- | Materialise the wire 'Value' for a 'BasicGenerator'. A singleton
+-- part is returned as-is; multiple parts are wrapped in a tuple schema.
+schema :: BasicGenerator a -> Value
+schema bg = case bg.schemaParts of
+  v :| [] -> v
+  v :| (w : ws) -> toCBOR (Schema.tuple (v : w : ws))
+
+-- | Construct a leaf 'Gen' from a typed schema and a parse function.
+-- The schema is encoded via 'CBOR.Class.toCBOR' and sent in a single
+-- round-trip to @hegel@.
+--
+-- See 'Hegel.Gen.Bool.bool' for a worked example.
+basic :: (ToCBOR s) => s -> (Value -> Either ParseError a) -> Gen a
+basic s p = Basic (BasicGenerator (toCBOR s :| []) p)
 
 -- | A generator that produces values of type @a@.
 --
@@ -91,32 +103,9 @@ data Gen a where
   -- (a @one_of@ schema) when every branch is basic.
   OneOf :: !(Maybe (BasicGenerator a)) -> NonEmpty (Gen a) -> Gen a
 
--- | Construct a 'BasicGenerator' from a CBOR schema and a parse function.
---
--- See 'Hegel.Gen.Bool.bool' for a worked example.
-pattern Schema :: Value -> (Value -> Either ParseError a) -> Gen a
-pattern Schema s p = Basic (BasicGenerator s p)
-
-unitSchema :: Value
-unitSchema = buildMap [("type", textVal "constant"), ("value", Null)]
-
-tupleSchema :: [Value] -> Value
-tupleSchema elems =
-  buildMap
-    [ ("type", textVal "tuple"),
-      ("elements", Array (V.fromList elems))
-    ]
-
-oneOfSchema :: NonEmpty Value -> Value
-oneOfSchema gs =
-  buildMap
-    [ ("type", textVal "one_of"),
-      ("generators", Array (V.fromList (NE.toList gs)))
-    ]
-
 toBasic :: Gen a -> Maybe (BasicGenerator a)
 toBasic (Basic bg) = Just bg
-toBasic (Pure a) = Just (BasicGenerator unitSchema (\_ -> Right a))
+toBasic (Pure a) = Just (BasicGenerator (NE.singleton (toCBOR Schema.unit)) (\_ -> Right a))
 toBasic (Map c _ _) = c
 toBasic (Ap c _ _) = c
 toBasic (OneOf c _) = c
@@ -128,24 +117,6 @@ instance Functor Gen where
   fmap f (Map _ g x) = fmap (f . g) x
   fmap f g = Map (fmap f <$> toBasic g) f g
 
--- The basic-schema equivalent of @gf '<*>' ga@, when one exists.
---
--- Two basic generators combine into a single tuple-schema request; if
--- either side isn't basic, returns 'Nothing'.
-basicAp :: Gen (b -> a) -> Gen b -> Maybe (BasicGenerator a)
-basicAp (Pure f) ga = fmap f <$> toBasic ga
-basicAp gf (Pure a) = fmap ($ a) <$> toBasic gf
-basicAp gf ga = do
-  bf <- toBasic gf
-  ba <- toBasic ga
-  let sch = tupleSchema [bf.schema, ba.schema]
-      p (Array arr) | V.length arr == 2 = do
-        f <- bf.parse (arr V.! 0)
-        a <- ba.parse (arr V.! 1)
-        pure (f a)
-      p v = Left ParseError {expected = "2-element array", got = v}
-  pure (BasicGenerator sch p)
-
 -- | @('<*>')@ and @('>>=')@ have deliberately different semantics:
 --
 -- * @('<*>')@ treats draws as independent: @hegel@ gets to shrink each
@@ -156,16 +127,47 @@ basicAp gf ga = do
 instance Applicative Gen where
   pure = Pure
   (<*>) gf ga = Ap (basicAp gf ga) gf ga
+    where
+      -- The basic-schema equivalent of @gf '<*>' ga@, when one exists.
+      --
+      -- Two basic generators combine into a flat tuple-schema request; if
+      -- either side isn't basic, returns 'Nothing'. The Pure fast paths
+      -- bypass tuple construction so the unit-schema sentinel never leaks
+      -- into tuple element lists.
+      basicAp :: Gen (b -> a) -> Gen b -> Maybe (BasicGenerator a)
+      basicAp (Pure f) ga = fmap f <$> toBasic ga
+      basicAp gf (Pure a) = fmap ($ a) <$> toBasic gf
+      basicAp gf ga = do
+        bf <- toBasic gf
+        ba <- toBasic ga
+        let leftArity = NE.length bf.schemaParts
+            rightArity = NE.length ba.schemaParts
+            n = leftArity + rightArity
+            newParts = bf.schemaParts <> ba.schemaParts
+            p (Array arr) | V.length arr == n = do
+              let leftV =
+                    if leftArity == 1
+                      then arr V.! 0
+                      else Array (V.slice 0 leftArity arr)
+                  rightV =
+                    if rightArity == 1
+                      then arr V.! leftArity
+                      else Array (V.slice leftArity rightArity arr)
+              f <- bf.parse leftV
+              a <- ba.parse rightV
+              pure (f a)
+            p v = Left ParseError {expected = T.pack (show n) <> "-element array", got = v}
+        pure (BasicGenerator newParts p)
 
 instance Monad Gen where
   (>>=) = Bind
 
 runBasic :: TestCase -> BasicGenerator a -> IO a
 runBasic tc bg = do
-  raw <- generate tc bg.schema
+  raw <- generate tc (schema bg)
   case bg.parse raw of
     Right a -> pure a
-    Left err -> throwIO UnexpectedResponse {sentSchema = bg.schema, received = raw, cause = err}
+    Left err -> throwIO UnexpectedResponse {sentSchema = schema bg, received = raw, cause = err}
 
 -- Count non-'Pure' leaves in an 'Ap' spine, to decide whether a TUPLE span
 -- is needed: fewer than 2 real draws don't require one.
@@ -215,12 +217,7 @@ runInteractive tc (Bind g f) = do
   pure b
 runInteractive tc (OneOf _ gens) = do
   let n = NE.length gens
-      indexSchema =
-        buildMap
-          [ ("type", textVal "integer"),
-            ("min_value", intVal (0 :: Int)),
-            ("max_value", intVal (n - 1))
-          ]
+      indexSchema = toCBOR (Schema.integer (0 :: Int) (n - 1))
   startSpan tc LabelOneOf
   raw <- generate tc indexSchema
   i <- case parseIndex raw of
@@ -301,33 +298,33 @@ filtered p g = Draw \tc -> go tc (3 :: Int)
             then go tc (n - 1)
             else markComplete tc Invalid *> throwIO AssumeRejected
 
--- The basic-schema equivalent of @oneOf gens@, when one exists.
---
--- Combines the branches into a single @one_of@ schema; if any branch
--- isn't basic, returns 'Nothing'.
-basicOneOf :: NonEmpty (Gen a) -> Maybe (BasicGenerator a)
-basicOneOf gens = do
-  bs <- traverse toBasic gens
-  let sch = oneOfSchema (fmap (.schema) bs)
-      parsers = V.fromList (NE.toList (fmap (.parse) bs))
-      p (Array arr) | V.length arr == 2 = do
-        let idxV = arr V.! 0
-            val = arr V.! 1
-        i <- parseIndex idxV
-        case parsers V.!? i of
-          Just q -> q val
-          Nothing ->
-            Left
-              ParseError
-                { expected = "0 <= index < " <> T.pack (show (V.length parsers)),
-                  got = idxV
-                }
-      p v = Left ParseError {expected = "[index, value] array", got = v}
-  pure (BasicGenerator sch p)
-
 -- | Choose one of the given generators uniformly.
-oneOf :: NonEmpty (Gen a) -> Gen a
-oneOf gens = OneOf (basicOneOf gens) gens
+oneOf :: forall a. NonEmpty (Gen a) -> Gen a
+oneOf gens = OneOf basic gens
+  where
+    -- The basic-schema equivalent of @oneOf gens@, when one exists.
+    --
+    -- Combines the branches into a single @one_of@ schema; if any branch
+    -- isn't basic, returns 'Nothing'.
+    basic :: Maybe (BasicGenerator a)
+    basic = do
+      bs <- traverse toBasic gens
+      let sch = toCBOR (Schema.oneOf (NE.toList (fmap schema bs)))
+          parsers = V.fromList (NE.toList (fmap (.parse) bs))
+          p (Array arr) | V.length arr == 2 = do
+            let idxV = arr V.! 0
+                val = arr V.! 1
+            i <- parseIndex idxV
+            case parsers V.!? i of
+              Just q -> q val
+              Nothing ->
+                Left
+                  ParseError
+                    { expected = "0 <= index < " <> T.pack (show (V.length parsers)),
+                      got = idxV
+                    }
+          p v = Left ParseError {expected = "[index, value] array", got = v}
+      pure (BasicGenerator (NE.singleton sch) p)
 
 -- | Generate one of the given values.
 element :: NonEmpty a -> Gen a
@@ -340,12 +337,7 @@ frequency pairs
   | any ((<= 0) . fst) pairs = error "Gen.frequency: all weights must be positive"
   | otherwise = Draw \tc -> do
       let total = sum (fmap fst pairs)
-          indexSchema =
-            buildMap
-              [ ("type", textVal "integer"),
-                ("min_value", intVal (0 :: Int)),
-                ("max_value", intVal (total - 1))
-              ]
+          indexSchema = toCBOR (Schema.integer (0 :: Int) (total - 1))
       startSpan tc LabelOneOf
       raw <- generate tc indexSchema
       i <- case parseIndex raw of

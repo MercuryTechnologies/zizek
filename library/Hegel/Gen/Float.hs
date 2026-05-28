@@ -22,16 +22,9 @@ import CBOR.Value (Value (..))
 import Data.Maybe (isJust)
 import GHC.Float (double2Float, float2Double)
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..))
-import Hegel.Gen.Internal (pattern Schema)
-import Hegel.Protocol.Cbor
-  ( ParseError (..),
-    boolVal,
-    buildMap,
-    doubleVal,
-    floatVal,
-    intVal,
-    textVal,
-  )
+import Hegel.Gen.Internal (basic)
+import Hegel.Protocol.Cbor (ParseError (..))
+import Hegel.Schema (FloatSchema (..))
 
 data FloatBuilder a = FloatBuilder
   { bMin :: Maybe a,
@@ -90,7 +83,7 @@ instance HasMax (FloatBuilder a) a where
 -- always encodes Python float('nan') and float('inf') as CBOR Float16, so
 -- even a Double generator receives a Float16 (NaN :: Float) off the wire.
 instance Build (FloatBuilder Float) Float where
-  build b = Schema (buildSchema floatVal 32 b) parse
+  build b = basic (buildSchema 32 b) parse
     where
       parse (Float16 f) = Right f
       parse (Float32 f) = Right f
@@ -98,7 +91,7 @@ instance Build (FloatBuilder Float) Float where
       parse v = Left ParseError {expected = "float", got = v}
 
 instance Build (FloatBuilder Double) Double where
-  build b = Schema (buildSchema doubleVal 64 b) parse
+  build b = basic (buildSchema 64 b) parse
     where
       parse (Float16 f) = Right (float2Double f)
       parse (Float32 f) = Right (float2Double f)
@@ -112,18 +105,17 @@ maxFiniteVal =
       (_, eMax) = floatRange (0 :: a)
    in encodeFloat (b ^ p - 1) (eMax - p)
 
-buildSchema :: forall a. (RealFloat a) => (a -> Value) -> Int -> FloatBuilder a -> Value
-buildSchema toVal width b =
-  buildMap $
-    [ ("type", textVal "float"),
-      ("width", intVal width),
-      ("exclude_min", boolVal b.bExclMin),
-      ("exclude_max", boolVal b.bExclMax),
-      ("allow_nan", boolVal effectiveAllowNan),
-      ("allow_infinity", boolVal effectiveAllowInf)
-    ]
-      ++ minPairs
-      ++ maxPairs
+buildSchema :: forall a. (RealFloat a) => Int -> FloatBuilder a -> FloatSchema a
+buildSchema w b =
+  FloatSchema
+    { width = w,
+      excludeMin = b.bExclMin,
+      excludeMax = b.bExclMax,
+      allowNan = effectiveAllowNan,
+      allowInfinity = effectiveAllowInf,
+      minValue = effectiveMin,
+      maxValue = effectiveMax
+    }
   where
     effectiveAllowNan = b.bAllowNan && not (isJust b.bMin) && not (isJust b.bMax)
     effectiveAllowInf = b.bAllowInf && not (isJust b.bMin && isJust b.bMax)
@@ -133,12 +125,12 @@ buildSchema toVal width b =
     -- become ±∞ after the double2Float conversion in the Float instance.
     needsBounds = not effectiveAllowNan && not effectiveAllowInf
 
-    minPairs = case b.bMin of
-      Just lo -> [("min_value", toVal lo)]
-      Nothing | needsBounds -> [("min_value", toVal (negate (maxFiniteVal @a)))]
-      Nothing -> []
+    effectiveMin = case b.bMin of
+      Just lo -> Just lo
+      Nothing | needsBounds -> Just (negate (maxFiniteVal @a))
+      Nothing -> Nothing
 
-    maxPairs = case b.bMax of
-      Just hi -> [("max_value", toVal hi)]
-      Nothing | needsBounds -> [("max_value", toVal (maxFiniteVal @a))]
-      Nothing -> []
+    effectiveMax = case b.bMax of
+      Just hi -> Just hi
+      Nothing | needsBounds -> Just (maxFiniteVal @a)
+      Nothing -> Nothing

@@ -84,6 +84,7 @@ library
     Hegel.Protocol.Packet
     Hegel.Protocol.Stream
     Hegel.Runner
+    Hegel.Schema
     Hegel.Session
     Hegel.Session.Internal
     Hegel.TestCase

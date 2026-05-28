@@ -26,7 +26,6 @@ import Control.Exception (SomeException, toException)
 import Data.ByteString.Char8 qualified as BS8
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Vector qualified as V
 import Data.Word (Word32, Word64)
 import Hegel.Assertion (originOf)
 import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
@@ -37,12 +36,9 @@ import Hegel.Protocol.Cbor
     asText,
     asWord32,
     asWord64,
-    boolVal,
     buildMap,
-    intVal,
     lookupKey,
-    nullVal,
-    textVal,
+    (.=),
   )
 import Hegel.Protocol.Connection (Connection, connectStream, controlStream, newStream)
 import Hegel.Protocol.Error (ProtocolError (..))
@@ -58,6 +54,10 @@ import Hegel.Protocol.Stream
 import Hegel.TestCase (Status (..), TestCase (..), TestStopped (..), markComplete)
 import Text.Read (readMaybe)
 import UnliftIO.Exception (Handler (..), catches, finally, throwIO, tryAny)
+
+-- | Build a @{"result": v}@ ack envelope, encoded as CBOR.
+encodeAck :: Value -> BS8.ByteString
+encodeAck v = CE.encode (buildMap ["result" .= v])
 
 handshakeString :: BS8.ByteString
 handshakeString = "hegel_handshake_start"
@@ -166,19 +166,17 @@ runTest client settings gen body = do
   (testSid, testQ) <- newStream client.connection
   testStream <- mkStream client.connection testSid testQ
 
-  let phasesVal = Array (V.fromList (map (textVal . toWire) settings.phases))
-  let suppressVal = Array (V.fromList (map textVal settings.suppressHealthCheck))
   let runTestMsg =
         buildMap
-          [ ("command", textVal "run_test"),
-            ("test_cases", intVal settings.testCases),
-            ("seed", maybe nullVal UInt settings.seed),
-            ("stream_id", intVal testSid),
-            ("database_key", nullVal),
-            ("derandomize", boolVal settings.derandomize),
-            ("report_multiple_failures", boolVal settings.reportMultipleFailures),
-            ("suppress_health_check", suppressVal),
-            ("phases", phasesVal)
+          [ "command" .= ("run_test" :: Text),
+            "test_cases" .= settings.testCases,
+            "seed" .= settings.seed,
+            "stream_id" .= testSid,
+            "database_key" .= (),
+            "derandomize" .= settings.derandomize,
+            "report_multiple_failures" .= settings.reportMultipleFailures,
+            "suppress_health_check" .= settings.suppressHealthCheck,
+            "phases" .= fmap toWire settings.phases
           ]
 
   result <- requestCbor client.control runTestMsg
@@ -186,37 +184,42 @@ runTest client settings gen body = do
     Bool True -> pure ()
     other -> throwIO (UnexpectedReply "run_test" other)
 
-  let runAndInterpret = do
-        (results, nInteresting, nInvalid) <-
-          runEventLoop testStream client.connection gen body settings.perCaseFinalizer
-        case lookupKey "health_check_failure" results >>= asText of
-          Just msg -> pure (UnhealthyInput msg)
-          Nothing -> case lookupKey "error" results >>= asText of
-            Just msg -> pure (Errored (toException (userError (T.unpack msg))))
-            Nothing ->
-              if nInteresting == 0
-                then
-                  let nValid = maybe 0 id (lookupKey "valid_test_cases" results >>= asWord64)
-                   in if nValid == 0
-                        then pure (Rejected "no valid examples found")
-                        else
-                          pure
-                            ( Passed
-                                Stats
-                                  { testsRun = settings.testCases,
-                                    invalid = fromIntegral nInvalid
-                                  }
-                            )
-                else
-                  replayFinalCases
-                    testStream
-                    client.connection
-                    (fromIntegral nInteresting)
-                    (fromIntegral nInvalid)
-                    gen
-                    body
-                    settings.perCaseFinalizer
-  runAndInterpret `finally` closeStream testStream
+  flip finally (closeStream testStream) do
+    (results, nInteresting, nInvalid) <-
+      runEventLoop testStream client.connection gen body settings.perCaseFinalizer
+    interpretResults settings results nInteresting nInvalid $
+      replayFinalCases
+        testStream
+        client.connection
+        (fromIntegral nInteresting)
+        (fromIntegral nInvalid)
+        gen
+        body
+        settings.perCaseFinalizer
+
+-- | Map a @test_done@ results blob to a final 'Outcome'.
+--
+-- The @replay@ action is run when at least one case was 'Interesting';
+-- it's expected to drive 'replayFinalCases' to recover the
+-- counterexample value.
+interpretResults ::
+  Settings ->
+  Value ->
+  Word64 ->
+  Word64 ->
+  IO (Outcome a) ->
+  IO (Outcome a)
+interpretResults settings results nInteresting nInvalid replay
+  | Just msg <- lookupKey "health_check_failure" results >>= asText =
+      pure (UnhealthyInput msg)
+  | Just msg <- lookupKey "error" results >>= asText =
+      pure (Errored (toException (userError (T.unpack msg))))
+  | nInteresting > 0 = replay
+  | nValid == 0 = pure (Rejected "no valid examples found")
+  | otherwise =
+      pure (Passed Stats {testsRun = settings.testCases, invalid = fromIntegral nInvalid})
+  where
+    nValid = maybe 0 id (lookupKey "valid_test_cases" results >>= asWord64)
 
 data CaseResult a
   = CaseValid
@@ -269,36 +272,51 @@ runEventLoop ::
   IO (Value, Word64, Word64)
 runEventLoop testStream conn gen body finalizer = go
   where
-    ackNull = CE.encode (buildMap [("result", nullVal)])
-    ackTrue = CE.encode (buildMap [("result", boolVal True)])
-
     go = do
-      (evId, evBytes) <- receiveRequest testStream
-      case CD.decode evBytes of
-        Left err -> throwIO (CborDecodeFailure "runEventLoop" err)
-        Right evt -> case lookupKey "event" evt >>= asText of
-          Nothing -> throwIO (MissingField "runEventLoop" "event")
-          Just "test_case" -> do
-            sid <-
-              maybe
-                (throwIO (MissingField "test_case" "stream_id"))
-                pure
-                (lookupKey "stream_id" evt >>= asWord32)
-            let isFinal = maybe False id (lookupKey "is_final" evt >>= asBool)
-            if isFinal
-              then throwIO (ProtocolStateViolation "unexpected is_final=true during main loop")
-              else do
-                writeReply testStream evId ackNull
-                _ <- runCase conn sid gen body finalizer
-                go
-          Just "test_done" -> do
-            writeReply testStream evId ackTrue
-            let r = maybe nullVal id (lookupKey "results" evt)
-            let nInteresting = maybe 0 id (lookupKey "interesting_test_cases" r >>= asWord64)
-            let nInvalid = maybe 0 id (lookupKey "invalid_test_cases" r >>= asWord64)
-            pure (r, nInteresting, nInvalid)
-          Just other ->
-            throwIO (UnknownEvent other)
+      (evId, ev) <- awaitEvent testStream
+      case ev of
+        TestCaseEvent _ True ->
+          throwIO (ProtocolStateViolation "unexpected is_final=true during main loop")
+        TestCaseEvent sid False -> do
+          writeReply testStream evId (encodeAck Null)
+          _ <- runCase conn sid gen body finalizer
+          go
+        TestDoneEvent results -> do
+          writeReply testStream evId (encodeAck (Bool True))
+          let nI = maybe 0 id (lookupKey "interesting_test_cases" results >>= asWord64)
+              nInv = maybe 0 id (lookupKey "invalid_test_cases" results >>= asWord64)
+          pure (results, nI, nInv)
+
+-- | A decoded server-to-client event on the test stream.
+data Event
+  = -- | Server is requesting a new test case on a fresh sub-stream.
+    -- The 'Bool' is the @is_final@ flag, set during the replay phase.
+    TestCaseEvent !Word32 !Bool
+  | -- | Server has finished the run and reported aggregate results.
+    TestDoneEvent !Value
+
+-- | Block until the next 'Event' arrives, returning the message id so
+-- the caller can reply.
+awaitEvent :: Stream -> IO (Word32, Event)
+awaitEvent s = do
+  (evId, evBytes) <- receiveRequest s
+  evt <- case CD.decode evBytes of
+    Left err -> throwIO (CborDecodeFailure "awaitEvent" err)
+    Right v -> pure v
+  ev <- case lookupKey "event" evt >>= asText of
+    Nothing -> throwIO (MissingField "awaitEvent" "event")
+    Just "test_case" -> do
+      sid <-
+        maybe
+          (throwIO (MissingField "test_case" "stream_id"))
+          pure
+          (lookupKey "stream_id" evt >>= asWord32)
+      let isFinal = maybe False id (lookupKey "is_final" evt >>= asBool)
+      pure (TestCaseEvent sid isFinal)
+    Just "test_done" ->
+      pure (TestDoneEvent (maybe Null id (lookupKey "results" evt)))
+    Just other -> throwIO (UnknownEvent other)
+  pure (evId, ev)
 
 replayFinalCases ::
   Stream ->
@@ -311,32 +329,24 @@ replayFinalCases ::
   IO (Outcome a)
 replayFinalCases testStream conn n nInvalid gen body finalizer = go n Nothing
   where
-    ackNull = CE.encode (buildMap [("result", nullVal)])
-
     go 0 mFail = pure $ case mFail of
       Just (v, msg) -> Failed {counterexample = v, message = msg, notes = []}
       Nothing -> Passed Stats {testsRun = 0, invalid = nInvalid}
     go k mFail = do
-      (evId, evBytes) <- receiveRequest testStream
-      case CD.decode evBytes of
-        Left err -> throwIO (CborDecodeFailure "replayFinalCases" err)
-        Right evt -> do
-          sid <-
-            maybe
-              (throwIO (MissingField "test_case" "stream_id"))
-              pure
-              (lookupKey "stream_id" evt >>= asWord32)
-          let isFinal = maybe False id (lookupKey "is_final" evt >>= asBool)
-          if not isFinal
-            then throwIO (ProtocolStateViolation "expected is_final=true")
-            else pure ()
-          writeReply testStream evId ackNull
+      (evId, ev) <- awaitEvent testStream
+      case ev of
+        TestCaseEvent sid True -> do
+          writeReply testStream evId (encodeAck Null)
           result <- runCase conn sid gen body finalizer
           case result of
             CaseValid -> go (k - 1) mFail
             CaseInvalid -> go (k - 1) mFail
             CaseInteresting _ Nothing -> go (k - 1) mFail
             CaseInteresting msg (Just v) -> go (k - 1) (Just (v, msg))
+        TestCaseEvent _ False ->
+          throwIO (ProtocolStateViolation "expected is_final=true")
+        TestDoneEvent _ ->
+          throwIO (ProtocolStateViolation "unexpected test_done during replay")
 
 dropPrefix :: String -> String -> Maybe String
 dropPrefix [] ys = Just ys
