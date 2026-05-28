@@ -40,10 +40,10 @@ def test_conformance(subtests):
             OriginDeduplicationConformance(BIN_DIR / "test-origin-deduplication"),
             SampledFromConformance(BIN_DIR / "test-sampled-from"),
             OneOfConformance(BIN_DIR / "test-one-of"),
+            TextConformance(BIN_DIR / "test-text", no_surrogates=True),
         ],
         subtests,
         skip_tests=[
-            TextConformance,
             ListConformance,
             DictConformance,
             StopTestOnGenerateConformance,

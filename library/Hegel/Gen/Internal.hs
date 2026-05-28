@@ -12,6 +12,7 @@ module Hegel.Gen.Internal
     draw,
     assume,
     discard,
+    defer,
     filtered,
     mapMaybe,
     just,
@@ -20,6 +21,7 @@ module Hegel.Gen.Internal
     frequency,
     maybe,
     either,
+    enumerate,
 
     -- * Exceptions
     -- $exceptions
@@ -284,8 +286,16 @@ just = mapMaybe Prelude.id
 
 -- | Filter values drawn from a generator, retrying up to 3 times before
 -- discarding the test case. Exhaustion is treated as 'assume' 'False'.
+--
+-- When the source generator is finite (i.e. 'enumerate' returns @Just xs@),
+-- the predicate is applied statically and the result is drawn from the
+-- pre-filtered list in a single round-trip — no retry loop needed.
 filtered :: (a -> Bool) -> Gen a -> Gen a
-filtered p g = Draw \tc -> go tc (3 :: Int)
+filtered p g = case enumerate g of
+  Just xs -> case filter p xs of
+    [] -> discard
+    (y : ys) -> element (y :| ys)
+  Nothing -> Draw \tc -> go tc (3 :: Int)
   where
     go tc n = do
       startSpan tc LabelFilter
@@ -304,10 +314,41 @@ oneOf gens = OneOf basic gens
   where
     -- The basic-schema equivalent of @oneOf gens@, when one exists.
     --
-    -- Combines the branches into a single @one_of@ schema; if any branch
-    -- isn't basic, returns 'Nothing'.
+    -- Fast path: all branches are @Pure@ — emit an integer 0..(n-1) schema
+    -- and index into the values directly. This is more compact on the wire
+    -- than a @one_of@ schema whose branches are all @constant/null@.
+    --
+    -- Normal path: build a @one_of@ schema; any non-basic branch makes this
+    -- return 'Nothing'.
     basic :: Maybe (BasicGenerator a)
-    basic = do
+    basic = case allPureOpt of
+      Just b -> Just b
+      Nothing -> fullOpt
+
+    allPureOpt :: Maybe (BasicGenerator a)
+    allPureOpt = do
+      vals <- traverse pureVal gens
+      let n = NE.length vals
+          vv = V.fromList (NE.toList vals)
+          sch = toCBOR (Schema.integer (0 :: Int) (n - 1))
+          p v = case parseIndex v of
+            Left err -> Left err
+            Right i -> case vv V.!? i of
+              Just a -> Right a
+              Nothing ->
+                Left
+                  ParseError
+                    { expected = "0 <= index < " <> T.pack (show n),
+                      got = v
+                    }
+      pure (BasicGenerator (NE.singleton sch) p)
+
+    pureVal :: Gen a -> Maybe a
+    pureVal (Pure a) = Just a
+    pureVal _ = Nothing
+
+    fullOpt :: Maybe (BasicGenerator a)
+    fullOpt = do
       bs <- traverse toBasic gens
       let sch = toCBOR (Schema.oneOf (NE.toList (fmap schema bs)))
           parsers = V.fromList (NE.toList (fmap (.parse) bs))
@@ -329,6 +370,40 @@ oneOf gens = OneOf basic gens
 -- | Generate one of the given values.
 element :: NonEmpty a -> Gen a
 element = oneOf . fmap pure
+
+-- | Wrap a generator so that schema expansion terminates when it appears
+-- on a recursive edge.  Without 'defer', a self-referential generator causes
+-- a @\<\<loop\>\>@ exception at construction time.
+--
+-- Example: a binary tree whose branches recurse through 'defer'.
+--
+-- > data Tree = Leaf Int | Branch Tree Tree
+-- >
+-- > treeGen :: Gen Tree
+-- > treeGen = oneOf (leaf :| [branch])
+-- >   where
+-- >     leaf   = Leaf <$> (Gen.integral @Int & Gen.build)
+-- >     branch = Branch <$> defer treeGen <*> defer treeGen
+--
+-- 'defer' always falls back to interactive generation (spans are emitted
+-- normally, so shrinking still works).
+defer :: Gen a -> Gen a
+defer g = Draw \tc -> runGenerator tc g
+
+-- | Return the finite set of values a generator can produce, or 'Nothing'
+-- if the set is infinite or cannot be statically determined.
+--
+-- Useful as an optimisation signal: 'filtered' uses this to pre-filter
+-- finite generators instead of retrying at runtime.
+enumerate :: Gen a -> Maybe [a]
+enumerate (Pure a) = Just [a]
+enumerate (Map _ f g) = fmap f <$> enumerate g
+enumerate (Ap _ gf ga) = do
+  fs <- enumerate gf
+  as <- enumerate ga
+  pure [f a | f <- fs, a <- as]
+enumerate (OneOf _ gs) = concat . NE.toList <$> traverse enumerate gs
+enumerate _ = Nothing
 
 -- | Choose one of the given generators, weighted by the accompanying 'Int'.
 -- All weights must be positive.

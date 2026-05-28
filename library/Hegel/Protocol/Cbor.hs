@@ -19,6 +19,7 @@ module Hegel.Protocol.Cbor
     nullVal,
 
     -- * Accessors
+    hegelText,
     asText,
     asInt,
     asBool,
@@ -31,6 +32,7 @@ import CBOR.Class (ToCBOR (..))
 import CBOR.Value (Value (..))
 import Control.Exception (Exception)
 import Data.Text (Text)
+import Data.Text.Encoding (decodeUtf8')
 import Data.Vector qualified as V
 import Data.Word (Word32, Word64)
 
@@ -102,6 +104,19 @@ boolVal = Bool
 
 nullVal :: Value
 nullVal = Null
+
+-- | Decode a generated string value from the @hegel@ server.
+--
+-- The server encodes all string values as @CBOR tag 91@ wrapping a WTF-8
+-- byte string (identical to UTF-8 for non-surrogate code points). Returns
+-- 'Left' when the value is not a tag-91 byte string or the bytes are not
+-- valid UTF-8.
+hegelText :: Value -> Either ParseError Text
+hegelText (Tag 91 (ByteString bs)) =
+  case decodeUtf8' bs of
+    Right t -> Right t
+    Left _ -> Left ParseError {expected = "valid UTF-8", got = ByteString bs}
+hegelText v = Left ParseError {expected = "string (tag 91)", got = v}
 
 asText :: Value -> Maybe Text
 asText (TextString t) = Just t

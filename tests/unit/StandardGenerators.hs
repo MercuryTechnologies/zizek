@@ -4,6 +4,7 @@ import Data.ByteString qualified as BS
 import Data.Function ((&))
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Text qualified as T
 import Hegel (runProperty_)
 import Hegel.Gen qualified as Gen
 import Hegel.Runner (Settings (..), defaultSettings)
@@ -119,6 +120,42 @@ spec = do
     it "stays within the given range" $
       runProperty_ defaultSettings (Gen.enum LT GT) $ \o ->
         o `shouldSatisfy` (\x -> x >= LT && x <= GT)
+
+  describe "Gen.text" $ do
+    it "draws Text values" $
+      runProperty_ defaultSettings (Gen.text & Gen.build) $
+        \_ -> pure ()
+
+    it "respects minSize bound" $
+      runProperty_ defaultSettings (Gen.text & Gen.minSize 5 & Gen.maxSize 100 & Gen.build) $ \t ->
+        T.length t `shouldSatisfy` (>= 5)
+
+    it "respects maxSize bound" $
+      runProperty_ defaultSettings (Gen.text & Gen.maxSize 10 & Gen.build) $ \t ->
+        T.length t `shouldSatisfy` (<= 10)
+
+    it "respects both bounds" $
+      runProperty_ defaultSettings (Gen.text & Gen.minSize 3 & Gen.maxSize 7 & Gen.build) $ \t -> do
+        T.length t `shouldSatisfy` (>= 3)
+        T.length t `shouldSatisfy` (<= 7)
+
+  describe "Gen.char" $ do
+    it "draws Char values" $
+      runProperty_ defaultSettings (Gen.char & Gen.build) $
+        \_ -> pure ()
+
+  describe "Gen.regex" $ do
+    it "draws Text values" $
+      runProperty_ defaultSettings (Gen.regex "[a-z]+" & Gen.build) $
+        \_ -> pure ()
+
+    it "respects the pattern with fullMatch" $
+      runProperty_ defaultSettings (Gen.regex "[0-9]+" & Gen.fullMatch & Gen.build) $ \t ->
+        t `shouldSatisfy` T.all (\c -> c >= '0' && c <= '9')
+
+    it "fullMatch produces complete matches" $
+      runProperty_ defaultSettings (Gen.regex "[a-z]+" & Gen.fullMatch & Gen.build) $ \t ->
+        t `shouldSatisfy` (not . T.null)
 
 -- StopTest (server entropy exhausted mid-case) is exercised end-to-end by
 -- StopTestOnGenerateConformance in tests/conformance/test_conformance.py.

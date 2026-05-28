@@ -10,6 +10,9 @@
 -- > gen2 = Gen.integral @Int & Gen.min 0 & Gen.max 100           & Gen.build
 -- > gen3 = Gen.double & Gen.min 0 & Gen.max 1 & Gen.disallowNan  & Gen.build
 -- > gen4 = Gen.binary & Gen.minSize 4 & Gen.maxSize 64           & Gen.build
+-- > gen5 = Gen.text  & Gen.minSize 1 & Gen.maxSize 64            & Gen.build
+-- > gen6 = Gen.char                                              & Gen.build
+-- > gen7 = Gen.regex "[a-z]+" & Gen.fullMatch                    & Gen.build
 --
 -- Applying a modifier that doesn't belong to a builder (e.g.
 -- @Gen.integral & Gen.disallowNan@) is a type error.
@@ -61,6 +64,27 @@ module Hegel.Gen
     BinaryBuilder,
     binary,
 
+    -- * Text
+    TextBuilder,
+    text,
+
+    -- * Char
+    CharBuilder,
+    char,
+    codec,
+    minCodepoint,
+    maxCodepoint,
+    categories,
+    excludeCategories,
+    includeCharacters,
+    excludeCharacters,
+
+    -- * Regex
+    RegexBuilder,
+    regex,
+    fullMatch,
+    alphabet,
+
     -- * Choice
     oneOf,
     element,
@@ -74,9 +98,11 @@ module Hegel.Gen
     draw,
     assume,
     discard,
+    defer,
     filtered,
     mapMaybe,
     just,
+    enumerate,
 
     -- * Exceptions
     AssumeRejected (..),
@@ -87,6 +113,17 @@ where
 import Hegel.Gen.Binary (BinaryBuilder, binary)
 import Hegel.Gen.Bool (BoolBuilder, bool)
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasSize (..))
+import Hegel.Gen.Char
+  ( CharBuilder,
+    categories,
+    char,
+    codec,
+    excludeCategories,
+    excludeCharacters,
+    includeCharacters,
+    maxCodepoint,
+    minCodepoint,
+  )
 import Hegel.Gen.Float
   ( FloatBuilder,
     disallowInfinity,
@@ -117,10 +154,12 @@ import Hegel.Gen.Internal
     BasicGenerator (..),
     UnexpectedResponse (..),
     assume,
+    defer,
     discard,
     draw,
     either,
     element,
+    enumerate,
     filtered,
     frequency,
     just,
@@ -128,4 +167,6 @@ import Hegel.Gen.Internal
     maybe,
     oneOf,
   )
+import Hegel.Gen.Regex (RegexBuilder, alphabet, fullMatch, regex)
+import Hegel.Gen.Text (TextBuilder, text)
 import Prelude hiding (either, maybe)

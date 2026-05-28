@@ -3,6 +3,10 @@
 -- All schema records live here so that @Hegel.Gen.*@ modules consume
 -- typed smart constructors instead of building CBOR maps by hand.
 -- 'CBOR.Class.toCBOR' converts any record to the wire 'CBOR.Value'.
+--
+-- Records are accessed via 'OverloadedRecordDot'; field selectors are
+-- suppressed ('NoFieldSelectors') so that field names don't escape into
+-- call sites and conflict with identically-named builder modifier functions.
 module Hegel.Schema
   ( -- * Leaf schemas (produced by generator modules)
     BoolSchema,
@@ -12,6 +16,12 @@ module Hegel.Schema
     BinarySchema (..),
     binary,
     FloatSchema (..),
+    CharacterFields (..),
+    defaultCharacterFields,
+    TextSchema (..),
+    text,
+    RegexSchema (..),
+    regex,
 
     -- * Composite \/ wire-only schemas (used by @Hegel.Gen.Internal@)
     UnitSchema,
@@ -114,6 +124,116 @@ instance (ToCBOR a) => ToCBOR (FloatSchema a) where
           [ "min_value" .=? s.minValue,
             "max_value" .=? s.maxValue
           ]
+
+-- | Character filtering options, shared by 'TextSchema' and 'RegexSchema'.
+-- Every field is optional; absent fields tell the server to apply no
+-- restriction on that axis. Wire representation is a CBOR map with the
+-- character-filtering keys described in the @hegel-core@ wire spec.
+data CharacterFields = CharacterFields
+  { -- | Restrict to characters encodable in this codec (e.g. @"ascii"@,
+    -- @"latin-1"@).
+    codec :: !(Maybe Text),
+    -- | Minimum Unicode codepoint (inclusive).
+    minCodepoint :: !(Maybe Int),
+    -- | Maximum Unicode codepoint (inclusive).
+    maxCodepoint :: !(Maybe Int),
+    -- | Include only characters from these Unicode general categories
+    -- (e.g. @["L", "Nd"]@). Mutually exclusive with 'excludeCategories'.
+    categories :: !(Maybe [Text]),
+    -- | Exclude characters from these Unicode general categories.
+    -- Mutually exclusive with 'categories'.
+    excludeCategories :: !(Maybe [Text]),
+    -- | Always include these characters, even if excluded by other filters.
+    includeCharacters :: !(Maybe Text),
+    -- | Always exclude these characters.
+    excludeCharacters :: !(Maybe Text)
+  }
+
+instance ToCBOR CharacterFields where
+  toCBOR = buildMap . charFieldEntries
+
+-- | All fields absent: no character restrictions.
+defaultCharacterFields :: CharacterFields
+defaultCharacterFields =
+  CharacterFields
+    { codec = Nothing,
+      minCodepoint = Nothing,
+      maxCodepoint = Nothing,
+      categories = Nothing,
+      excludeCategories = Nothing,
+      includeCharacters = Nothing,
+      excludeCharacters = Nothing
+    }
+
+-- Shared helper: emit the character-filtering entries for a CBOR map.
+charFieldEntries :: CharacterFields -> [(Text, Value)]
+charFieldEntries cf =
+  catMaybes
+    [ "codec" .=? cf.codec,
+      "min_codepoint" .=? cf.minCodepoint,
+      "max_codepoint" .=? cf.maxCodepoint,
+      "categories" .=? cf.categories,
+      "exclude_categories" .=? cf.excludeCategories,
+      "include_characters" .=? cf.includeCharacters,
+      "exclude_characters" .=? cf.excludeCharacters
+    ]
+
+-- | Text schema. Wire type is @\"string\"@ (per the @hegel-core@ spec).
+--
+-- Haskell @Text@ cannot represent lone surrogates; the 'text' smart
+-- constructor therefore defaults 'excludeCategories' to @[\"Cs\"]@. Override
+-- by constructing 'TextSchema' directly when you need full control (e.g. in
+-- test harnesses).
+data TextSchema = TextSchema
+  { -- | Minimum codepoint length (inclusive).
+    minSize :: !Int,
+    -- | Maximum codepoint length (inclusive), or unbounded.
+    maxSize :: !(Maybe Int),
+    -- | Character filtering constraints.
+    charFields :: !CharacterFields
+  }
+
+instance ToCBOR TextSchema where
+  toCBOR s =
+    buildMap $
+      [ "type" .= ("string" :: Text),
+        "min_size" .= s.minSize
+      ]
+        <> catMaybes ["max_size" .=? s.maxSize]
+        <> charFieldEntries s.charFields
+
+-- | Default text schema: unbounded length, surrogates excluded.
+text :: Int -> TextSchema
+text minSize =
+  TextSchema
+    { minSize,
+      maxSize = Nothing,
+      charFields = defaultCharacterFields {excludeCategories = Just ["Cs"]}
+    }
+
+-- | Regex schema.
+data RegexSchema = RegexSchema
+  { -- | The regular expression pattern.
+    regexPattern :: !Text,
+    -- | When 'True', the entire generated string must match the pattern.
+    -- Default: 'False'.
+    fullmatch :: !Bool,
+    -- | Optional character set restriction for generated strings.
+    alphabet :: !(Maybe CharacterFields)
+  }
+
+instance ToCBOR RegexSchema where
+  toCBOR s =
+    buildMap $
+      [ "type" .= ("regex" :: Text),
+        "pattern" .= s.regexPattern,
+        "fullmatch" .= s.fullmatch
+      ]
+        <> catMaybes ["alphabet" .=? s.alphabet]
+
+-- | Default regex schema: partial match, no alphabet restriction.
+regex :: Text -> RegexSchema
+regex p = RegexSchema {regexPattern = p, fullmatch = False, alphabet = Nothing}
 
 -- | Constant schema: always returns @null@. Used as a sentinel in
 -- @Hegel.Gen.Internal@ for 'Pure' branches of 'oneOf'.

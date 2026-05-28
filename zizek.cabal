@@ -23,6 +23,7 @@ common all
     DuplicateRecordFields
     ImportQualifiedPost
     LambdaCase
+    NoFieldSelectors
     OverloadedRecordDot
     OverloadedStrings
     PatternSynonyms
@@ -73,9 +74,12 @@ library
     Hegel.Gen.Binary
     Hegel.Gen.Bool
     Hegel.Gen.Builder
+    Hegel.Gen.Char
     Hegel.Gen.Float
     Hegel.Gen.Integer
     Hegel.Gen.Internal
+    Hegel.Gen.Regex
+    Hegel.Gen.Text
     Hegel.Outcome
     Hegel.Phase
     Hegel.Protocol.Cbor
@@ -161,6 +165,33 @@ executable test-sampled-from
 executable test-one-of
   import: library
   hs-source-dirs: tests/conformance/one-of
+  main-is: Main.hs
+  build-depends:
+    aeson ^>=2.2,
+    zizek,
+    zizek:conformance-utils,
+
+executable test-text
+  import: library
+  hs-source-dirs: tests/conformance/text
+  main-is: Main.hs
+  build-depends:
+    aeson ^>=2.2,
+    zizek,
+    zizek:conformance-utils,
+
+executable test-char
+  import: library
+  hs-source-dirs: tests/conformance/char
+  main-is: Main.hs
+  build-depends:
+    aeson ^>=2.2,
+    zizek,
+    zizek:conformance-utils,
+
+executable test-regex
+  import: library
+  hs-source-dirs: tests/conformance/regex
   main-is: Main.hs
   build-depends:
     aeson ^>=2.2,
