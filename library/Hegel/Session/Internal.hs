@@ -1,15 +1,23 @@
+-- | @hegel@ session lifecycle management.
+--
+-- 'Hegel.Session' re-exports the parts users normally need; this module
+-- additionally exposes 'LiveSession', 'liveSession', and 'liveProcess' for
+-- callers that need direct access to the underlying 'Client' or 'Process'.
 module Hegel.Session.Internal
-  ( Session (..),
-    SessionConfig (..),
+  ( -- * Sessions
+    Session (..),
     LiveSession (..),
-    defaultSessionConfig,
+    globalSession,
     openSession,
     withSession,
     closeSession,
     invalidateSession,
     liveSession,
     liveProcess,
-    globalSession,
+
+    -- * Configuration
+    SessionConfig (..),
+    defaultSessionConfig,
   )
 where
 
@@ -24,12 +32,18 @@ import System.Process.Typed
 import UnliftIO.Exception (bracket, bracketOnError, throwIO)
 import UnliftIO.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 
+-- | How to spawn the @hegel@ child process.
 data SessionConfig = SessionConfig
-  { command :: !FilePath,
+  { -- | Binary to execute. Resolved against @PATH@ if unqualified.
+    command :: !FilePath,
+    -- | Command-line arguments passed to the binary.
     arguments :: ![String],
+    -- | Process environment. 'Nothing' inherits the parent's environment.
     environment :: !(Maybe [(String, String)])
   }
 
+-- | Invoke @hegel@ from @PATH@ with @--verbosity normal@ and an inherited
+-- environment.
 defaultSessionConfig :: SessionConfig
 defaultSessionConfig =
   SessionConfig
@@ -38,29 +52,36 @@ defaultSessionConfig =
       environment = Nothing
     }
 
+-- | A running @hegel@ child process and the 'Client' connected to it.
 data LiveSession = LiveSession
   { client :: !Client,
     process :: !(Process Handle Handle ())
   }
 
+-- | A 'LiveSession' that's spawned on first use and reused thereafter.
 data Session = Session
   { config :: !SessionConfig,
     slot :: !(MVar (Maybe (Async LiveSession)))
   }
 
+-- | Process-wide shared 'Session' using 'defaultSessionConfig'.
 globalSession :: Session
 globalSession = Session defaultSessionConfig (unsafePerformIO (newMVar Nothing))
 {-# NOINLINE globalSession #-}
 
+-- | Create a 'Session' and eagerly spawn the child process.
 openSession :: SessionConfig -> IO Session
 openSession cfg = do
   s <- Session cfg <$> newMVar Nothing
   _ <- liveSession s
   pure s
 
+-- | Bracketed 'openSession': the child process is stopped on exit.
 withSession :: SessionConfig -> (Session -> IO r) -> IO r
 withSession cfg = bracket (openSession cfg) closeSession
 
+-- | Stop the child process; the 'Session' will spawn a new 'LiveSession'
+-- the next time it's used.
 closeSession :: Session -> IO ()
 closeSession ses = do
   mAsync <- modifyMVar ses.slot \m -> pure (Nothing, m)
@@ -69,6 +90,10 @@ closeSession ses = do
       Left _ -> pure ()
       Right live -> stopProcess live.process
 
+-- | Cancel any in-flight initialization and forcibly stop the process.
+--
+-- Used after a connection or protocol error suggests the server is no
+-- longer healthy.
 invalidateSession :: Session -> IO ()
 invalidateSession ses = do
   mAsync <- modifyMVar ses.slot \m -> pure (Nothing, m)
@@ -78,6 +103,8 @@ invalidateSession ses = do
       Right live -> stopProcess live.process
       Left _ -> pure ()
 
+-- | Get the 'LiveSession', spawning one if no process is running or if the
+-- previous process has exited.
 liveSession :: Session -> IO LiveSession
 liveSession ses = do
   a <- modifyMVar ses.slot \mAsync ->
@@ -105,6 +132,7 @@ liveSession ses = do
           other -> pure other
       throwIO e
 
+-- | The underlying child process handle, spawning the session if needed.
 liveProcess :: Session -> IO (Process Handle Handle ())
 liveProcess ses = (.process) <$> liveSession ses
 
@@ -125,7 +153,7 @@ initLiveSession cfg = do
     client <- newClient conn
     a <- async (monitorProcess conn p)
     link a
-    pure LiveSession {client = client, process = p}
+    pure LiveSession {client, process = p}
 
 monitorProcess :: Connection -> Process Handle Handle () -> IO ()
 monitorProcess conn p = waitExitCode p *> markServerExited conn

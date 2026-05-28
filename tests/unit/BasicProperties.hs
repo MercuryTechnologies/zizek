@@ -1,15 +1,14 @@
 module BasicProperties (spec) where
 
 import Data.Function ((&))
-import Hegel (Phase (..), runProperty, runProperty_)
-import Hegel.Gen (Generator)
+import Hegel (Gen, Phase (..), runProperty, runProperty_)
 import Hegel.Gen qualified as Gen
 import Hegel.Outcome (Outcome (..))
 import Hegel.Runner (Settings (..), defaultSettings)
 import Test.Hspec
 
-intR :: (Int, Int) -> Generator Int
-intR (lo, hi) = Gen.integer & Gen.min lo & Gen.max hi & Gen.build
+intR :: (Int, Int) -> Gen Int
+intR (lo, hi) = Gen.integral & Gen.min lo & Gen.max hi & Gen.build
 
 spec :: Spec
 spec = do

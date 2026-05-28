@@ -69,7 +69,6 @@ library
     Hegel
     Hegel.Assertion
     Hegel.Client
-    Hegel.DataSource
     Hegel.Gen
     Hegel.Gen.Binary
     Hegel.Gen.Bool

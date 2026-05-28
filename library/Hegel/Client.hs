@@ -1,10 +1,20 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
+-- | Lower-level client API for talking to a @hegel@ server.
+--
+-- Most code should use 'Hegel.runProperty' or 'Hegel.Runner.runPropertyOn'.
+-- This module is the layer just below them, useful when you need direct
+-- control over the 'Client' lifecycle.
 module Hegel.Client
-  ( Client (..),
+  ( -- * Client
+    Client (..),
+    newClient,
+
+    -- * Settings
     Settings (..),
     defaultSettings,
-    newClient,
+
+    -- * Running tests
     runTest,
   )
 where
@@ -19,8 +29,7 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Data.Word (Word32, Word64)
 import Hegel.Assertion (originOf)
-import Hegel.DataSource (DataExhausted (..), Status (..), markComplete, newDataSource)
-import Hegel.Gen.Internal (AssumeRejected (..), Generator, draw)
+import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
 import Hegel.Outcome (Outcome (..), Stats (..))
 import Hegel.Phase (Phase (..), toWire)
 import Hegel.Protocol.Cbor
@@ -46,7 +55,7 @@ import Hegel.Protocol.Stream
     requestRaw,
     writeReply,
   )
-import Hegel.TestCase (TestCase (..))
+import Hegel.TestCase (Status (..), TestCase (..), TestStopped (..), markComplete)
 import Text.Read (readMaybe)
 import UnliftIO.Exception (Handler (..), catches, finally, throwIO, tryAny)
 
@@ -59,20 +68,30 @@ supportedProtocolLo = (0, 15)
 supportedProtocolHi :: (Int, Int)
 supportedProtocolHi = (0, 15)
 
--- | A live connection to a hegel-core server with a validated protocol version.
+-- | A live connection to a @hegel@ server with a validated protocol version.
 data Client = Client
   { connection :: !Connection,
     control :: !Stream,
     version :: !(Int, Int)
   }
 
+-- | Configuration for a single property run.
 data Settings = Settings
-  { testCases :: !Int,
+  { -- | Number of test cases to attempt.
+    testCases :: !Int,
+    -- | RNG seed. 'Nothing' picks a fresh seed each run.
     seed :: !(Maybe Word64),
+    -- | Use a fixed, source-derived seed so failures reproduce; ignored when
+    -- 'seed' is set.
     derandomize :: !Bool,
+    -- | Phases the server should execute, in order.
     phases :: ![Phase],
+    -- | When 'True', the server collects every distinct failure instead of
+    -- stopping at the first.
     reportMultipleFailures :: !Bool,
+    -- | Wire-protocol names of health checks to skip.
     suppressHealthCheck :: ![Text],
+    -- | Action run after each test case, on both success and failure.
     perCaseFinalizer :: !(IO ())
   }
 
@@ -93,6 +112,12 @@ instance Show Settings where
         . shows s.suppressHealthCheck
         . showString ", perCaseFinalizer = <<function>>}"
 
+-- | Defaults for a property run: 100 test cases, a fresh seed each run,
+-- all phases enabled, and no per-case finalizer.
+--
+-- Customize by overriding individual fields:
+--
+-- > defaultSettings { testCases = 1000 }
 defaultSettings :: Settings
 defaultSettings =
   Settings
@@ -134,7 +159,7 @@ newClient conn = do
 runTest ::
   Client ->
   Settings ->
-  Generator a ->
+  Gen a ->
   (a -> IO ()) ->
   IO (Outcome a)
 runTest client settings gen body = do
@@ -193,10 +218,6 @@ runTest client settings gen body = do
                     settings.perCaseFinalizer
   runAndInterpret `finally` closeStream testStream
 
--- ---------------------------------------------------------------------------
--- Internal test orchestration
--- ---------------------------------------------------------------------------
-
 data CaseResult a
   = CaseValid
   | CaseInvalid
@@ -206,7 +227,7 @@ runCase ::
   forall a.
   Connection ->
   Word32 ->
-  Generator a ->
+  Gen a ->
   (a -> IO ()) ->
   IO () ->
   IO (CaseResult a)
@@ -215,35 +236,34 @@ runCase conn sid gen body finalizer = run `finally` finalizer
     run = do
       (_, caseQ) <- connectStream conn sid
       caseStream <- mkStream conn sid caseQ
-      ds <- newDataSource caseStream
-      let tc = TestCase ds
+      let tc = TestCase caseStream
       eVal <-
         (Right <$> draw tc gen)
           `catches` [ Handler \AssumeRejected -> pure (Left Nothing),
-                      Handler \DataExhausted -> pure (Left Nothing),
+                      Handler \TestStopped -> pure (Left Nothing),
                       Handler \(e :: SomeException) -> pure (Left (Just e))
                     ]
       case eVal of
         Left Nothing -> pure CaseInvalid
         Left (Just exc) -> do
           let msg = originOf exc
-          markComplete ds (Interesting msg)
+          markComplete tc (Interesting msg)
           pure (CaseInteresting msg Nothing)
         Right val -> do
           eRes <- tryAny (body val)
           case eRes of
             Right () -> do
-              markComplete ds Valid
+              markComplete tc Valid
               pure CaseValid
             Left exc -> do
               let msg = originOf exc
-              markComplete ds (Interesting msg)
+              markComplete tc (Interesting msg)
               pure (CaseInteresting msg (Just val))
 
 runEventLoop ::
   Stream ->
   Connection ->
-  Generator a ->
+  Gen a ->
   (a -> IO ()) ->
   IO () ->
   IO (Value, Word64, Word64)
@@ -285,7 +305,7 @@ replayFinalCases ::
   Connection ->
   Int ->
   Int ->
-  Generator a ->
+  Gen a ->
   (a -> IO ()) ->
   IO () ->
   IO (Outcome a)
@@ -317,10 +337,6 @@ replayFinalCases testStream conn n nInvalid gen body finalizer = go n Nothing
             CaseInvalid -> go (k - 1) mFail
             CaseInteresting _ Nothing -> go (k - 1) mFail
             CaseInteresting msg (Just v) -> go (k - 1) (Just (v, msg))
-
--- ---------------------------------------------------------------------------
--- Version / handshake helpers
--- ---------------------------------------------------------------------------
 
 dropPrefix :: String -> String -> Maybe String
 dropPrefix [] ys = Just ys

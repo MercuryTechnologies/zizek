@@ -2,14 +2,13 @@ module GeneratorSchemas (spec) where
 
 import Data.Function ((&))
 import Data.List.NonEmpty (NonEmpty (..))
-import Hegel (runProperty_)
-import Hegel.Gen (Generator)
+import Hegel (Gen, runProperty_)
 import Hegel.Gen qualified as Gen
 import Hegel.Runner (defaultSettings)
 import Test.Hspec
 
-intR :: (Int, Int) -> Generator Int
-intR (lo, hi) = Gen.integer & Gen.min lo & Gen.max hi & Gen.build
+intR :: (Int, Int) -> Gen Int
+intR (lo, hi) = Gen.integral & Gen.min lo & Gen.max hi & Gen.build
 
 spec :: Spec
 spec = do

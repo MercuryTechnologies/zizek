@@ -1,13 +1,4 @@
--- | Call-stack-aware assertion helpers for use inside property bodies.
---
--- Designed for qualified import:
---
--- > import Hegel.Assertion qualified as Assertion
---
--- which brings @Assertion.assert@, @Assertion.failure@, and
--- @Assertion.originOf@ into scope. The runner uses 'originOf' to format the
--- @origin@ field on @mark_complete INTERESTING@ — see its haddock for the
--- protocol contract.
+-- | Call-stack-aware assertion helpers for property bodies.
 module Hegel.Assertion
   ( AssertionFailure (..),
     assert,

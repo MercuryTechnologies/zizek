@@ -1,5 +1,9 @@
 {-# LANGUAGE ViewPatterns #-}
 
+-- | Framed packet format used on the wire between the library and the
+-- @hegel@ child process: 20-byte big-endian header (magic, CRC32 checksum,
+-- stream id, message id, payload length), payload bytes, then a single
+-- newline terminator.
 module Hegel.Protocol.Packet
   ( Packet (..),
     readPacket,
@@ -28,10 +32,17 @@ pattern ReplyBit = 0x80000000
 packetHeaderSize :: Int
 packetHeaderSize = 20
 
+-- | A decoded wire packet.
 data Packet = Packet
-  { stream :: !Word32,
+  { -- | Stream ID; used by the connection layer to route packets to the
+    -- right inbox.
+    streamId :: !Word32,
+    -- | Per-stream request/reply ID.
     messageId :: !Word32,
+    -- | 'True' if this is a reply to an earlier request, 'False' if it
+    -- initiates a new exchange.
     isReply :: !Bool,
+    -- | Raw payload bytes (typically a CBOR-encoded message).
     payload :: !ByteString
   }
   deriving stock (Show)
@@ -86,6 +97,7 @@ verifyChecksum hdr body stored = do
     then throwIO ChecksumMismatch
     else pure ()
 
+-- | Encode and write a packet to the handle, flushing afterwards.
 writePacket :: Handle -> Packet -> IO ()
 writePacket h pkt = do
   let wireId = if pkt.isReply then pkt.messageId .|. ReplyBit else pkt.messageId
@@ -94,7 +106,7 @@ writePacket h pkt = do
         BS.pack $
           w32be Magic
             <> [0, 0, 0, 0]
-            <> w32be pkt.stream
+            <> w32be pkt.streamId
             <> w32be wireId
             <> w32be payLen
   let checksum = crc32 (hdr <> pkt.payload)
@@ -107,6 +119,8 @@ writePacket h pkt = do
   BS.hPut h (BS.singleton Terminator)
   hFlush h
 
+-- | Read one packet from the handle, validating magic, checksum, and
+-- terminator. Throws a 'ProtocolError' on any of those checks.
 readPacket :: Handle -> IO Packet
 readPacket h = do
   hdr <- BS.hGet h packetHeaderSize
@@ -117,5 +131,5 @@ readPacket h = do
       verifyChecksum hdr body storedCsum
       let isRep = rawId .&. ReplyBit /= 0
       let msgId = rawId .&. complement ReplyBit
-      pure Packet {stream = sid, messageId = msgId, isReply = isRep, payload = body}
+      pure Packet {streamId = sid, messageId = msgId, isReply = isRep, payload = body}
     _ -> throwIO (BadMagic (beWord32 hdr 0))

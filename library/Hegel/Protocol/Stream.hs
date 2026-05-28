@@ -1,18 +1,27 @@
+-- | A single logical stream multiplexed over a 'Connection'. Handles
+-- request/reply correlation, server-initiated request delivery, and stream
+-- close.
 module Hegel.Protocol.Stream
-  ( Stream,
-    PendingRequest,
+  ( -- * Stream
+    Stream,
     mkStream,
-    streamId,
+    closeStream,
+
+    -- * Client-initiated requests
     sendRequest,
     request,
     await,
     requestRaw,
+    PendingRequest,
+
+    -- * CBOR requests
+    requestCbor,
     requestCborPending,
     awaitCbor,
-    requestCbor,
-    writeReply,
+
+    -- * Server-initiated requests
     receiveRequest,
-    closeStream,
+    writeReply,
   )
 where
 
@@ -51,6 +60,10 @@ closeStreamPayload = BS.singleton 0xFE
 closeStreamMessageId :: Word32
 closeStreamMessageId = (1 `shiftL` 31) - 1
 
+-- | One logical stream's state: its ID, the underlying connection, the
+-- inbox the connection's reader writes into, an ID counter for outgoing
+-- requests, buffers for unmatched replies and server-initiated requests,
+-- and a closed flag.
 data Stream = Stream
   { streamId :: !Word32,
     connection :: !Connection,
@@ -69,6 +82,7 @@ data PendingRequest = PendingRequest
     prCached :: !(IORef (Maybe ByteString))
   }
 
+-- | Wrap a connection-allocated stream ID and inbox in a fresh 'Stream'.
 mkStream :: Connection -> Word32 -> TBQueue Packet -> IO Stream
 mkStream connection streamId inbox = do
   nextMessageId <- newTVarIO 1
@@ -79,35 +93,35 @@ mkStream connection streamId inbox = do
 
 -- | Fire-and-forget send. Silently no-ops when the stream is closed.
 sendRequest :: Stream -> ByteString -> IO ()
-sendRequest s pay = do
+sendRequest s payload = do
   isClosed <- readTVarIO s.closed
   if isClosed
     then pure ()
     else do
-      mid <- atomically $ do
+      messageId <- atomically $ do
         mid <- readTVar s.nextMessageId
         writeTVar s.nextMessageId (mid + 1)
         pure mid
       sendPacket
         s.connection
-        Packet {stream = s.streamId, messageId = mid, isReply = False, payload = pay}
+        Packet {streamId = s.streamId, messageId, isReply = False, payload}
 
 -- | Send a request and return a handle to the pending reply without blocking.
 request :: Stream -> ByteString -> IO PendingRequest
-request s pay = do
+request s payload = do
   isClosed <- readTVarIO s.closed
   if isClosed
     then throwIO StreamClosed
     else do
-      mid <- atomically $ do
+      messageId <- atomically $ do
         mid <- readTVar s.nextMessageId
         writeTVar s.nextMessageId (mid + 1)
         pure mid
       sendPacket
         s.connection
-        Packet {stream = s.streamId, messageId = mid, isReply = False, payload = pay}
+        Packet {streamId = s.streamId, messageId, isReply = False, payload}
       ref <- newIORef Nothing
-      pure PendingRequest {prStream = s, prMessageId = mid, prCached = ref}
+      pure PendingRequest {prStream = s, prMessageId = messageId, prCached = ref}
 
 -- | Block until the reply to a pending request arrives. Caches the result;
 -- idempotent.
@@ -148,7 +162,7 @@ drainUntilReply s mid = do
 
 -- | Send a raw request and block until the matching reply arrives.
 requestRaw :: Stream -> ByteString -> IO ByteString
-requestRaw s pay = request s pay >>= await
+requestRaw s payload = request s payload >>= await
 
 -- | Send a CBOR-encoded request and return a 'PendingRequest' handle.
 requestCborPending :: Stream -> Value -> IO PendingRequest
@@ -171,11 +185,13 @@ awaitCbor pr = do
 requestCbor :: Stream -> Value -> IO Value
 requestCbor s msg = requestCborPending s msg >>= awaitCbor
 
+-- | Reply to a server-initiated request with the given message ID and
+-- payload.
 writeReply :: Stream -> Word32 -> ByteString -> IO ()
-writeReply s mid pay =
+writeReply s messageId payload =
   sendPacket
     s.connection
-    Packet {stream = s.streamId, messageId = mid, isReply = True, payload = pay}
+    Packet {streamId = s.streamId, messageId, isReply = True, payload}
 
 -- | Receive the next server-initiated request on this stream.
 receiveRequest :: Stream -> IO (Word32, ByteString)
@@ -213,7 +229,7 @@ closeStream s = do
       sendPacket
         s.connection
         Packet
-          { stream = s.streamId,
+          { streamId = s.streamId,
             messageId = closeStreamMessageId,
             isReply = False,
             payload = closeStreamPayload

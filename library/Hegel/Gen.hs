@@ -1,27 +1,23 @@
--- | Umbrella module for generator combinators.
+-- | Generator combinators, designed for qualified import as @Gen@.
 --
--- Designed for qualified import:
+-- Build a generator by chaining modifiers onto a builder and materialising
+-- with 'build':
 --
+-- > import Data.Function ((&))
 -- > import Hegel.Gen qualified as Gen
+-- >
+-- > gen1 = Gen.bool                                              & Gen.build
+-- > gen2 = Gen.integral @Int & Gen.min 0 & Gen.max 100           & Gen.build
+-- > gen3 = Gen.double & Gen.min 0 & Gen.max 1 & Gen.disallowNan  & Gen.build
+-- > gen4 = Gen.binary & Gen.minSize 4 & Gen.maxSize 64           & Gen.build
 --
--- which brings @Gen.bool@, @Gen.integer@, @Gen.double@, @Gen.build@, etc.
--- into scope. Build a generator by chaining modifiers and materialising with
--- @Gen.build@:
+-- Applying a modifier that doesn't belong to a builder (e.g.
+-- @Gen.integral & Gen.disallowNan@) is a type error.
 --
--- > -- simplest form
--- > gen1 = Gen.bool & Gen.build
--- >
--- > -- numeric bounds
--- > gen2 = Gen.integer @Int & Gen.min 0 & Gen.max 100 & Gen.build
--- >
--- > -- float with constraints
--- > gen3 = Gen.double & Gen.min 0 & Gen.max 1 & Gen.disallowNan & Gen.build
--- >
--- > -- sized binary
--- > gen4 = Gen.binary & Gen.minSize 4 & Gen.maxSize 64 & Gen.build
+-- Enable @ApplicativeDo@ for component-wise shrinking of independent draws
+-- in do-notation.
 module Hegel.Gen
   ( -- * Core types
-    Generator,
     BasicGenerator (..),
     pattern Schema,
 
@@ -35,9 +31,9 @@ module Hegel.Gen
     BoolBuilder,
     bool,
 
-    -- * Integer
-    IntegerBuilder,
-    integer,
+    -- * Integral
+    IntegralBuilder,
+    integral,
     int,
     int8,
     int16,
@@ -102,7 +98,7 @@ import Hegel.Gen.Float
     float,
   )
 import Hegel.Gen.Integer
-  ( IntegerBuilder,
+  ( IntegralBuilder,
     enum,
     enumBounded,
     int,
@@ -110,7 +106,7 @@ import Hegel.Gen.Integer
     int32,
     int64,
     int8,
-    integer,
+    integral,
     word,
     word16,
     word32,
@@ -120,7 +116,6 @@ import Hegel.Gen.Integer
 import Hegel.Gen.Internal
   ( AssumeRejected (..),
     BasicGenerator (..),
-    Generator,
     UnexpectedResponse (..),
     assume,
     discard,

@@ -7,8 +7,8 @@ import Data.List.NonEmpty qualified as NE
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Generics (Generic)
+import Hegel (Gen)
 import Hegel.Gen qualified as Gen
-import Hegel.Gen.Internal (Generator)
 import System.Exit (die)
 
 data Range = Range {minValue :: Int, maxValue :: Int}
@@ -29,8 +29,8 @@ instance FromJSON Params where
 instance ToJSON Metrics where
   toJSON = genericToJSON aesonOpts
 
-branch :: Range -> Generator Int
-branch r = Gen.integer @Int & Gen.min r.minValue & Gen.max r.maxValue & Gen.build
+branch :: Range -> Gen Int
+branch r = Gen.integral @Int & Gen.min r.minValue & Gen.max r.maxValue & Gen.build
 
 main :: IO ()
 main = do

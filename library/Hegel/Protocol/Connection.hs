@@ -1,14 +1,21 @@
+-- | Connection layer: a single duplex pipe to the @hegel@ child process,
+-- multiplexed across many logical streams.
 module Hegel.Protocol.Connection
-  ( Connection,
+  ( -- * Connection
+    Connection,
     newConnection,
+    sendPacket,
+
+    -- * Streams
     controlStream,
     newStream,
     connectStream,
     unregisterStream,
+
+    -- * Exit signalling
     awaitServerExited,
     markServerExited,
     serverHasExited,
-    sendPacket,
   )
 where
 
@@ -22,8 +29,16 @@ import StmContainers.Map (Map)
 import StmContainers.Map qualified as Map
 import System.IO (Handle)
 import UnliftIO.Exception (tryAny)
+import Numeric.Natural (Natural)
 import UnliftIO.MVar (MVar, newMVar, withMVar)
 
+-- | Per-stream inbox capacity.
+streamInboxCapacity :: Natural
+streamInboxCapacity = 128
+
+-- | A connection to @hegel@. A background reader routes incoming packets
+-- to per-stream inbound queues; all writes go through a single shared
+-- writer.
 data Connection = Connection
   { connWriter :: !(MVar Handle),
     connStreams :: !(Map Word32 (TBQueue Packet)),
@@ -31,6 +46,8 @@ data Connection = Connection
     connExited :: !(TVar Bool)
   }
 
+-- | Create a 'Connection' from a read/write handle pair and spawn the
+-- background reader.
 newConnection :: Handle -> Handle -> IO Connection
 newConnection rh wh = do
   writer <- newMVar wh
@@ -53,18 +70,20 @@ readerLoop conn rh = go
           Map.reset conn.connStreams
         Right pkt -> do
           atomically do
-            mq <- Map.lookup pkt.stream conn.connStreams
+            mq <- Map.lookup pkt.streamId conn.connStreams
             case mq of
               Just q -> writeTBQueue q pkt
               Nothing -> pure ()
           go
 
+-- | Register an inbox for the control stream (ID 0).
 controlStream :: Connection -> IO (Word32, TBQueue Packet)
 controlStream conn = (0,) <$> registerQueue conn 0
 
+-- | Allocate a fresh client-initiated stream ID and register its inbox.
 newStream :: Connection -> IO (Word32, TBQueue Packet)
 newStream conn = do
-  q <- newTBQueueIO 128
+  q <- newTBQueueIO streamInboxCapacity
   sid <- atomically do
     n <- readTVar conn.connNextId
     let sid = (n `shiftL` 1) .|. 1
@@ -73,20 +92,23 @@ newStream conn = do
     pure sid
   pure (sid, q)
 
+-- | Register an inbox for a server-initiated stream with the given ID.
 connectStream :: Connection -> Word32 -> IO (Word32, TBQueue Packet)
 connectStream conn sid = (sid,) <$> registerQueue conn sid
 
 registerQueue :: Connection -> Word32 -> IO (TBQueue Packet)
 registerQueue conn sid = do
-  q <- newTBQueueIO 128
+  q <- newTBQueueIO streamInboxCapacity
   atomically $ Map.insert q sid conn.connStreams
   pure q
 
+-- | Remove a stream's inbox from the routing table.
 unregisterStream :: Connection -> Word32 -> IO ()
 unregisterStream conn sid =
   atomically $ Map.delete sid conn.connStreams
 
--- | Retry (block) until the server exits. For use with 'orElse' in STM.
+-- | Block until the server exits. Composes with 'orElse' for STM reads
+-- that should be interrupted by the server going away.
 awaitServerExited :: Connection -> STM ()
 awaitServerExited conn = do
   exited <- readTVar conn.connExited

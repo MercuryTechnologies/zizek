@@ -20,8 +20,7 @@ import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BL
 import Data.Char (isUpper, toLower)
 import Data.IORef (newIORef, readIORef, writeIORef)
-import Hegel (closeSession, globalSession, runProperty)
-import Hegel.Gen.Internal (Generator)
+import Hegel (Gen, closeSession, globalSession, runProperty)
 import Hegel.Outcome (Outcome (..))
 import Hegel.Runner (Settings (..), defaultSettings)
 import System.Environment (getArgs, getProgName, lookupEnv)
@@ -105,12 +104,12 @@ writeEmptyMetrics = writeMetrics (object [])
 -- CBOR schema path.
 --
 -- See the Rust analogue: @hegel_conformance::maybe_non_basic@.
-nonBasic :: String -> Generator a -> Generator a
+nonBasic :: String -> Gen a -> Gen a
 nonBasic "non_basic" g = g >>= pure
 nonBasic _ g = g
 
 -- | Standard conformance runner: exits non-zero on any non-passing outcome.
-runConformanceProperty :: Generator a -> (a -> IO ()) -> IO ()
+runConformanceProperty :: Gen a -> (a -> IO ()) -> IO ()
 runConformanceProperty gen body = run `finally` closeSession globalSession
   where
     run = do
@@ -143,7 +142,7 @@ runConformanceProperty gen body = run `finally` closeSession globalSession
 runConformancePropertyPaired ::
   forall a m.
   (ToJSON m) =>
-  Generator a ->
+  Gen a ->
   (a -> Maybe m) ->
   IO ()
 runConformancePropertyPaired gen toMetric =
@@ -185,7 +184,7 @@ runConformancePropertyPaired gen toMetric =
 --
 -- Exits zero on 'Passed', 'Failed', or 'Rejected'; only 'Errored' or
 -- 'UnhealthyInput' (binary-level breakage) propagate as a non-zero exit.
-runConformancePropertyExpectFailures :: Generator a -> (a -> IO ()) -> IO ()
+runConformancePropertyExpectFailures :: Gen a -> (a -> IO ()) -> IO ()
 runConformancePropertyExpectFailures gen body = run `finally` closeSession globalSession
   where
     run = do

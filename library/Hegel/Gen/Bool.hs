@@ -1,3 +1,4 @@
+-- | Boolean generator.
 module Hegel.Gen.Bool
   ( BoolBuilder,
     bool,
@@ -11,6 +12,7 @@ import Hegel.Protocol.Cbor (ParseError (..), buildMap, textVal)
 
 data BoolBuilder = BoolBuilder
 
+-- | Generate a random boolean.
 bool :: BoolBuilder
 bool = BoolBuilder
 

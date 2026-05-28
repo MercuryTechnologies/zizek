@@ -1,12 +1,16 @@
+-- | Lifecycle management for the @hegel@ child process.
 module Hegel.Session
-  ( Session,
-    SessionConfig (..),
-    defaultSessionConfig,
+  ( -- * Sessions
+    Session,
     globalSession,
     openSession,
     withSession,
     closeSession,
     invalidateSession,
+
+    -- * Configuration
+    SessionConfig (..),
+    defaultSessionConfig,
   )
 where
 

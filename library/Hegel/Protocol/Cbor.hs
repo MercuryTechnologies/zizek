@@ -1,13 +1,22 @@
+-- | Constructors and accessors for working with CBOR 'Value's at the wire
+-- layer.
 module Hegel.Protocol.Cbor
-  ( ParseError (..),
+  ( -- * Errors
+    ParseError (..),
+
+    -- * Maps
     lookupKey,
     buildMap,
+
+    -- * Constructors
     textVal,
     intVal,
     floatVal,
     doubleVal,
     boolVal,
     nullVal,
+
+    -- * Accessors
     asText,
     asInt,
     asBool,
@@ -22,14 +31,18 @@ import Data.Text (Text)
 import Data.Vector qualified as V
 import Data.Word (Word32, Word64)
 
+-- | A CBOR 'Value' didn't match an expected shape.
 data ParseError = ParseError
-  { expected :: !Text,
+  { -- | Human-readable description of the expected shape.
+    expected :: !Text,
+    -- | The value that was actually received.
     got :: !Value
   }
   deriving stock (Show)
 
 instance Exception ParseError
 
+-- | Look up a 'TextString' key in a CBOR 'Map'.
 lookupKey :: Text -> Value -> Maybe Value
 lookupKey key (Map entries) =
   V.foldr step Nothing entries
@@ -38,6 +51,7 @@ lookupKey key (Map entries) =
     step _ acc = acc
 lookupKey _ _ = Nothing
 
+-- | Build a CBOR 'Map' from key/value pairs.
 buildMap :: [(Text, Value)] -> Value
 buildMap pairs = Map (V.fromList [(TextString k, v) | (k, v) <- pairs])
 

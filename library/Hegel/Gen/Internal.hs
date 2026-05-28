@@ -2,13 +2,9 @@
 {-# LANGUAGE PatternSynonyms #-}
 
 -- | Core generator machinery.
---
--- Enable @ApplicativeDo@ in modules that build generators to get better
--- shrinking for independent draws.
 module Hegel.Gen.Internal
   ( -- * Generator type
-    -- $generator
-    Generator,
+    Gen (..),
     BasicGenerator (..),
     pattern Schema,
 
@@ -39,53 +35,66 @@ import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Vector qualified as V
-import Hegel.DataSource
-  ( Label (..),
-    Status (..),
-    generate,
-    markComplete,
-    startSpan,
-    stopSpan,
-  )
 import Hegel.Protocol.Cbor
   ( ParseError (..),
     buildMap,
     intVal,
     textVal,
   )
-import Hegel.TestCase (TestCase (..))
+import Hegel.TestCase
+  ( Label (..),
+    Status (..),
+    TestCase (..),
+    generate,
+    markComplete,
+    startSpan,
+    stopSpan,
+  )
 import Prelude hiding (either, maybe)
 
--- $generator
--- A 'Generator' describes how to produce a value for a test case; generators
--- compose via the standard 'Functor', 'Applicative', and 'Monad' interfaces.
-
--- | A 'Generator' that can be expressed as a single schema request to
--- @hegel-core@. Construct one with the 'Schema' pattern synonym.
---
--- The @schema@ field is the CBOR schema sent to the server; @parse@ converts
--- the server's response back to @a@.
+-- | A 'Gen' that can be expressed as a single schema request to
+-- @hegel@. Construct one with the 'Schema' pattern synonym.
 data BasicGenerator a = BasicGenerator
-  { schema :: !Value,
+  { -- | CBOR schema sent to the server.
+    schema :: !Value,
+    -- | Converts the server's response back to @a@.
     parse :: Value -> Either ParseError a
   }
 
 instance Functor BasicGenerator where
   fmap f bg = bg {parse = fmap f . bg.parse}
 
-data Generator a where
-  Pure :: a -> Generator a
-  Basic :: BasicGenerator a -> Generator a
-  Draw :: (TestCase -> IO a) -> Generator a
-  Map :: !(Maybe (BasicGenerator a)) -> (b -> a) -> Generator b -> Generator a
-  Ap :: !(Maybe (BasicGenerator a)) -> Generator (b -> a) -> Generator b -> Generator a
-  Bind :: Generator b -> (b -> Generator a) -> Generator a
-  OneOf :: !(Maybe (BasicGenerator a)) -> NonEmpty (Generator a) -> Generator a
+-- | A generator that produces values of type @a@.
+--
+-- Each constructor represents a different generation strategy. When the
+-- whole tree can be expressed as a single basic schema, the runner sends
+-- one request; otherwise it falls back to step-by-step interactive
+-- generation.
+data Gen a where
+  -- | A pre-computed constant. Contributes no schema element.
+  Pure :: a -> Gen a
+  -- | A single round-trip schema request.
+  Basic :: BasicGenerator a -> Gen a
+  -- | Arbitrary client-side action over a 'TestCase'; used for combinators
+  -- (e.g. 'filtered', 'frequency') that don't fit a basic schema.
+  Draw :: (TestCase -> IO a) -> Gen a
+  -- | 'fmap' over a source generator, carrying a precomputed basic
+  -- representation when the source is itself basic.
+  Map :: !(Maybe (BasicGenerator a)) -> (b -> a) -> Gen b -> Gen a
+  -- | Applicative composition: independent draws. Carries a precomputed
+  -- basic representation (a @tuple@ schema) when both sides are basic.
+  Ap :: !(Maybe (BasicGenerator a)) -> Gen (b -> a) -> Gen b -> Gen a
+  -- | Monadic composition: dependent draws. Always falls back to
+  -- interactive generation.
+  Bind :: Gen b -> (b -> Gen a) -> Gen a
+  -- | Choice among generators. Carries a precomputed basic representation
+  -- (a @one_of@ schema) when every branch is basic.
+  OneOf :: !(Maybe (BasicGenerator a)) -> NonEmpty (Gen a) -> Gen a
 
--- | Pattern synonym for constructing a 'BasicGenerator' directly from a CBOR
--- schema and a parse function. See 'Hegel.Gen.Integer.integer' for a
--- worked example.
-pattern Schema :: Value -> (Value -> Either ParseError a) -> Generator a
+-- | Construct a 'BasicGenerator' from a CBOR schema and a parse function.
+--
+-- See 'Hegel.Gen.Bool.bool' for a worked example.
+pattern Schema :: Value -> (Value -> Either ParseError a) -> Gen a
 pattern Schema s p = Basic (BasicGenerator s p)
 
 unitSchema :: Value
@@ -105,20 +114,25 @@ oneOfSchema gs =
       ("generators", Array (V.fromList (NE.toList gs)))
     ]
 
--- Smart constructors that precompute the basic representation at build time.
+toBasic :: Gen a -> Maybe (BasicGenerator a)
+toBasic (Basic bg) = Just bg
+toBasic (Pure a) = Just (BasicGenerator unitSchema (\_ -> Right a))
+toBasic (Map c _ _) = c
+toBasic (Ap c _ _) = c
+toBasic (OneOf c _) = c
+toBasic _ = Nothing
 
-mkMap :: (b -> a) -> Generator b -> Generator a
-mkMap f (Pure a) = Pure (f a)
-mkMap f (Basic bg) = Basic (fmap f bg)
-mkMap f (Map _ g x) = mkMap (f . g) x
-mkMap f g = Map (fmap f <$> toBasic g) f g
+instance Functor Gen where
+  fmap f (Pure a) = Pure (f a)
+  fmap f (Basic bg) = Basic (fmap f bg)
+  fmap f (Map _ g x) = fmap (f . g) x
+  fmap f g = Map (fmap f <$> toBasic g) f g
 
-mkAp :: Generator (b -> a) -> Generator b -> Generator a
-mkAp gf ga = Ap (basicAp gf ga) gf ga
-
--- | 'Pure' on either side is transparent: it contributes no schema element
--- and the combined generator reduces to a plain fmap of the other side.
-basicAp :: Generator (b -> a) -> Generator b -> Maybe (BasicGenerator a)
+-- The basic-schema equivalent of @gf '<*>' ga@, when one exists.
+--
+-- Two basic generators combine into a single tuple-schema request; if
+-- either side isn't basic, returns 'Nothing'.
+basicAp :: Gen (b -> a) -> Gen b -> Maybe (BasicGenerator a)
 basicAp (Pure f) ga = fmap f <$> toBasic ga
 basicAp gf (Pure a) = fmap ($ a) <$> toBasic gf
 basicAp gf ga = do
@@ -134,10 +148,166 @@ basicAp gf ga = do
       p v = Left ParseError {expected = "2-element array", got = v}
   pure (BasicGenerator sch p)
 
-mkOneOf :: NonEmpty (Generator a) -> Generator a
-mkOneOf gens = OneOf (basicOneOf gens) gens
+-- | @('<*>')@ and @('>>=')@ have deliberately different semantics:
+--
+-- * @('<*>')@ treats draws as independent: @hegel@ gets to shrink each
+--   component separately. When both sides are basic it collapses to a single
+--   request; otherwise it wraps the draws in a @TUPLE@ span.
+-- * @('>>=')@ treats draws as dependent: the second draw may vary with the
+--   first, so the two are grouped in a @FLAT_MAP@ span.
+instance Applicative Gen where
+  pure = Pure
+  (<*>) gf ga = Ap (basicAp gf ga) gf ga
 
-basicOneOf :: NonEmpty (Generator a) -> Maybe (BasicGenerator a)
+instance Monad Gen where
+  (>>=) = Bind
+
+runBasic :: TestCase -> BasicGenerator a -> IO a
+runBasic tc bg = do
+  raw <- generate tc bg.schema
+  case bg.parse raw of
+    Right a -> pure a
+    Left err -> throwIO UnexpectedResponse {sentSchema = bg.schema, received = raw, cause = err}
+
+-- Count non-'Pure' leaves in an 'Ap' spine, to decide whether a TUPLE span
+-- is needed: fewer than 2 real draws don't require one.
+apLeafCount :: Gen a -> Int
+apLeafCount (Ap _ gf ga) =
+  apLeafCount gf + case ga of
+    Pure _ -> 0
+    _ -> 1
+apLeafCount (Pure _) = 0
+apLeafCount _ = 1
+
+-- Recursively run the leaves of an @Ap@ spine left-to-right, applying
+-- the accumulated function. Used for the non-basic fallback path.
+runApSpine :: TestCase -> Gen a -> IO a
+runApSpine tc (Ap _ gf ga) = do
+  f <- runApSpine tc gf
+  a <- runGenerator tc ga
+  pure (f a)
+runApSpine tc g = runGenerator tc g
+
+runGenerator :: TestCase -> Gen a -> IO a
+runGenerator _ (Pure a) = pure a
+runGenerator tc g = case toBasic g of
+  Just bg -> runBasic tc bg
+  Nothing -> runInteractive tc g
+
+runInteractive :: TestCase -> Gen a -> IO a
+runInteractive tc (Draw f) = f tc
+runInteractive tc (Map _ f g) = do
+  startSpan tc LabelMapped
+  a <- runGenerator tc g
+  stopSpan tc False
+  pure (f a)
+runInteractive tc node@(Ap _ _ _)
+  | apLeafCount node < 2 = runApSpine tc node
+  | otherwise = do
+      startSpan tc LabelTuple
+      a <- runApSpine tc node
+      stopSpan tc False
+      pure a
+runInteractive tc (Bind (Pure a) f) = runGenerator tc (f a)
+runInteractive tc (Bind g f) = do
+  startSpan tc LabelFlatMap
+  a <- runGenerator tc g
+  b <- runGenerator tc (f a)
+  stopSpan tc False
+  pure b
+runInteractive tc (OneOf _ gens) = do
+  let n = NE.length gens
+      indexSchema =
+        buildMap
+          [ ("type", textVal "integer"),
+            ("min_value", intVal (0 :: Int)),
+            ("max_value", intVal (n - 1))
+          ]
+  startSpan tc LabelOneOf
+  raw <- generate tc indexSchema
+  i <- case parseIndex raw of
+    Right k -> pure k
+    Left err -> throwIO UnexpectedResponse {sentSchema = indexSchema, received = raw, cause = err}
+  v <- runGenerator tc (NE.toList gens !! i)
+  stopSpan tc False
+  pure v
+runInteractive _ (Pure a) = pure a
+runInteractive tc (Basic bg) = runBasic tc bg
+
+parseIndex :: Value -> Either ParseError Int
+parseIndex (UInt n) = Right (fromIntegral n)
+parseIndex (NInt n) = Right (fromIntegral (negate (fromIntegral n :: Integer) - 1))
+parseIndex v = Left ParseError {expected = "integer", got = v}
+
+-- $combinators
+-- Combinators for filtering and choosing between generators. Discarded test
+-- cases are reported to @hegel@ as invalid rather than failing.
+
+-- | Run a generator against a live test case, producing a value. May throw
+-- 'AssumeRejected' (via 'assume', 'discard', or an exhausted 'filtered'
+-- retry budget) or 'UnexpectedResponse' on an unparseable server reply.
+draw :: TestCase -> Gen a -> IO a
+draw = runGenerator
+
+-- | Discard the current test case when the condition is 'False'. Use this to
+-- enforce preconditions on generated values without counting the case as a
+-- failure.
+assume :: Bool -> Gen ()
+assume True = Pure ()
+assume False = Draw \tc -> do
+  markComplete tc Invalid
+  throwIO AssumeRejected
+
+-- | Discard the current test case unconditionally. Polymorphic in the result
+-- type so it can appear anywhere in a monadic generator expression.
+discard :: Gen a
+discard = Draw \tc -> do
+  markComplete tc Invalid
+  throwIO AssumeRejected
+
+-- | Apply a function to values drawn from a generator, retrying up to 3 times
+-- when the function returns 'Nothing'. Discards the test case when all retries
+-- are exhausted.
+mapMaybe :: (a -> Prelude.Maybe b) -> Gen a -> Gen b
+mapMaybe f g = Draw \tc -> go tc (3 :: Int)
+  where
+    go tc n = do
+      startSpan tc LabelFilter
+      v <- runGenerator tc g
+      case f v of
+        Prelude.Just b -> stopSpan tc False *> pure b
+        Prelude.Nothing -> do
+          stopSpan tc True
+          if n > 1
+            then go tc (n - 1)
+            else markComplete tc Invalid *> throwIO AssumeRejected
+
+-- | Draw a 'Just' value from a 'Maybe' generator, discarding test cases where
+-- 'Nothing' is drawn.
+just :: Gen (Prelude.Maybe a) -> Gen a
+just = mapMaybe Prelude.id
+
+-- | Filter values drawn from a generator, retrying up to 3 times before
+-- discarding the test case. Exhaustion is treated as 'assume' 'False'.
+filtered :: (a -> Bool) -> Gen a -> Gen a
+filtered p g = Draw \tc -> go tc (3 :: Int)
+  where
+    go tc n = do
+      startSpan tc LabelFilter
+      v <- runGenerator tc g
+      if p v
+        then stopSpan tc False *> pure v
+        else do
+          stopSpan tc True
+          if n > 1
+            then go tc (n - 1)
+            else markComplete tc Invalid *> throwIO AssumeRejected
+
+-- The basic-schema equivalent of @oneOf gens@, when one exists.
+--
+-- Combines the branches into a single @one_of@ schema; if any branch
+-- isn't basic, returns 'Nothing'.
+basicOneOf :: NonEmpty (Gen a) -> Maybe (BasicGenerator a)
 basicOneOf gens = do
   bs <- traverse toBasic gens
   let sch = oneOfSchema (fmap (.schema) bs)
@@ -157,190 +327,17 @@ basicOneOf gens = do
       p v = Left ParseError {expected = "[index, value] array", got = v}
   pure (BasicGenerator sch p)
 
-toBasic :: Generator a -> Maybe (BasicGenerator a)
-toBasic (Basic bg) = Just bg
-toBasic (Pure a) = Just (BasicGenerator unitSchema (\_ -> Right a))
-toBasic (Map c _ _) = c
-toBasic (Ap c _ _) = c
-toBasic (OneOf c _) = c
-toBasic _ = Nothing
-
-instance Functor Generator where
-  fmap = mkMap
-
--- | @('<*>')@ and @('>>=')@ have deliberately different semantics:
---
--- * @('<*>')@ treats draws as independent: @hegel-core@ gets to shrink each
---   component separately. When both sides are basic it collapses to a single
---   request; otherwise it wraps the draws in a @TUPLE@ span.
--- * @('>>=')@ treats draws as dependent: the second draw may vary with the
---   first, so the two are grouped in a @FLAT_MAP@ span.
-instance Applicative Generator where
-  pure = Pure
-  (<*>) = mkAp
-
-instance Monad Generator where
-  (>>=) = Bind
-
-runBasic :: TestCase -> BasicGenerator a -> IO a
-runBasic tc bg = do
-  raw <- generate tc.dataSource bg.schema
-  case bg.parse raw of
-    Right a -> pure a
-    Left err -> throwIO UnexpectedResponse {sentSchema = bg.schema, received = raw, cause = err}
-
--- | Count non-'Pure' leaves in an 'Ap' spine, to decide whether a TUPLE span
--- is needed: fewer than 2 real draws don't require one.
-apLeafCount :: Generator a -> Int
-apLeafCount (Ap _ gf ga) =
-  apLeafCount gf + case ga of
-    Pure _ -> 0
-    _ -> 1
-apLeafCount (Pure _) = 0
-apLeafCount _ = 1
-
--- | Recursively run the leaves of an @Ap@ spine left-to-right, applying
--- the accumulated function. Used for the non-basic fallback path.
-runApSpine :: TestCase -> Generator a -> IO a
-runApSpine tc (Ap _ gf ga) = do
-  f <- runApSpine tc gf
-  a <- runGenerator tc ga
-  pure (f a)
-runApSpine tc g = runGenerator tc g
-
-runGenerator :: TestCase -> Generator a -> IO a
-runGenerator _ (Pure a) = pure a
-runGenerator tc g = case toBasic g of
-  Just bg -> runBasic tc bg
-  Nothing -> runInteractive tc g
-
-runInteractive :: TestCase -> Generator a -> IO a
-runInteractive tc (Draw f) = f tc
-runInteractive tc (Map _ f g) = do
-  startSpan tc.dataSource LabelMapped
-  a <- runGenerator tc g
-  stopSpan tc.dataSource False
-  pure (f a)
-runInteractive tc node@(Ap _ _ _)
-  | apLeafCount node < 2 = runApSpine tc node
-  | otherwise = do
-      startSpan tc.dataSource LabelTuple
-      a <- runApSpine tc node
-      stopSpan tc.dataSource False
-      pure a
-runInteractive tc (Bind (Pure a) f) = runGenerator tc (f a)
-runInteractive tc (Bind g f) = do
-  startSpan tc.dataSource LabelFlatMap
-  a <- runGenerator tc g
-  b <- runGenerator tc (f a)
-  stopSpan tc.dataSource False
-  pure b
-runInteractive tc (OneOf _ gens) = do
-  let n = NE.length gens
-      indexSchema =
-        buildMap
-          [ ("type", textVal "integer"),
-            ("min_value", intVal (0 :: Int)),
-            ("max_value", intVal (n - 1))
-          ]
-  startSpan tc.dataSource LabelOneOf
-  raw <- generate tc.dataSource indexSchema
-  i <- case parseIndex raw of
-    Right k -> pure k
-    Left err -> throwIO UnexpectedResponse {sentSchema = indexSchema, received = raw, cause = err}
-  v <- runGenerator tc (NE.toList gens !! i)
-  stopSpan tc.dataSource False
-  pure v
-runInteractive _ (Pure a) = pure a
-runInteractive tc (Basic bg) = runBasic tc bg
-
-parseIndex :: Value -> Either ParseError Int
-parseIndex (UInt n) = Right (fromIntegral n)
-parseIndex (NInt n) = Right (fromIntegral (negate (fromIntegral n :: Integer) - 1))
-parseIndex v = Left ParseError {expected = "integer", got = v}
-
--- $combinators
--- Combinators for filtering and choosing between generators. Discarded test
--- cases are reported to @hegel-core@ as invalid rather than failing.
-
--- | Run a generator against a live test case, producing a value. May throw
--- 'InvalidTestCase' (via 'assume' or 'filtered') or 'UnexpectedResponse' if
--- the server returns a value that cannot be parsed.
-draw :: TestCase -> Generator a -> IO a
-draw = runGenerator
-
--- | Discard the current test case when the condition is 'False'. Use this to
--- enforce preconditions on generated values without counting the case as a
--- failure.
-assume :: Bool -> Generator ()
-assume True = Pure ()
-assume False = Draw \tc -> do
-  markComplete tc.dataSource Invalid
-  throwIO AssumeRejected
-
--- | Discard the current test case unconditionally. Polymorphic in the result
--- type so it can appear anywhere in a monadic generator expression.
-discard :: Generator a
-discard = Draw \tc -> do
-  markComplete tc.dataSource Invalid
-  throwIO AssumeRejected
-
--- | Apply a function to values drawn from a generator, retrying up to 3 times
--- when the function returns 'Nothing'. Discards the test case when all retries
--- are exhausted.
-mapMaybe :: (a -> Prelude.Maybe b) -> Generator a -> Generator b
-mapMaybe f g = Draw \tc -> go tc (3 :: Int)
-  where
-    go tc n = do
-      startSpan tc.dataSource LabelFilter
-      v <- runGenerator tc g
-      case f v of
-        Prelude.Just b -> stopSpan tc.dataSource False *> pure b
-        Prelude.Nothing -> do
-          stopSpan tc.dataSource True
-          if n > 1
-            then go tc (n - 1)
-            else markComplete tc.dataSource Invalid *> throwIO AssumeRejected
-
--- | Draw a 'Just' value from a 'Maybe' generator, discarding test cases where
--- 'Nothing' is drawn.
-just :: Generator (Prelude.Maybe a) -> Generator a
-just = mapMaybe Prelude.id
-
--- | Filter values drawn from a generator, retrying up to 3 times before
--- discarding the test case entirely. The retry cap prevents runaway rejection
--- sampling; exhaustion is treated the same as 'assume' 'False'.
-filtered :: (a -> Bool) -> Generator a -> Generator a
-filtered p g = Draw \tc -> go tc (3 :: Int)
-  where
-    go tc n = do
-      startSpan tc.dataSource LabelFilter
-      v <- runGenerator tc g
-      if p v
-        then stopSpan tc.dataSource False *> pure v
-        else do
-          stopSpan tc.dataSource True
-          if n > 1
-            then go tc (n - 1)
-            else markComplete tc.dataSource Invalid *> throwIO AssumeRejected
-
--- | Choose unconditionally among the given generators, with @hegel-core@
--- driving the selection. When all alternatives are basic, a single request
--- is made with a @one_of@ schema; otherwise a bounded-index draw picks the
--- branch at runtime.
-oneOf :: NonEmpty (Generator a) -> Generator a
-oneOf = mkOneOf
+-- | Choose one of the given generators uniformly.
+oneOf :: NonEmpty (Gen a) -> Gen a
+oneOf gens = OneOf (basicOneOf gens) gens
 
 -- | Generate one of the given values.
-element :: NonEmpty a -> Generator a
+element :: NonEmpty a -> Gen a
 element = oneOf . fmap pure
 
--- | Draw a weighted index in @[0, total weight)@ and dispatch to the
--- corresponding branch via prefix-sum lookup. Each branch's share of the
--- index range is proportional to its weight.
---
+-- | Choose one of the given generators, weighted by the accompanying 'Int'.
 -- All weights must be positive.
-frequency :: NonEmpty (Int, Generator a) -> Generator a
+frequency :: NonEmpty (Int, Gen a) -> Gen a
 frequency pairs
   | any ((<= 0) . fst) pairs = error "Gen.frequency: all weights must be positive"
   | otherwise = Draw \tc -> do
@@ -351,17 +348,17 @@ frequency pairs
                 ("min_value", intVal (0 :: Int)),
                 ("max_value", intVal (total - 1))
               ]
-      startSpan tc.dataSource LabelOneOf
-      raw <- generate tc.dataSource indexSchema
+      startSpan tc LabelOneOf
+      raw <- generate tc indexSchema
       i <- case parseIndex raw of
         Right k -> pure k
         Left err -> throwIO UnexpectedResponse {sentSchema = indexSchema, received = raw, cause = err}
       let chosen = prefixSelect i pairs
       v <- runGenerator tc chosen
-      stopSpan tc.dataSource False
+      stopSpan tc False
       pure v
   where
-    prefixSelect :: Int -> NonEmpty (Int, Generator a) -> Generator a
+    prefixSelect :: Int -> NonEmpty (Int, Gen a) -> Gen a
     prefixSelect n ((w, g) :| rest)
       | n < w = g
       | otherwise = case rest of
@@ -369,17 +366,16 @@ frequency pairs
           (x : xs) -> prefixSelect (n - w) (x :| xs)
 
 -- | Generate either 'Nothing' or 'Just' a value from the given generator.
-maybe :: Generator a -> Generator (Maybe a)
+maybe :: Gen a -> Gen (Maybe a)
 maybe g = oneOf (pure Nothing :| [Just <$> g])
 
 -- | Generate a 'Left' value from the first generator or a 'Right' value
 -- from the second.
-either :: Generator a -> Generator b -> Generator (Either a b)
+either :: Gen a -> Gen b -> Gen (Either a b)
 either ga gb = oneOf ((Left <$> ga) :| [Right <$> gb])
 
 -- $exceptions
--- Thrown as control flow rather than error signalling; the server is notified
--- before they are thrown so the runner can handle them cleanly.
+-- Used for control flow within the runner, not for surfacing test failures.
 
 -- | Thrown when a test case is deliberately discarded, either via 'assume' or
 -- 'discard', or by an exhausted 'filtered'\/'mapMaybe' retry budget.
@@ -388,10 +384,10 @@ data AssumeRejected = AssumeRejected
 
 instance Exception AssumeRejected
 
--- | Thrown when @hegel-core@ returns a value that cannot be parsed according
+-- | Thrown when @hegel@ returns a value that cannot be parsed according
 -- to the schema that was sent.
 data UnexpectedResponse = UnexpectedResponse
-  { -- | The CBOR schema sent to @hegel-core@.
+  { -- | The CBOR schema sent to @hegel@.
     sentSchema :: !Value,
     -- | The raw value returned by the server.
     received :: !Value,

@@ -8,6 +8,9 @@
 
 Should we ever produce an Antithesis SDK for Haskell[^2], tests written with `zizek` will be able to integrate with it and receive more intelligent state-space exploration and increased bug-finding power for free.
 
+> [!NOTE]
+> This is not an official product of Mercury Technologies.
+
 [Hypothesis]: https://github.com/hypothesisworks/hypothesis
 [Hegel protocol]: https://hegel.dev/reference/protocol
 
@@ -17,7 +20,7 @@ Should we ever produce an Antithesis SDK for Haskell[^2], tests written with `zi
 ## Installation
 
 > [!IMPORTANT]
-> `zizek` depends on the [`hegel-core`] server; it is made available in the Nix dev shell, but any downstream consumers will need to ensure that `hegel` is available on their `$PATH`.
+> `zizek` depends on the [`hegel-core`] server; it is made available in this project's Nix dev shell, but any downstream consumers will need to ensure that `hegel` is available on their `$PATH`.
 
 This project is not yet published to Hackage and has dependencies that are, themselves, not yet published to Hackage.
 
@@ -57,15 +60,15 @@ source-repository-package
 ## Quickstart
 
 > [!TIP]
-> `zizek` is in active development and lacks compatibility layers for common testing libraries that would allow developers to start quickly; for the time being you are encouraged to read the tests in this repository to understand how to use the library directly if you wish to do so.
+> `zizek` is in active development and lacks adapters for common testing libraries like `tasty` or `hspec`; please see the test suite for usage examples.
 
 ### Usage
 
-`zizek` tries to wrap the underlying `hegel-core` machinery in a higher-level API for constructing and exercising complex `Generator`s.
+`zizek` tries to wrap the underlying `hegel-core` machinery in a higher-level API for constructing and exercising complex generators.
 
 #### Simple Generators
 
-For example, consider the following property that generates machine integers in the range `[0,1000]` and then validates trivial property that all of these `n + 1 > n`:
+For example, consider the following property that generates machine integers in the range `[0,1000]` and then validates trivial property that `n + 1 > n` for all of these values:
 
 ```haskell
 import Control.Monad (unless)

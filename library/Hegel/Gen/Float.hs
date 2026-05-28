@@ -1,7 +1,16 @@
+-- | Floating-point generators.
+--
+-- By default 'float' and 'double' produce NaN and ±Infinity. Setting a bound
+-- via 'Hegel.Gen.Builder.min' or 'Hegel.Gen.Builder.max' implicitly excludes
+-- NaN; setting both implicitly excludes Infinity. Use 'disallowNan' and
+-- 'disallowInfinity' to exclude them unconditionally.
 module Hegel.Gen.Float
-  ( FloatBuilder,
+  ( -- * Builders
+    FloatBuilder,
     float,
     double,
+
+    -- * Modifiers
     exclusiveMin,
     exclusiveMax,
     disallowNan,
@@ -44,21 +53,27 @@ defaultFloatBuilder =
       bAllowInf = True
     }
 
+-- | Generate a random 32-bit floating-point number.
 float :: FloatBuilder Float
 float = defaultFloatBuilder
 
+-- | Generate a random 64-bit floating-point number.
 double :: FloatBuilder Double
 double = defaultFloatBuilder
 
+-- | Treat the lower bound as exclusive.
 exclusiveMin :: FloatBuilder a -> FloatBuilder a
 exclusiveMin b = b {bExclMin = True}
 
+-- | Treat the upper bound as exclusive.
 exclusiveMax :: FloatBuilder a -> FloatBuilder a
 exclusiveMax b = b {bExclMax = True}
 
+-- | Exclude NaN. (Already implicit once any bound is set.)
 disallowNan :: FloatBuilder a -> FloatBuilder a
 disallowNan b = b {bAllowNan = False}
 
+-- | Exclude ±Infinity. (Already implicit once both bounds are set.)
 disallowInfinity :: FloatBuilder a -> FloatBuilder a
 disallowInfinity b = b {bAllowInf = False}
 

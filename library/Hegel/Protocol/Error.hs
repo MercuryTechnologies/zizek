@@ -1,3 +1,4 @@
+-- | Exceptions raised by the @hegel@ wire protocol layer.
 module Hegel.Protocol.Error
   ( ProtocolError (..),
     ConnectionClosedError (..),

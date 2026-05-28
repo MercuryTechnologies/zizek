@@ -1,3 +1,4 @@
+-- | Phases of a property run, as sent to the @hegel@ server.
 module Hegel.Phase
   ( Phase (..),
     toWire,
@@ -6,12 +7,18 @@ where
 
 import Data.Text (Text)
 
+-- | Phases of a property run, in execution order.
 data Phase
-  = Explicit
-  | Reuse
-  | Generate
-  | Target
-  | Shrink
+  = -- | Replay explicitly-provided examples.
+    Explicit
+  | -- | Replay examples from the example database.
+    Reuse
+  | -- | Generate new random examples.
+    Generate
+  | -- | Guide generation toward target values.
+    Target
+  | -- | Shrink discovered failures.
+    Shrink
   deriving stock (Show, Eq)
 
 toWire :: Phase -> Text

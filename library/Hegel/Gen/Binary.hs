@@ -1,3 +1,8 @@
+-- | 'ByteString' generator.
+--
+-- Bounded length via 'Hegel.Gen.Builder.minSize' and 'Hegel.Gen.Builder.maxSize':
+--
+-- > Gen.binary & Gen.minSize 4 & Gen.maxSize 64 & Gen.build
 module Hegel.Gen.Binary
   ( BinaryBuilder,
     binary,
@@ -15,6 +20,7 @@ data BinaryBuilder = BinaryBuilder
     bMaxSize :: !(Maybe Int)
   }
 
+-- | Generate a random 'ByteString'.
 binary :: BinaryBuilder
 binary = BinaryBuilder {bMinSize = 0, bMaxSize = Nothing}
 
