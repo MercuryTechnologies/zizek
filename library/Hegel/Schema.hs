@@ -20,6 +20,12 @@ module Hegel.Schema
     defaultCharacterFields,
     TextSchema (..),
     text,
+    UuidSchema (..),
+    uuid,
+    UrlSchema,
+    url,
+    DomainSchema (..),
+    domain,
     RegexSchema (..),
     regex,
 
@@ -210,6 +216,48 @@ text minSize =
       maxSize = Nothing,
       charFields = defaultCharacterFields {excludeCategories = Just ["Cs"]}
     }
+
+-- | UUID schema. Wire type is @\"uuid\"@.
+data UuidSchema = UuidSchema
+  { -- | RFC 4122 UUID version (1–5), or 'Nothing' for any version.
+    version :: !(Maybe Int)
+  }
+
+instance ToCBOR UuidSchema where
+  toCBOR s =
+    buildMap $
+      ["type" .= ("uuid" :: Text)]
+        <> catMaybes ["version" .=? s.version]
+
+-- | Default UUID schema: any version.
+uuid :: UuidSchema
+uuid = UuidSchema {version = Nothing}
+
+-- | URL schema. Wire type is @\"url\"@. Generates RFC 3986 HTTP\/HTTPS URLs.
+data UrlSchema = UrlSchema
+
+instance ToCBOR UrlSchema where
+  toCBOR _ = buildMap ["type" .= ("url" :: Text)]
+
+-- | URL schema sentinel.
+url :: UrlSchema
+url = UrlSchema
+
+-- | Domain schema. Wire type is @\"domain\"@. Generates RFC 1035 FQDNs.
+data DomainSchema = DomainSchema
+  { -- | Maximum total length of the generated domain name, inclusive.
+    maxLength :: !(Maybe Int)
+  }
+
+instance ToCBOR DomainSchema where
+  toCBOR s =
+    buildMap $
+      ["type" .= ("domain" :: Text)]
+        <> catMaybes ["max_length" .=? s.maxLength]
+
+-- | Default domain schema: no length limit (server default is 255).
+domain :: DomainSchema
+domain = DomainSchema {maxLength = Nothing}
 
 -- | Regex schema.
 data RegexSchema = RegexSchema

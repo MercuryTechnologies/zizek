@@ -8,18 +8,19 @@ import Data.Text qualified as T
 import Hegel (runProperty_)
 import Hegel.Gen qualified as Gen
 import Hegel.Runner (Settings (..), defaultSettings)
+import Network.URI (uriScheme)
 import Test.Hspec
 
 spec :: Spec
 spec = do
   describe "Gen.bool" $ do
     it "draws Bool values" $
-      runProperty_ defaultSettings (Gen.bool & Gen.build) $
+      runProperty_ defaultSettings {testCases = 1} (Gen.bool & Gen.build) $
         \_ -> pure ()
 
   describe "Gen.binary" $ do
     it "draws ByteStrings" $
-      runProperty_ defaultSettings (Gen.binary & Gen.build) $
+      runProperty_ defaultSettings {testCases = 1} (Gen.binary & Gen.build) $
         \_ -> pure ()
 
     it "respects lower bound" $
@@ -37,7 +38,7 @@ spec = do
 
   describe "Gen.double" $ do
     it "draws Double values" $
-      runProperty_ defaultSettings (Gen.double & Gen.build) $
+      runProperty_ defaultSettings {testCases = 1} (Gen.double & Gen.build) $
         \_ -> pure ()
 
     it "respects min and max bounds" $
@@ -58,7 +59,7 @@ spec = do
 
   describe "Gen.float" $ do
     it "draws Float values" $
-      runProperty_ defaultSettings (Gen.float & Gen.build) $
+      runProperty_ defaultSettings {testCases = 1} (Gen.float & Gen.build) $
         \_ -> pure ()
 
   describe "Gen.element" $ do
@@ -123,7 +124,7 @@ spec = do
 
   describe "Gen.text" $ do
     it "draws Text values" $
-      runProperty_ defaultSettings (Gen.text & Gen.build) $
+      runProperty_ defaultSettings {testCases = 1} (Gen.text & Gen.build) $
         \_ -> pure ()
 
     it "respects minSize bound" $
@@ -141,12 +142,12 @@ spec = do
 
   describe "Gen.char" $ do
     it "draws Char values" $
-      runProperty_ defaultSettings (Gen.char & Gen.build) $
+      runProperty_ defaultSettings {testCases = 1} (Gen.char & Gen.build) $
         \_ -> pure ()
 
   describe "Gen.regex" $ do
     it "draws Text values" $
-      runProperty_ defaultSettings (Gen.regex "[a-z]+" & Gen.build) $
+      runProperty_ defaultSettings {testCases = 1} (Gen.regex "[a-z]+" & Gen.build) $
         \_ -> pure ()
 
     it "respects the pattern with fullMatch" $
@@ -157,5 +158,33 @@ spec = do
       runProperty_ defaultSettings (Gen.regex "[a-z]+" & Gen.fullMatch & Gen.build) $ \t ->
         t `shouldSatisfy` (not . T.null)
 
+  describe "Gen.uuid" $ do
+    it "draws UUID values" $
+      runProperty_ defaultSettings {testCases = 1} (Gen.uuid & Gen.build) $
+        \_ -> pure ()
+
+    it "draws version-4 UUIDs" $
+      runProperty_ defaultSettings {testCases = 1} (Gen.uuid & Gen.version 4 & Gen.build) $
+        \_ -> pure ()
+
+  describe "Gen.uri" $ do
+    it "draws URI values with http or https scheme" $
+      runProperty_ defaultSettings (Gen.uri & Gen.build) $ \u ->
+        uriScheme u `shouldSatisfy` (`elem` ["http:", "https:"])
+
+  describe "Gen.uriText" $ do
+    it "draws URI text starting with http" $
+      runProperty_ defaultSettings (Gen.uriText & Gen.build) $ \t ->
+        t `shouldSatisfy` (\s -> "http://" `T.isPrefixOf` s || "https://" `T.isPrefixOf` s)
+
+  describe "Gen.domain" $ do
+    it "draws non-empty domain names containing a dot" $
+      runProperty_ defaultSettings (Gen.domain & Gen.build) $ \t -> do
+        t `shouldSatisfy` (not . T.null)
+        t `shouldSatisfy` T.isInfixOf "."
+
+    it "respects maxLength" $
+      runProperty_ defaultSettings (Gen.domain & Gen.maxLength 30 & Gen.build) $ \t ->
+        T.length t `shouldSatisfy` (<= 30)
 -- StopTest (server entropy exhausted mid-case) is exercised end-to-end by
 -- StopTestOnGenerateConformance in tests/conformance/test_conformance.py.

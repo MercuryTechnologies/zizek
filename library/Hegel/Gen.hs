@@ -79,6 +79,22 @@ module Hegel.Gen
     includeCharacters,
     excludeCharacters,
 
+    -- * UUID
+    UuidBuilder,
+    uuid,
+    version,
+
+    -- * URI
+    UriBuilder,
+    uri,
+    UriTextBuilder,
+    uriText,
+
+    -- * Domain
+    DomainBuilder,
+    domain,
+    maxLength,
+
     -- * Regex
     RegexBuilder,
     regex,
@@ -124,6 +140,7 @@ import Hegel.Gen.Char
     maxCodepoint,
     minCodepoint,
   )
+import Hegel.Gen.Domain (DomainBuilder, domain, maxLength)
 import Hegel.Gen.Float
   ( FloatBuilder,
     disallowInfinity,
@@ -169,4 +186,6 @@ import Hegel.Gen.Internal
   )
 import Hegel.Gen.Regex (RegexBuilder, alphabet, fullMatch, regex)
 import Hegel.Gen.Text (TextBuilder, text)
+import Hegel.Gen.Uri (UriBuilder, UriTextBuilder, uri, uriText)
+import Hegel.Gen.Uuid (UuidBuilder, uuid, version)
 import Prelude hiding (either, maybe)
