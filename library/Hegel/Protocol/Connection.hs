@@ -23,13 +23,17 @@ import Control.Concurrent.Async (async, link)
 import Control.Concurrent.STM (STM, TVar, atomically, check, newTVarIO, readTVar, writeTVar)
 import Control.Concurrent.STM.TBQueue (TBQueue, newTBQueueIO, writeTBQueue)
 import Data.Bits (shiftL, (.|.))
+import Data.Text qualified as T
 import Data.Word (Word32)
+import GHC.IO.Exception (IOErrorType (..))
+import Hegel.Protocol.Error (ConnectionClosedError (..))
 import Hegel.Protocol.Packet (Packet (..), readPacket, writePacket)
 import Numeric.Natural (Natural)
 import StmContainers.Map (Map)
 import StmContainers.Map qualified as Map
 import System.IO (Handle)
-import UnliftIO.Exception (tryAny)
+import System.IO.Error (ioeGetErrorType)
+import UnliftIO.Exception (IOException, catch, throwIO, tryAny)
 import UnliftIO.MVar (MVar, newMVar, withMVar)
 
 -- | Per-stream inbox capacity.
@@ -121,4 +125,10 @@ serverHasExited :: Connection -> IO Bool
 serverHasExited conn = atomically $ readTVar conn.connExited
 
 sendPacket :: Connection -> Packet -> IO ()
-sendPacket conn pkt = withMVar conn.connWriter \h -> writePacket h pkt
+sendPacket conn pkt =
+  withMVar conn.connWriter \h ->
+    writePacket h pkt
+      `catch` \(e :: IOException) -> case ioeGetErrorType e of
+        IllegalOperation -> throwIO (ConnectionClosedError (T.pack (show e)))
+        ResourceVanished -> throwIO (ConnectionClosedError (T.pack (show e)))
+        _ -> throwIO e

@@ -137,28 +137,34 @@ await pr = do
 
 -- Pump packets from the inbox, routing each to the replies or requests TVar,
 -- until the reply for the given message ID arrives.
+--
+-- The check of s.replies and the inbox read are one atomic transaction so that
+-- when another thread stores a buffered reply, STM retries all waiters. Two
+-- separate transactions would let a thread get stuck blocking on the inbox
+-- after another thread already stored the reply it needed in s.replies.
 drainUntilReply :: Stream -> Word32 -> IO ByteString
-drainUntilReply s mid = do
-  mReply <- atomically $ do
-    m <- readTVar s.replies
-    case Map.lookup mid m of
-      Just bs -> writeTVar s.replies (Map.delete mid m) >> pure (Just bs)
-      Nothing -> pure Nothing
-  case mReply of
-    Just bs -> pure bs
-    Nothing -> do
-      mPkt <-
-        atomically $
-          (Just <$> readTBQueue s.inbox)
-            `orElse` (Nothing <$ awaitServerExited s.connection)
-      case mPkt of
-        Nothing -> throwIO (ConnectionClosedError "stream inbox abandoned")
-        Just pkt -> do
-          atomically $
-            if pkt.isReply
-              then modifyTVar' s.replies (Map.insert pkt.messageId pkt.payload)
-              else modifyTVar' s.requests (Seq.|> pkt)
-          drainUntilReply s mid
+drainUntilReply s mid = loop
+  where
+    loop = do
+      r <- atomically $ do
+        m <- readTVar s.replies
+        case Map.lookup mid m of
+          Just bs -> writeTVar s.replies (Map.delete mid m) >> pure (Right (Just bs))
+          Nothing -> do
+            mPkt <-
+              (Just <$> readTBQueue s.inbox)
+                `orElse` (Nothing <$ awaitServerExited s.connection)
+            case mPkt of
+              Nothing -> pure (Left ())
+              Just pkt -> do
+                if pkt.isReply
+                  then modifyTVar' s.replies (Map.insert pkt.messageId pkt.payload)
+                  else modifyTVar' s.requests (Seq.|> pkt)
+                pure (Right Nothing)
+      case r of
+        Left () -> throwIO (ConnectionClosedError "stream inbox abandoned")
+        Right Nothing -> loop
+        Right (Just bs) -> pure bs
 
 -- | Send a raw request and block until the matching reply arrives.
 requestRaw :: Stream -> ByteString -> IO ByteString

@@ -186,5 +186,6 @@ spec = do
     it "respects maxLength" $
       runProperty_ defaultSettings (Gen.domain & Gen.maxLength 30 & Gen.build) $ \t ->
         T.length t `shouldSatisfy` (<= 30)
+
 -- StopTest (server entropy exhausted mid-case) is exercised end-to-end by
 -- StopTestOnGenerateConformance in tests/conformance/test_conformance.py.

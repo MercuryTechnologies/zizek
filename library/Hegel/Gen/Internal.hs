@@ -137,11 +137,11 @@ instance Applicative Gen where
       -- bypass tuple construction so the unit-schema sentinel never leaks
       -- into tuple element lists.
       basicAp :: Gen (b -> a) -> Gen b -> Maybe (BasicGenerator a)
-      basicAp (Pure f) ga = fmap f <$> toBasic ga
-      basicAp gf (Pure a) = fmap ($ a) <$> toBasic gf
-      basicAp gf ga = do
-        bf <- toBasic gf
-        ba <- toBasic ga
+      basicAp (Pure f) r = fmap f <$> toBasic r
+      basicAp l (Pure a) = fmap ($ a) <$> toBasic l
+      basicAp l r = do
+        bf <- toBasic l
+        ba <- toBasic r
         let leftArity = NE.length bf.schemaParts
             rightArity = NE.length ba.schemaParts
             n = leftArity + rightArity
@@ -310,7 +310,7 @@ filtered p g = case enumerate g of
 
 -- | Choose one of the given generators uniformly.
 oneOf :: forall a. NonEmpty (Gen a) -> Gen a
-oneOf gens = OneOf basic gens
+oneOf gens = OneOf basicOneOf gens
   where
     -- The basic-schema equivalent of @oneOf gens@, when one exists.
     --
@@ -320,8 +320,8 @@ oneOf gens = OneOf basic gens
     --
     -- Normal path: build a @one_of@ schema; any non-basic branch makes this
     -- return 'Nothing'.
-    basic :: Maybe (BasicGenerator a)
-    basic = case allPureOpt of
+    basicOneOf :: Maybe (BasicGenerator a)
+    basicOneOf = case allPureOpt of
       Just b -> Just b
       Nothing -> fullOpt
 

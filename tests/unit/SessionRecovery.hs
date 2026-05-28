@@ -1,7 +1,5 @@
 module SessionRecovery (spec) where
 
-import Control.Concurrent.Async (async)
-import Control.Concurrent.MVar (newEmptyMVar, takeMVar, tryPutMVar)
 import Data.Function ((&))
 import Hegel.Gen qualified as Gen
 import Hegel.Outcome (Outcome (..))
@@ -16,16 +14,12 @@ spec =
   it "returns Errored when child process is killed mid-run, then auto-recovers" $
     withSession defaultSessionConfig \ses -> do
       proc <- liveProcess ses
-      started <- newEmptyMVar
-      _ <- async do
-        takeMVar started
-        stopProcess proc
       outcome <-
         runPropertyOn
           ses
-          defaultSettings {testCases = 10_000}
+          defaultSettings {testCases = 1}
           (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
-          \_ -> tryPutMVar started () >> pure ()
+          \_ -> stopProcess proc
       outcome `shouldSatisfy` \case
         Errored _ -> True
         _ -> False
