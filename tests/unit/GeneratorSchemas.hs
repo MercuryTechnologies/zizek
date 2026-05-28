@@ -1,9 +1,14 @@
 module GeneratorSchemas (spec) where
 
+import CBOR.Value (Value (..))
 import Data.Function ((&))
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Text qualified as T
+import Data.Vector qualified as V
 import Hegel (Gen, runProperty_)
 import Hegel.Gen qualified as Gen
+import Hegel.Gen.Internal (BasicGenerator (..), Gen (..))
+import Hegel.Protocol.Cbor (ParseError (..))
 import Hegel.Runner (defaultSettings)
 import Test.Hspec
 
@@ -70,3 +75,30 @@ spec = do
           pure n
     runProperty_ defaultSettings g $ \n ->
       n `shouldNotBe` 7
+
+  it "basicAp parser rejects arrays longer than 2 elements" $ do
+    let g = (,) <$> (Gen.bool & Gen.build) <*> (Gen.bool & Gen.build)
+    case g of
+      Ap (Just bg) _ _ ->
+        case bg.parse (Array (V.fromList [Bool True, Bool False, Bool False])) of
+          Left err -> T.unpack err.expected `shouldContain` "2-element array"
+          Right _ -> expectationFailure "expected parse error"
+      _ -> expectationFailure "expected Ap with basic schema"
+
+  it "basicOneOf parser rejects arrays longer than 2 elements" $ do
+    let g = Gen.oneOf ((Gen.bool & Gen.build) :| [Gen.bool & Gen.build])
+    case g of
+      OneOf (Just bg) _ ->
+        case bg.parse (Array (V.fromList [UInt 0, Bool True, Bool False])) of
+          Left err -> T.unpack err.expected `shouldContain` "[index, value] array"
+          Right _ -> expectationFailure "expected parse error"
+      _ -> expectationFailure "expected OneOf with basic schema"
+
+  it "basicOneOf parser error names both bounds on out-of-range index" $ do
+    let g = Gen.oneOf ((Gen.bool & Gen.build) :| [Gen.bool & Gen.build])
+    case g of
+      OneOf (Just bg) _ ->
+        case bg.parse (Array (V.fromList [NInt 0, Bool True])) of
+          Left err -> T.unpack err.expected `shouldContain` "0 <= index"
+          Right _ -> expectationFailure "expected parse error"
+      _ -> expectationFailure "expected OneOf with basic schema"

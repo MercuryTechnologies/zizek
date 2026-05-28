@@ -139,12 +139,10 @@ basicAp gf ga = do
   bf <- toBasic gf
   ba <- toBasic ga
   let sch = tupleSchema [bf.schema, ba.schema]
-      p (Array arr)
-        | Just fv <- arr V.!? 0,
-          Just av <- arr V.!? 1 = do
-            f <- bf.parse fv
-            a <- ba.parse av
-            pure (f a)
+      p (Array arr) | V.length arr == 2 = do
+        f <- bf.parse (arr V.! 0)
+        a <- ba.parse (arr V.! 1)
+        pure (f a)
       p v = Left ParseError {expected = "2-element array", got = v}
   pure (BasicGenerator sch p)
 
@@ -312,18 +310,18 @@ basicOneOf gens = do
   bs <- traverse toBasic gens
   let sch = oneOfSchema (fmap (.schema) bs)
       parsers = V.fromList (NE.toList (fmap (.parse) bs))
-      p (Array arr)
-        | Just idxV <- arr V.!? 0,
-          Just val <- arr V.!? 1 = do
-            i <- parseIndex idxV
-            case parsers V.!? i of
-              Just q -> q val
-              Nothing ->
-                Left
-                  ParseError
-                    { expected = "index < " <> T.pack (show (V.length parsers)),
-                      got = idxV
-                    }
+      p (Array arr) | V.length arr == 2 = do
+        let idxV = arr V.! 0
+            val = arr V.! 1
+        i <- parseIndex idxV
+        case parsers V.!? i of
+          Just q -> q val
+          Nothing ->
+            Left
+              ParseError
+                { expected = "0 <= index < " <> T.pack (show (V.length parsers)),
+                  got = idxV
+                }
       p v = Left ParseError {expected = "[index, value] array", got = v}
   pure (BasicGenerator sch p)
 

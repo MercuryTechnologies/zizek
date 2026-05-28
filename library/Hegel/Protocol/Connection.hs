@@ -25,11 +25,11 @@ import Control.Concurrent.STM.TBQueue (TBQueue, newTBQueueIO, writeTBQueue)
 import Data.Bits (shiftL, (.|.))
 import Data.Word (Word32)
 import Hegel.Protocol.Packet (Packet (..), readPacket, writePacket)
+import Numeric.Natural (Natural)
 import StmContainers.Map (Map)
 import StmContainers.Map qualified as Map
 import System.IO (Handle)
 import UnliftIO.Exception (tryAny)
-import Numeric.Natural (Natural)
 import UnliftIO.MVar (MVar, newMVar, withMVar)
 
 -- | Per-stream inbox capacity.
