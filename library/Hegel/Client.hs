@@ -1,5 +1,3 @@
-{-# LANGUAGE ScopedTypeVariables #-}
-
 -- | Lower-level client API for talking to a @hegel@ server.
 --
 -- Most code should use 'Hegel.runProperty' or 'Hegel.Runner.runPropertyOn'.

@@ -30,6 +30,7 @@
             self'.packages.hegel-core
             ps.pytest
             ps."pytest-subtests"
+            ps."pytest-xdist"
           ]);
         in
         {

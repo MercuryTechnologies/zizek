@@ -65,7 +65,7 @@ check-conformance:
   @ln -sf $(cabal list-bin zizek:test-text) tests/conformance/bin/test-text
   @ln -sf $(cabal list-bin zizek:test-char) tests/conformance/bin/test-char
   @ln -sf $(cabal list-bin zizek:test-regex) tests/conformance/bin/test-regex
-  @pytest tests/conformance/
+  @pytest tests/conformance/ -n auto
 
 # Build with coverage and produce a report (add hpc-codecov to flake.nix first).
 check-coverage:

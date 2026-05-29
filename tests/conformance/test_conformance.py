@@ -1,8 +1,14 @@
 from pathlib import Path
+from typing import Any
+
+import pytest
+from hypothesis import Phase, given
+from hypothesis import settings as hyp_settings
 
 from hegel.conformance import (
     BinaryConformance,
     BooleanConformance,
+    ConformanceTest,
     DictConformance,
     EmptyTestConformance,
     ErrorResponseConformance,
@@ -17,7 +23,6 @@ from hegel.conformance import (
     StopTestOnMarkCompleteConformance,
     StopTestOnNewCollectionConformance,
     TextConformance,
-    run_conformance_tests,
 )
 
 BIN_DIR = Path(__file__).parent / "bin"
@@ -25,40 +30,74 @@ BIN_DIR = Path(__file__).parent / "bin"
 INT64_MIN = -(2**63)
 INT64_MAX = 2**63 - 1
 
+_TESTS: list[ConformanceTest] = [
+    BooleanConformance(BIN_DIR / "test-booleans"),
+    BinaryConformance(BIN_DIR / "test-binary"),
+    FloatConformance(BIN_DIR / "test-floats"),
+    IntegerConformance(BIN_DIR / "test-integers", min_value=INT64_MIN, max_value=INT64_MAX),
+    ListConformance(BIN_DIR / "test-list", skip_unique=True),
+    ListConformance(BIN_DIR / "test-set", skip_unique=False),
+    DictConformance(
+        BIN_DIR / "test-map",
+        min_key=INT64_MIN,
+        max_key=INT64_MAX,
+        min_value=INT64_MIN,
+        max_value=INT64_MAX,
+        skip_server_metrics=True,
+    ),
+    OriginDeduplicationConformance(BIN_DIR / "test-origin-deduplication"),
+    SampledFromConformance(BIN_DIR / "test-sampled-from"),
+    OneOfConformance(BIN_DIR / "test-one-of"),
+    TextConformance(BIN_DIR / "test-text", no_surrogates=True),
+    StopTestOnCollectionMoreConformance(BIN_DIR / "test-list", skip_server_metrics=True),
+    StopTestOnNewCollectionConformance(BIN_DIR / "test-list", skip_server_metrics=True),
+]
 
-def test_conformance(subtests):
-    run_conformance_tests(
-        [
-            BooleanConformance(BIN_DIR / "test-booleans"),
-            BinaryConformance(BIN_DIR / "test-binary"),
-            FloatConformance(BIN_DIR / "test-floats"),
-            IntegerConformance(
-                BIN_DIR / "test-integers",
-                min_value=INT64_MIN,
-                max_value=INT64_MAX,
-            ),
-            ListConformance(BIN_DIR / "test-list", skip_unique=True),
-            ListConformance(BIN_DIR / "test-set", skip_unique=False),
-            DictConformance(
-                BIN_DIR / "test-map",
-                min_key=-(2**63),
-                max_key=2**63 - 1,
-                min_value=-(2**63),
-                max_value=2**63 - 1,
-                skip_server_metrics=True,
-            ),
-            OriginDeduplicationConformance(BIN_DIR / "test-origin-deduplication"),
-            SampledFromConformance(BIN_DIR / "test-sampled-from"),
-            OneOfConformance(BIN_DIR / "test-one-of"),
-            TextConformance(BIN_DIR / "test-text", no_surrogates=True),
-            StopTestOnCollectionMoreConformance(BIN_DIR / "test-list", skip_server_metrics=True),
-            StopTestOnNewCollectionConformance(BIN_DIR / "test-list", skip_server_metrics=True),
-        ],
-        subtests,
-        skip_tests=[
-            StopTestOnGenerateConformance,
-            StopTestOnMarkCompleteConformance,
-            ErrorResponseConformance,
-            EmptyTestConformance,
-        ],
-    )
+_SKIP_TESTS: list[type[ConformanceTest]] = [
+    StopTestOnGenerateConformance,
+    StopTestOnMarkCompleteConformance,
+    ErrorResponseConformance,
+    EmptyTestConformance,
+]
+
+
+def _cases() -> list[pytest.param]:
+    # Count how many times each class appears so we can disambiguate with the binary name.
+    from collections import Counter
+    counts: Counter[str] = Counter(type(t).__name__ for t in _TESTS)
+
+    cases = []
+    for t in _TESTS:
+        cls_name = type(t).__name__
+        prefix = f"{cls_name}-{t.binary.name}" if counts[cls_name] > 1 else cls_name
+        for mode in t.modes or [None]:
+            suffix = f"[{mode}]" if mode is not None else ""
+            cases.append(pytest.param(t, mode, id=f"{prefix}{suffix}"))
+    for cls in _SKIP_TESTS:
+        cases.append(
+            pytest.param(
+                None,
+                None,
+                id=cls.__name__,
+                marks=pytest.mark.skip(reason="not yet implemented"),
+            )
+        )
+    return cases
+
+
+def test_registered_coverage() -> None:
+    declared = {type(t).__name__ for t in _TESTS} | {c.__name__ for c in _SKIP_TESTS}
+    registered = {c.__name__ for c in ConformanceTest.registered_tests}
+    assert declared == registered
+
+
+@pytest.mark.parametrize(("test", "mode"), _cases())
+def test_conformance(test: ConformanceTest, mode: str | None) -> None:
+    @hyp_settings(max_examples=5, deadline=None, phases=set(Phase) - {Phase.shrink}, database=None)
+    @given(test.params_strategy())
+    def run(params: dict[str, Any]) -> None:
+        if mode is not None:
+            params["mode"] = mode
+        test.run(params)
+
+    run()
