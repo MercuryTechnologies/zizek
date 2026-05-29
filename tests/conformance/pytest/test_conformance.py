@@ -25,8 +25,15 @@ from hegel.conformance import (
     TextConformance,
 )
 
+from local_tests import (
+    FrequencyConformance,
+    RegexFeatureConformance,
+)
+
 BIN_DIR = Path(__file__).parent / "bin"
 
+INT32_MIN = -(2**31)
+INT32_MAX = 2**31 - 1
 INT64_MIN = -(2**63)
 INT64_MAX = 2**63 - 1
 
@@ -35,6 +42,7 @@ _TESTS: list[ConformanceTest] = [
     BinaryConformance(BIN_DIR / "test-binary"),
     FloatConformance(BIN_DIR / "test-floats"),
     IntegerConformance(BIN_DIR / "test-integers", min_value=INT64_MIN, max_value=INT64_MAX),
+    IntegerConformance(BIN_DIR / "test-integers-narrow", min_value=INT32_MIN, max_value=INT32_MAX),
     ListConformance(BIN_DIR / "test-list", skip_unique=True),
     ListConformance(BIN_DIR / "test-set", skip_unique=False),
     DictConformance(
@@ -51,6 +59,8 @@ _TESTS: list[ConformanceTest] = [
     TextConformance(BIN_DIR / "test-text", no_surrogates=True),
     StopTestOnCollectionMoreConformance(BIN_DIR / "test-list", skip_server_metrics=True),
     StopTestOnNewCollectionConformance(BIN_DIR / "test-list", skip_server_metrics=True),
+    FrequencyConformance(BIN_DIR / "test-frequency"),
+    RegexFeatureConformance(BIN_DIR / "test-regex"),
 ]
 
 _SKIP_TESTS: list[type[ConformanceTest]] = [

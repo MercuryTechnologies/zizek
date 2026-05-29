@@ -158,6 +158,24 @@ executable test-integers
     zizek,
     zizek:conformance-utils,
 
+executable test-integers-narrow
+  import: library
+  hs-source-dirs: tests/conformance/integers-narrow
+  main-is: Main.hs
+  build-depends:
+    aeson ^>=2.2,
+    zizek,
+    zizek:conformance-utils,
+
+executable test-frequency
+  import: library
+  hs-source-dirs: tests/conformance/frequency
+  main-is: Main.hs
+  build-depends:
+    aeson ^>=2.2,
+    zizek,
+    zizek:conformance-utils,
+
 executable test-origin-deduplication
   import: library
   hs-source-dirs: tests/conformance/origin-deduplication
