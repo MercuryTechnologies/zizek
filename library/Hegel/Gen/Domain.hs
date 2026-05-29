@@ -23,7 +23,6 @@ import Hegel.Gen.Internal (basic)
 import Hegel.Protocol.Cbor (hegelText)
 import Hegel.Schema (DomainSchema (maxLength))
 import Hegel.Schema qualified as Schema
-import Prelude hiding (maxLength)
 
 data DomainBuilder = DomainBuilder
   { bMaxLength :: !(Maybe Int)

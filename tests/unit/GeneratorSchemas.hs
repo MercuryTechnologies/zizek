@@ -4,7 +4,6 @@ import CBOR.Class (ToCBOR (..))
 import CBOR.Value (Value (..))
 import Data.Function ((&))
 import Data.List (nub)
-import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict (Map)
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -49,12 +48,12 @@ spec = do
       n `shouldSatisfy` odd
 
   it "oneOf of all-basic generators uses oneOfSchema" $ do
-    let g = Gen.oneOf (intR (0, 10) :| [intR (20, 30)])
+    let g = Gen.oneOf [intR (0, 10), intR (20, 30)]
     runProperty_ defaultSettings g $ \n ->
       n `shouldSatisfy` (\x -> (x >= 0 && x <= 10) || (x >= 20 && x <= 30))
 
   it "nested ap + oneOf produces correct schema nesting" $ do
-    let g = (,) <$> Gen.oneOf (intR (0, 5) :| [intR (10, 15)]) <*> intR (0, 10)
+    let g = (,) <$> Gen.oneOf [intR (0, 5), intR (10, 15)] <*> intR (0, 10)
     runProperty_ defaultSettings g $ \(a, b) -> do
       a `shouldSatisfy` (\x -> (x >= 0 && x <= 5) || (x >= 10 && x <= 15))
       b `shouldSatisfy` (\x -> x >= 0 && x <= 10)
@@ -115,7 +114,7 @@ spec = do
       _ -> expectationFailure "expected Ap with basic schema"
 
   it "basicOneOf parser rejects arrays longer than 2 elements" $ do
-    let g = Gen.oneOf ((Gen.bool & Gen.build) :| [Gen.bool & Gen.build])
+    let g = Gen.oneOf [Gen.bool & Gen.build, Gen.bool & Gen.build]
     case g of
       OneOf (Just bg) _ ->
         case bg.parse (Array (V.fromList [UInt 0, Bool True, Bool False])) of
@@ -124,7 +123,7 @@ spec = do
       _ -> expectationFailure "expected OneOf with basic schema"
 
   it "basicOneOf parser error names both bounds on out-of-range index" $ do
-    let g = Gen.oneOf ((Gen.bool & Gen.build) :| [Gen.bool & Gen.build])
+    let g = Gen.oneOf [Gen.bool & Gen.build, Gen.bool & Gen.build]
     case g of
       OneOf (Just bg) _ ->
         case bg.parse (Array (V.fromList [NInt 0, Bool True])) of

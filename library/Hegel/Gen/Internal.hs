@@ -37,12 +37,11 @@ where
 import CBOR.Class (ToCBOR (..))
 import CBOR.Value (Value (Array, NInt, UInt))
 import Control.Exception (Exception, throwIO)
-import Data.List.NonEmpty (NonEmpty ((:|)))
-import Data.List.NonEmpty qualified as NE
 import Data.Sequence (Seq, (<|), (|>))
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Vector qualified as V
+import GHC.Stack (HasCallStack)
 import Hegel.Protocol.Cbor (ParseError (..))
 import Hegel.Schema qualified as Schema
 import Hegel.TestCase
@@ -131,7 +130,7 @@ data Gen a where
   Bind :: Gen b -> (b -> Gen a) -> Gen a
   -- | Choice among generators. Carries a precomputed basic representation
   -- (a @one_of@ schema) when every branch is basic.
-  OneOf :: !(Maybe (BasicGenerator a)) -> NonEmpty (Gen a) -> Gen a
+  OneOf :: !(Maybe (BasicGenerator a)) -> [Gen a] -> Gen a
 
 toBasic :: Gen a -> Maybe (BasicGenerator a)
 toBasic (Basic bg) = Just bg
@@ -244,14 +243,14 @@ runInteractive tc (Bind g f) = do
   stopSpan tc False
   pure b
 runInteractive tc (OneOf _ gens) = do
-  let n = NE.length gens
+  let n = length gens
       indexSchema = toCBOR (Schema.integer (0 :: Int) (n - 1))
   startSpan tc LabelOneOf
   raw <- generate tc indexSchema
   i <- case parseIndex raw of
     Right k -> pure k
     Left err -> throwIO UnexpectedResponse {sentSchema = indexSchema, received = raw, cause = err}
-  v <- runGenerator tc (NE.toList gens !! i)
+  v <- runGenerator tc (gens !! i)
   stopSpan tc False
   pure v
 runInteractive _ (Pure a) = pure a
@@ -320,7 +319,7 @@ filtered :: (a -> Bool) -> Gen a -> Gen a
 filtered p g = case enumerate g of
   Just xs -> case filter p xs of
     [] -> discard
-    (y : ys) -> element (y :| ys)
+    ys -> element ys
   Nothing -> Draw \tc -> go tc (3 :: Int)
   where
     go tc n = do
@@ -334,8 +333,10 @@ filtered p g = case enumerate g of
             then go tc (n - 1)
             else markComplete tc Invalid *> throwIO AssumeRejected
 
--- | Choose one of the given generators uniformly.
-oneOf :: forall a. NonEmpty (Gen a) -> Gen a
+-- | Choose one of the given generators uniformly. The list must be
+-- non-empty; passing @[]@ raises an error at the call site.
+oneOf :: forall a. (HasCallStack) => [Gen a] -> Gen a
+oneOf [] = error "Gen.oneOf: used with empty list"
 oneOf gens = OneOf basicOneOf gens
   where
     -- The basic-schema equivalent of @oneOf gens@, when one exists.
@@ -354,8 +355,8 @@ oneOf gens = OneOf basicOneOf gens
     allPureOpt :: Maybe (BasicGenerator a)
     allPureOpt = do
       vals <- traverse pureVal gens
-      let n = NE.length vals
-          vv = V.fromList (NE.toList vals)
+      let n = length vals
+          vv = V.fromList vals
           sch = toCBOR (Schema.integer (0 :: Int) (n - 1))
           p v = case parseIndex v of
             Left err -> Left err
@@ -376,8 +377,8 @@ oneOf gens = OneOf basicOneOf gens
     fullOpt :: Maybe (BasicGenerator a)
     fullOpt = do
       bs <- traverse toBasic gens
-      let sch = toCBOR (Schema.oneOf (NE.toList (fmap (materialize . (.schema)) bs)))
-          parsers = V.fromList (NE.toList (fmap (.parse) bs))
+      let sch = toCBOR (Schema.oneOf (fmap (materialize . (.schema)) bs))
+          parsers = V.fromList (fmap (.parse) bs)
           p (Array arr) | V.length arr == 2 = do
             let idxV = arr V.! 0
                 val = arr V.! 1
@@ -393,9 +394,11 @@ oneOf gens = OneOf basicOneOf gens
           p v = Left ParseError {expected = "[index, value] array", got = v}
       pure (BasicGenerator (Scalar sch) p)
 
--- | Generate one of the given values.
-element :: NonEmpty a -> Gen a
-element = oneOf . fmap pure
+-- | Generate one of the given values uniformly. The list must be
+-- non-empty; passing @[]@ raises an error at the call site.
+element :: (HasCallStack) => [a] -> Gen a
+element [] = error "Gen.element: used with empty list"
+element xs = oneOf (fmap pure xs)
 
 -- | Wrap a generator so that schema expansion terminates when it appears
 -- on a recursive edge.  Without 'defer', a self-referential generator causes
@@ -406,7 +409,7 @@ element = oneOf . fmap pure
 -- > data Tree = Leaf Int | Branch Tree Tree
 -- >
 -- > treeGen :: Gen Tree
--- > treeGen = oneOf (leaf :| [branch])
+-- > treeGen = oneOf [leaf, branch]
 -- >   where
 -- >     leaf   = Leaf <$> (Gen.int & Gen.build)
 -- >     branch = Branch <$> defer treeGen <*> defer treeGen
@@ -428,12 +431,14 @@ enumerate (Ap _ gf ga) = do
   fs <- enumerate gf
   as <- enumerate ga
   pure [f a | f <- fs, a <- as]
-enumerate (OneOf _ gs) = concat . NE.toList <$> traverse enumerate gs
+enumerate (OneOf _ gs) = concat <$> traverse enumerate gs
 enumerate _ = Nothing
 
 -- | Choose one of the given generators, weighted by the accompanying 'Int'.
--- All weights must be positive.
-frequency :: NonEmpty (Int, Gen a) -> Gen a
+-- The list must be non-empty and all weights must be positive; violations
+-- raise an error at the call site.
+frequency :: (HasCallStack) => [(Int, Gen a)] -> Gen a
+frequency [] = error "Gen.frequency: used with empty list"
 frequency pairs
   | any ((<= 0) . fst) pairs = error "Gen.frequency: all weights must be positive"
   | otherwise = Draw \tc -> do
@@ -449,21 +454,20 @@ frequency pairs
       stopSpan tc False
       pure v
   where
-    prefixSelect :: Int -> NonEmpty (Int, Gen a) -> Gen a
-    prefixSelect n ((w, g) :| rest)
+    prefixSelect :: Int -> [(Int, Gen a)] -> Gen a
+    prefixSelect _ [] = error "Gen.frequency: prefix-sum invariant violated (unreachable)"
+    prefixSelect n ((w, g) : rest)
       | n < w = g
-      | otherwise = case rest of
-          [] -> error "Gen.frequency: prefix-sum invariant violated (unreachable)"
-          (x : xs) -> prefixSelect (n - w) (x :| xs)
+      | otherwise = prefixSelect (n - w) rest
 
 -- | Generate either 'Nothing' or 'Just' a value from the given generator.
 maybe :: Gen a -> Gen (Maybe a)
-maybe g = oneOf (pure Nothing :| [Just <$> g])
+maybe g = oneOf [pure Nothing, Just <$> g]
 
 -- | Generate a 'Left' value from the first generator or a 'Right' value
 -- from the second.
 either :: Gen a -> Gen b -> Gen (Either a b)
-either ga gb = oneOf ((Left <$> ga) :| [Right <$> gb])
+either ga gb = oneOf [Left <$> ga, Right <$> gb]
 
 -- $exceptions
 -- Used for control flow within the runner, not for surfacing test failures.

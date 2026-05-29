@@ -3,7 +3,6 @@ module StandardGenerators (spec) where
 import Data.ByteString qualified as BS
 import Data.Function ((&))
 import Data.IORef (modifyIORef', newIORef, readIORef)
-import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as T
 import Hegel (runProperty_)
 import Hegel.Gen qualified as Gen
@@ -64,7 +63,7 @@ spec = do
 
   describe "Gen.element" $ do
     it "only emits values from the given list" $
-      runProperty_ defaultSettings (Gen.element ('a' :| "bcd")) $ \c ->
+      runProperty_ defaultSettings (Gen.element "abcd") $ \c ->
         c `shouldSatisfy` (`elem` ("abcd" :: String))
 
   describe "Gen.frequency" $ do
@@ -72,7 +71,7 @@ spec = do
       seen <- newIORef ([] :: [Int])
       runProperty_
         defaultSettings {testCases = 200}
-        (Gen.frequency ((1, pure (1 :: Int)) :| [(1, pure 2), (1, pure 3)]))
+        (Gen.frequency @Int [(1, pure 1), (1, pure 2), (1, pure 3)])
         $ \n -> modifyIORef' seen (n :)
       vs <- readIORef seen
       vs `shouldSatisfy` (\xs -> 1 `elem` xs && 2 `elem` xs && 3 `elem` xs)

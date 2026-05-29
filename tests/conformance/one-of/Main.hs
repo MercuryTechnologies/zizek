@@ -3,7 +3,6 @@ module Main (main) where
 import ConformanceUtils (aesonOpts, decodeArgs, runConformancePropertyPaired)
 import Data.Aeson (FromJSON (..), ToJSON (..), genericParseJSON, genericToJSON)
 import Data.Function ((&))
-import Data.List.NonEmpty qualified as NE
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Generics (Generic)
@@ -35,13 +34,13 @@ branch r = Gen.int & Gen.min r.minValue & Gen.max r.maxValue & Gen.build
 main :: IO ()
 main = do
   params <- decodeArgs @Params
-  rs <- case NE.nonEmpty params.ranges of
-    Just xs -> pure xs
-    Nothing -> die "test-one-of: ranges must be non-empty"
+  case params.ranges of
+    [] -> die "test-one-of: ranges must be non-empty"
+    _ -> pure ()
   transform <- case params.mode of
     "basic" -> pure id
     "map_negate" -> pure (fmap negate)
     "filter_even" -> pure (Gen.filtered even)
     other -> die ("test-one-of: unknown mode: " <> T.unpack other)
-  let g = Gen.oneOf (fmap (transform . branch) rs)
+  let g = Gen.oneOf (fmap (transform . branch) params.ranges)
   runConformancePropertyPaired g (Just . Metrics)
