@@ -29,6 +29,10 @@ module Hegel.Schema
     RegexSchema (..),
     regex,
 
+    -- * Collection schemas
+    ListSchema (..),
+    list,
+
     -- * Composite \/ wire-only schemas (used by @Hegel.Gen.Internal@)
     UnitSchema,
     unit,
@@ -282,6 +286,32 @@ instance ToCBOR RegexSchema where
 -- | Default regex schema: partial match, no alphabet restriction.
 regex :: Text -> RegexSchema
 regex p = RegexSchema {regexPattern = p, fullmatch = False, alphabet = Nothing}
+
+-- | List schema: a variable-length sequence of homogeneous draws.
+data ListSchema = ListSchema
+  { -- | Schema for each element.
+    element :: !Value,
+    -- | Minimum number of elements (inclusive).
+    minSize :: !Int,
+    -- | Maximum number of elements (inclusive), or unbounded.
+    maxSize :: !(Maybe Int),
+    -- | When 'True', the server rejects duplicate elements.
+    unique :: !Bool
+  }
+
+instance ToCBOR ListSchema where
+  toCBOR s =
+    buildMap $
+      [ "type" .= ("list" :: Text),
+        "elements" .= s.element,
+        "min_size" .= s.minSize,
+        "unique" .= s.unique
+      ]
+        <> catMaybes ["max_size" .=? s.maxSize]
+
+-- | Build a list schema from element schema, size bounds, and uniqueness flag.
+list :: Value -> Int -> Maybe Int -> Bool -> ListSchema
+list = ListSchema
 
 -- | Constant schema: always returns @null@. Used as a sentinel in
 -- @Hegel.Gen.Internal@ for 'Pure' branches of 'oneOf'.

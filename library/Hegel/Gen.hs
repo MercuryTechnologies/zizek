@@ -64,6 +64,11 @@ module Hegel.Gen
     BinaryBuilder,
     binary,
 
+    -- * List
+    ListBuilder,
+    list,
+    unique,
+
     -- * Text
     TextBuilder,
     text,
@@ -184,6 +189,7 @@ import Hegel.Gen.Internal
     maybe,
     oneOf,
   )
+import Hegel.Gen.List (ListBuilder, list, unique)
 import Hegel.Gen.Regex (RegexBuilder, alphabet, fullMatch, regex)
 import Hegel.Gen.Text (TextBuilder, text)
 import Hegel.Gen.Uri (UriBuilder, UriTextBuilder, uri, uriText)

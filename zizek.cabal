@@ -72,6 +72,7 @@ library
     Hegel
     Hegel.Assertion
     Hegel.Client
+    Hegel.Collection
     Hegel.Gen
     Hegel.Gen.Binary
     Hegel.Gen.Bool
@@ -81,6 +82,7 @@ library
     Hegel.Gen.Float
     Hegel.Gen.Integer
     Hegel.Gen.Internal
+    Hegel.Gen.List
     Hegel.Gen.Regex
     Hegel.Gen.Text
     Hegel.Gen.Uri
@@ -179,6 +181,15 @@ executable test-one-of
 executable test-text
   import: library
   hs-source-dirs: tests/conformance/text
+  main-is: Main.hs
+  build-depends:
+    aeson ^>=2.2,
+    zizek,
+    zizek:conformance-utils,
+
+executable test-list
+  import: library
+  hs-source-dirs: tests/conformance/list
   main-is: Main.hs
   build-depends:
     aeson ^>=2.2,

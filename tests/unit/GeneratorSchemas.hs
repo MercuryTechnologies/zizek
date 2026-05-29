@@ -1,15 +1,18 @@
 module GeneratorSchemas (spec) where
 
+import CBOR.Class (ToCBOR (..))
 import CBOR.Value (Value (..))
 import Data.Function ((&))
+import Data.List (nub)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hegel (Gen, runProperty_)
 import Hegel.Gen qualified as Gen
-import Hegel.Gen.Internal (BasicGenerator (..), Gen (..))
+import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), schema, toBasic)
 import Hegel.Protocol.Cbor (ParseError (..))
 import Hegel.Runner (defaultSettings)
+import Hegel.Schema qualified as Schema
 import Test.Hspec
 
 intR :: (Int, Int) -> Gen Int
@@ -125,3 +128,102 @@ spec = do
           Left err -> T.unpack err.expected `shouldContain` "0 <= index"
           Right _ -> expectationFailure "expected parse error"
       _ -> expectationFailure "expected OneOf with basic schema"
+
+  describe "Gen.binary" $ do
+    it "schema: default bounds, no max_size" $ do
+      let g = Gen.binary & Gen.build
+      case toBasic g of
+        Just bg -> schema bg `shouldBe` toCBOR (Schema.binary 0 Nothing)
+        Nothing -> expectationFailure "expected basic generator"
+
+    it "schema: explicit minSize and maxSize" $ do
+      let g = Gen.binary & Gen.minSize 4 & Gen.maxSize 64 & Gen.build
+      case toBasic g of
+        Just bg -> schema bg `shouldBe` toCBOR (Schema.binary 4 (Just 64))
+        Nothing -> expectationFailure "expected basic generator"
+
+    it "parser rejects non-ByteString values" $ do
+      let g = Gen.binary & Gen.build
+      case toBasic g of
+        Just bg ->
+          case bg.parse (Bool True) of
+            Left err -> T.unpack err.expected `shouldBe` "bytes"
+            Right _ -> expectationFailure "expected parse error"
+        Nothing -> expectationFailure "expected basic generator"
+
+  describe "Gen.list" $ do
+    let elemGen = Gen.integral @Int & Gen.min 0 & Gen.max 100 & Gen.build
+        intElemSchema = case toBasic elemGen of
+          Just bg -> schema bg
+          Nothing -> error "intElemSchema: elemGen should be basic"
+
+    it "basic path: produces a Basic gen with list schema" $ do
+      let g = Gen.list elemGen & Gen.build
+      case toBasic g of
+        Just _bg -> pure ()
+        Nothing -> expectationFailure "expected basic generator for list of basic elements"
+
+    it "basic path with size bounds: respects min and max"
+      $ runProperty_
+        defaultSettings
+        (Gen.list elemGen & Gen.minSize 1 & Gen.maxSize 5 & Gen.build)
+      $ \xs -> do
+        length xs `shouldSatisfy` (>= 1)
+        length xs `shouldSatisfy` (<= 5)
+
+    it "basic path with unique: produces distinct elements"
+      $ runProperty_
+        defaultSettings
+        ( Gen.list (Gen.integral @Int & Gen.min 0 & Gen.max 1000 & Gen.build)
+            & Gen.minSize 3
+            & Gen.maxSize 10
+            & Gen.unique (==)
+            & Gen.build
+        )
+      $ \xs ->
+        length xs `shouldBe` length (nub xs)
+
+    it "non-basic path: list of filtered elements exercises collection loop"
+      $ runProperty_
+        defaultSettings
+        ( Gen.list (Gen.filtered even elemGen)
+            & Gen.minSize 1
+            & Gen.maxSize 5
+            & Gen.build
+        )
+      $ \xs -> do
+        length xs `shouldSatisfy` (>= 1)
+        all even xs `shouldBe` True
+
+    it "schema: default bounds, unique=False" $ do
+      let g = Gen.list elemGen & Gen.build
+      case toBasic g of
+        Just bg -> schema bg `shouldBe` toCBOR (Schema.list intElemSchema 0 Nothing False)
+        Nothing -> expectationFailure "expected basic generator"
+
+    it "schema: min/max size present" $ do
+      let g = Gen.list elemGen & Gen.minSize 1 & Gen.maxSize 5 & Gen.build
+      case toBasic g of
+        Just bg -> schema bg `shouldBe` toCBOR (Schema.list intElemSchema 1 (Just 5) False)
+        Nothing -> expectationFailure "expected basic generator"
+
+    it "schema: unique=True when predicate set" $ do
+      let g = Gen.list elemGen & Gen.unique (==) & Gen.build
+      case toBasic g of
+        Just bg -> schema bg `shouldBe` toCBOR (Schema.list intElemSchema 0 Nothing True)
+        Nothing -> expectationFailure "expected basic generator"
+
+    it "non-basic path: toBasic returns Nothing for filtered elements" $ do
+      let g = Gen.list (Gen.filtered even elemGen) & Gen.build
+      case toBasic g of
+        Nothing -> pure ()
+        Just _ -> expectationFailure "expected non-basic generator"
+
+    it "parser rejects non-Array values" $ do
+      let g = Gen.list elemGen & Gen.build
+      case toBasic g of
+        Just bg ->
+          case bg.parse (Bool True) of
+            Left err -> T.unpack err.expected `shouldBe` "array"
+            Right _ -> expectationFailure "expected parse error"
+        Nothing -> expectationFailure "expected basic generator"

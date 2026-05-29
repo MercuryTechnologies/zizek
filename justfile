@@ -50,12 +50,13 @@ lint:
 
 # Run the Python conformance harness against the Haskell test binaries.
 check-conformance:
-  @cabal build zizek:test-booleans zizek:test-binary zizek:test-floats zizek:test-integers zizek:test-origin-deduplication zizek:test-sampled-from zizek:test-one-of zizek:test-text zizek:test-char zizek:test-regex
+  @cabal build zizek:test-booleans zizek:test-binary zizek:test-floats zizek:test-integers zizek:test-list zizek:test-origin-deduplication zizek:test-sampled-from zizek:test-one-of zizek:test-text zizek:test-char zizek:test-regex
   @mkdir -p tests/conformance/bin
   @ln -sf $(cabal list-bin zizek:test-booleans) tests/conformance/bin/test-booleans
   @ln -sf $(cabal list-bin zizek:test-binary) tests/conformance/bin/test-binary
   @ln -sf $(cabal list-bin zizek:test-floats) tests/conformance/bin/test-floats
   @ln -sf $(cabal list-bin zizek:test-integers) tests/conformance/bin/test-integers
+  @ln -sf $(cabal list-bin zizek:test-list) tests/conformance/bin/test-list
   @ln -sf $(cabal list-bin zizek:test-origin-deduplication) tests/conformance/bin/test-origin-deduplication
   @ln -sf $(cabal list-bin zizek:test-sampled-from) tests/conformance/bin/test-sampled-from
   @ln -sf $(cabal list-bin zizek:test-one-of) tests/conformance/bin/test-one-of

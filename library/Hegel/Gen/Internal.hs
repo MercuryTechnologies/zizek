@@ -6,6 +6,8 @@ module Hegel.Gen.Internal
     Gen (..),
     BasicGenerator (..),
     basic,
+    toBasic,
+    schema,
 
     -- * Combinators
     -- $combinators
