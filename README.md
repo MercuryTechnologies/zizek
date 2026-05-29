@@ -29,6 +29,7 @@ Should we ever produce an Antithesis SDK for Haskell[^2], tests written with `zi
   - [Recursive Generators](#recursive-generators)
 - [Generators](#generators)
 - [Development](#development)
+- [Frequently Asked Questions](#frequently-asked-questions)
 
 ## How It Works
 
@@ -158,11 +159,11 @@ prop_intervalOrdered = runProperty_ defaultSettings interval $ \(lo, hi) ->
 ```
 
 > [!TIP]
-> Unlike `Gen.filtered`, `assume` does not retry; discarded cases accumulate in `Stats.invalid` and if the predicate rejects too often, `runProperty` reports a `Rejected` outcome.
+> Unlike `Gen.filtered`, `Gen.assume` does not retry; discarded cases accumulate in `Stats.invalid` and if the predicate rejects too often, `runProperty` reports a `Rejected` outcome.
 
 ### Collection Generators
 
-`Gen.list`, `Gen.set`, and `Gen.map` accept an element generator and expose `minSize`/`maxSize` bounds. Lists additionally support `Gen.unique` to deduplicate by a custom equality predicate:
+`zizek` also supports generation of collections types, each of which accept an element generator and expose additional parameters for shaping the collection: `minSize`/`maxSize` set bounds and, for lists, `Gen.unique` accepts a predicate function to discriminate based on equality.
 
 ```haskell
 import Control.Monad (unless)
@@ -173,23 +174,22 @@ import Hegel.Gen qualified as Gen
 
 uniqueInts :: Gen [Int]
 uniqueInts =
-  Gen.list (Gen.int & Gen.min 0 & Gen.max 1000 & Gen.build)
-    & Gen.minSize 1
-    & Gen.maxSize 10
-    & Gen.unique (==)
-    & Gen.build
+  let items = Gen.int & Gen.min 0 & Gen.max 1000 & Gen.build
+  in
+    Gen.list items
+      & Gen.minSize 1
+      & Gen.maxSize 10
+      & Gen.unique (==)
+      & Gen.build
 
 prop_uniqueInts :: IO ()
 prop_uniqueInts = runProperty_ defaultSettings uniqueInts $ \xs ->
   unless (length xs == length (nub xs)) (error "list had duplicates")
 ```
 
-> [!TIP]
-> `Gen.set`, `Gen.hashSet`, `Gen.intSet`, `Gen.map`, `Gen.hashMap`, and `Gen.intMap` share the same `minSize`/`maxSize` vocabulary. Set and map variants deduplicate keys intrinsically, so `unique` is a list-only modifier.
-
 ### Recursive Generators
 
-For generators that reference themselves, wrap each recursive edge in `Gen.defer` to prevent a `<<loop>>` exception at construction time:
+Self-referential generators must wrap each recursive edge in `Gen.defer`; failing to do so will very likely result in `<<loop>>` exceptions when the generator is constructed.
 
 ```haskell
 import Control.Monad (unless)
@@ -225,11 +225,11 @@ prop_tree = runProperty_ defaultSettings tree $ \t ->
 | -------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `bool`                     | `Bool`                 | —                                                                                                                    |
 | `integral`                 | any `Integral a`       | `min`, `max`                                                                                                         |
-| `int`, `int8`…`int64`      | sized signed ints      | `min`, `max`                                                                                                         |
-| `word`, `word8`…`word64`   | sized unsigned ints    | `min`, `max`                                                                                                         |
+| `int`, `int8`…`int64`      | signed ints            | `min`, `max`                                                                                                         |
+| `word`, `word8`…`word64`   | unsigned ints          | `min`, `max`                                                                                                         |
 | `enum`                     | enumerated values      | `min`, `max`                                                                                                         |
-| `enumBounded`              | `(Bounded, Enum) a`    | —                                                                                                                    |
-| `float`, `double`          | `Float` / `Double`     | `min`, `max`, `exclusiveMin`, `exclusiveMax`, `disallowNan`, `disallowInfinity`                                      |
+| `enumBounded`              | bounded enumerations   | —                                                                                                                    |
+| `float`, `double`          | floating point numbers | `min`, `max`, `exclusiveMin`, `exclusiveMax`, `disallowNan`, `disallowInfinity`                                      |
 | `binary`                   | `ByteString`           | `minSize`, `maxSize`                                                                                                 |
 | `text`                     | `Text`                 | `minSize`, `maxSize`                                                                                                 |
 | `char`                     | `Char`                 | `codec`, `minCodepoint`, `maxCodepoint`, `categories`, `excludeCategories`, `includeCharacters`, `excludeCharacters` |
@@ -237,24 +237,24 @@ prop_tree = runProperty_ defaultSettings tree $ \t ->
 | `uri`, `uriText`           | parsed / raw URIs      | —                                                                                                                    |
 | `domain`                   | domain names           | `maxLength`                                                                                                          |
 | `regex`                    | strings matching regex | `fullMatch`, `alphabet`                                                                                              |
-| `list`                     | `[a]`                  | `minSize`, `maxSize`, `unique`                                                                                       |
+| `list`                     | linked lists           | `minSize`, `maxSize`, `unique`                                                                                       |
 | `set`, `hashSet`, `intSet` | set variants           | `minSize`, `maxSize`                                                                                                 |
 | `map`, `hashMap`, `intMap` | map variants           | `minSize`, `maxSize`                                                                                                 |
 
-| Combinator                                     | Purpose                                                                   |
-| ---------------------------------------------- | ------------------------------------------------------------------------- |
-| `oneOf :: [Gen a] -> Gen a`                    | Choose from a list of generators                                          |
-| `element :: [a] -> Gen a`                      | Choose uniformly from a non-empty list of values                          |
-| `frequency :: [(Int, Gen a)] -> Gen a`         | Weighted choice; all weights must be positive                             |
-| `maybe :: Gen a -> Gen (Maybe a)`              | `Nothing` or `Just` a generated value                                     |
-| `either :: Gen a -> Gen b -> Gen (Either a b)` | `Left` from the first generator or `Right` from the second                |
-| `assume :: Bool -> Gen ()`                     | Discard the current test case if the predicate fails                      |
-| `discard :: Gen a`                             | Unconditionally discard the current test case                             |
-| `defer :: Gen a -> Gen a`                      | Force interactive generation; required on recursive edges                 |
-| `filtered :: (a -> Bool) -> Gen a -> Gen a`    | Retry until the predicate holds (bounded; an exhausted budget rejects)    |
-| `mapMaybe :: (a -> Maybe b) -> Gen a -> Gen b` | Same retry semantics as `filtered`                                        |
-| `just :: Gen (Maybe a) -> Gen a`               | Specialised `mapMaybe id`                                                 |
-| `enumerate :: Gen a -> Maybe [a]`              | Enumerate a generator's possible values when finite (optimisation signal) |
+| Combinator                                     | Purpose                                                                           |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------|
+| `oneOf :: [Gen a] -> Gen a`                    | Choose from a list of generators; the list must be non-empty                      |
+| `element :: [a] -> Gen a`                      | Choose from a list of values; the list must be non-empty                          |
+| `frequency :: [(Int, Gen a)] -> Gen a`         | Weighted choice; all weights must be positive                                     |
+| `maybe :: Gen a -> Gen (Maybe a)`              | `Nothing` or `Just` a generated value                                             |
+| `either :: Gen a -> Gen b -> Gen (Either a b)` | `Left` from the first generator or `Right` from the second                        |
+| `assume :: Bool -> Gen ()`                     | Conditionally discard the current test case                                       |
+| `discard :: Gen a`                             | Unconditionally discard the current test case                                     |
+| `defer :: Gen a -> Gen a`                      | Force interactive generation; required on recursive edges                         |
+| `filtered :: (a -> Bool) -> Gen a -> Gen a`    | Retry until the predicate holds _or_ the retry budget exhausts                    |
+| `mapMaybe :: (a -> Maybe b) -> Gen a -> Gen b` | Retry until we draw a value that produces `Just b` _or_ the retry budget exhausts |
+| `just :: Gen (Maybe a) -> Gen a`               | Retry until we draw `Just a` _or_ the retry budget exhausts                       |
+| `enumerate :: Gen a -> Maybe [a]`              | Attempt to enumerate a finite generator's possible values                         |
 
 ## Development
 
@@ -273,3 +273,44 @@ $ just check-format      # verify formatting without modifying files
 $ just docs              # build Haddocks
 $ just repl              # start a GHCi session with this library in-scope
 ```
+
+## Frequently Asked Questions
+
+### What's missing?
+
+`zizek` passes `hegel-core`'s conformance tests, but some work remains outstanding:
+
+* a convenient utility for integrating `Gen` into interactive test cases
+  * e.g. `hedgehog`'s `PropertyT`, which lets users build property-based tests into `IO` test cases more easily
+* support for Hypothesis' test database, which makes replaying failed tests faster and more convenient
+* off-the-shelf integrations with `tasty` and `hspec`
+* misc. UX improvements
+  * pretty-printing for failed property assertions, a la `hedgehog`
+  * more convenient utilities for expressing properties than just `runProperty`/`runProperty_`
+* stateful/state-machine testing
+* `hegel-core` package management via `uv` in the style of the other `hegel-*` libraries
+* Hackage publication
+
+### What's up with the name?
+
+Slavoj Žižek is a contemporary philosopher described as "Hegelo-Lacanian", and whose work deals largely with the implications of how our lives are driven by the unconscious fictions that we perceive as ideology.
+
+Haskell programmers are stereotypically driven by an almost ideological obsession with correctness, which often finds itself at odds with the tools that are associated with more "pragmatically" minded languages like Python.
+
+So it seems appropriate that `zizek` is the mechanism by which we interface with `hegel`.
+
+### ...what?
+
+> "Even Lacan is just a tool for me to read Hegel. For me, always it is Hegel, Hegel, Hegel."
+>
+> Slavoj Žižek
+
+## Acknowledgements
+
+[Antithesis](https://antithesis.com/) for producing [`hegel-core`](https://github.com/hegeldev/hegel-core), [`hegel-rust`](https://github.com/hegeldev/hegel-rust), and the other Hegel libraries that were used as references during the development of `zizek`.
+
+[`hedgehog`](https://hackage.haskell.org/package/hedgehog), for acting as a fantastic reference API for ergonomically constructing generators.
+
+[`QuickCheck`](https://hackage.haskell.org/package/QuickCheck), for being the first property-based testing library I ever used and making it difficult to imagine building software without something like it.
+
+[Mercury Technologies](https://mercury.com/), for providing a supportive environment that allowed this project to develop in the course of one of our company hack weeks (if this sounds interesting to you, [we're hiring!](https://mercury.com/jobs))
