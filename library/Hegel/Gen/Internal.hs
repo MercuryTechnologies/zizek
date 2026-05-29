@@ -333,8 +333,18 @@ filtered p g = case enumerate g of
             then go tc (n - 1)
             else markComplete tc Invalid *> throwIO AssumeRejected
 
--- | Choose one of the given generators uniformly. The list must be
--- non-empty; passing @[]@ raises an error at the call site.
+-- | Choose one of the given generators. The list must be non-empty;
+-- passing @[]@ raises an error at the call site.
+--
+-- /NOTE/: The empirical distribution across branches is __not__ uniform.
+--
+-- Hypothesis explores novel choice sequences rather than drawing uniformly,
+-- so branches that produce more distinct outputs get visited more often.
+--
+-- For example, @oneOf [Gen.bool, Gen.int32]@ exhausts the @bool@ branch
+-- after two cases (it can only produce 'True' or 'False'), so the rest of
+-- the run draws almost exclusively from @int32@. See 'frequency' for the
+-- underlying mechanism.
 oneOf :: forall a. (HasCallStack) => [Gen a] -> Gen a
 oneOf [] = error "Gen.oneOf: used with empty list"
 oneOf gens = OneOf basicOneOf gens
@@ -435,8 +445,24 @@ enumerate (OneOf _ gs) = concat <$> traverse enumerate gs
 enumerate _ = Nothing
 
 -- | Choose one of the given generators, weighted by the accompanying 'Int'.
+--
 -- The list must be non-empty and all weights must be positive; violations
 -- raise an error at the call site.
+--
+-- /NOTE/: Weights bias which branch the server prefers, especially early in a
+-- run, however they do __not__ describe a long-run sampling distribution:
+--
+-- Hypothesis explores novel choice sequences rather than drawing uniformly, so
+-- if branches have different /entropy demand/ (i.e. produce different numbers
+-- of distinct outputs) the output distribution will skew towards branches with
+-- higher entropy, __not__ a distribution characterized by the given weights.
+--
+-- For example, imagine you have a recursive, tree-like data structure with a
+-- @leaf@ generator that draws leaves & a @recursive@ generator that unfolds
+-- more of the tree.
+--
+-- In this case, @frequency [(10, leaf), (1, recursive)]@ will spend most of
+-- its budget on @recursive@ once @leaf@'s novel paths are exhausted.
 frequency :: (HasCallStack) => [(Int, Gen a)] -> Gen a
 frequency [] = error "Gen.frequency: used with empty list"
 frequency pairs

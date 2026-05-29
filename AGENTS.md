@@ -7,12 +7,12 @@ This file provides guidance to Claude Code (claude.ai/code) and other coding age
 This is the Haskell library for Hegel, a universal property-based testing framework. The library communicates with a Python server (powered by Hypothesis) over stdin/stdout pipes to a child process to generate test data.
 
 ```bash
-just check                                           # run format-check + build + test (CI gate)
+just check                                           # run check-format + build + test (CI gate)
 just test                                            # run tests
 just test suite=<name>                               # run a specific test suite
 just lint                                            # STUB: run linters (add hlint to flake.nix first)
 just format                                          # run formatters (cabal, Haskell, Nix)
-just format-check                                    # check formatting without modifying files
+just check-format                                    # check formatting without modifying files
 just docs                                            # build API docs via haddock
 just check-conformance                               # run python conformance tests (builds binaries, then runs pytest tests/conformance/)
 just check-coverage                                  # STUB: check coverage (add hpc-codecov to flake.nix first)

@@ -243,7 +243,7 @@ prop_tree = runProperty_ defaultSettings tree $ \t ->
 
 | Combinator                                     | Purpose                                                                   |
 | ---------------------------------------------- | ------------------------------------------------------------------------- |
-| `oneOf :: [Gen a] -> Gen a`                    | Choose uniformly from a non-empty list of generators                      |
+| `oneOf :: [Gen a] -> Gen a`                    | Choose from a list of generators                                          |
 | `element :: [a] -> Gen a`                      | Choose uniformly from a non-empty list of values                          |
 | `frequency :: [(Int, Gen a)] -> Gen a`         | Weighted choice; all weights must be positive                             |
 | `maybe :: Gen a -> Gen (Maybe a)`              | `Nothing` or `Just` a generated value                                     |
@@ -263,13 +263,13 @@ Clone the repository and enter the development shell with `nix develop`.
 Common development actions can performed with the `just` command runner, for example:
 
 ```shell
-$ just check             # CI checks: format-check + build + test
+$ just check             # CI checks: check-format + build + test
 $ just build             # compile the library & test suite
 $ just test              # run the unit test suite
 $ just test suite=<name> # run a specific test suite
 $ just check-conformance # build the conformance binaries and run the pytest harness
 $ just format            # run all formatters
-$ just format-check      # verify formatting without modifying files
+$ just check-format      # verify formatting without modifying files
 $ just docs              # build Haddocks
 $ just repl              # start a GHCi session with this library in-scope
 ```

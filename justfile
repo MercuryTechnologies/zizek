@@ -8,12 +8,12 @@ format:
   @find {{nix_dirs}} -name '*.nix' -not -path './dist-newstyle/*' | xargs nixpkgs-fmt
 
 # Verify formatting without modifying files (for CI / pre-commit).
-format-check:
+check-format:
   @cabal-gild -i zizek.cabal -o /dev/stdout | diff -u zizek.cabal -
   @find {{hs_dirs}} -name '*.hs' | xargs ormolu --mode check
 
-# Run the same checks CI runs: format-check, build, test.
-check: format-check build test
+# Run the same checks CI runs: check-format, build, test.
+check: check-format build test
 
 build target="all":
   cabal build {{target}}
