@@ -5,9 +5,11 @@ module Hegel.Gen.Internal
   ( -- * Generator type
     Gen (..),
     BasicGenerator (..),
+    BasicSchema (..),
     basic,
     toBasic,
-    schema,
+    materialize,
+    schemaArity,
 
     -- * Combinators
     -- $combinators
@@ -37,6 +39,8 @@ import CBOR.Value (Value (Array, NInt, UInt))
 import Control.Exception (Exception, throwIO)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.List.NonEmpty qualified as NE
+import Data.Sequence (Seq, (<|), (|>))
+import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hegel.Protocol.Cbor (ParseError (..))
@@ -55,22 +59,44 @@ import Prelude hiding (either, maybe)
 -- | A 'Gen' that can be expressed as a single schema request to @hegel@.
 -- Construct one with 'basic'.
 data BasicGenerator a = BasicGenerator
-  { -- | One or more schema parts. A singleton represents a scalar
-    -- generator; multiple parts represent an already-flattened tuple.
-    schemaParts :: !(NonEmpty Value),
-    -- | Converts the server's response back to @a@.
+  { -- | The schema's structure: a scalar wire schema, or a tuple of two or
+    -- more parts produced by 'Applicative' composition.
+    schema :: !BasicSchema,
+    -- | Converts the server's response back to @a@. For a 'Scalar' schema the
+    -- input is the raw scalar value; for a 'Tuple' schema it is the response
+    -- 'Array' wrapping every flat component.
     parse :: Value -> Either ParseError a
   }
+
+-- | The schema of a 'BasicGenerator'. 'Scalar' is one wire value; 'Tuple' is
+-- the already-flattened component list (always two or more) that 'basicAp'
+-- builds when composing basic generators.
+data BasicSchema
+  = Scalar !Value
+  | Tuple !Value !Value !(Seq Value)
+
+-- | Concatenate two schemas into a single flat tuple. Used by 'basicAp' to
+-- combine the schemas of two basic generators without rebuilding the
+-- materialised tuple schema on every step.
+instance Semigroup BasicSchema where
+  Scalar a <> Scalar b = Tuple a b Seq.empty
+  Scalar a <> Tuple b c rest = Tuple a b (c <| rest)
+  Tuple a b rest <> Scalar c = Tuple a b (rest |> c)
+  Tuple a b rest <> Tuple c d more = Tuple a b (rest <> (c <| d <| more))
+
+-- | Number of flat components in a 'BasicSchema'.
+schemaArity :: BasicSchema -> Int
+schemaArity Scalar {} = 1
+schemaArity (Tuple _ _ rest) = 2 + Seq.length rest
 
 instance Functor BasicGenerator where
   fmap f bg = bg {parse = fmap f . bg.parse}
 
--- | Materialise the wire 'Value' for a 'BasicGenerator'. A singleton
--- part is returned as-is; multiple parts are wrapped in a tuple schema.
-schema :: BasicGenerator a -> Value
-schema bg = case bg.schemaParts of
-  v :| [] -> v
-  v :| (w : ws) -> toCBOR (Schema.tuple (v : w : ws))
+-- | Materialize the wire 'Value' for a 'BasicSchema'. A 'Scalar' is its
+-- value as-is; a 'Tuple' is wrapped in a tuple schema.
+materialize :: BasicSchema -> Value
+materialize (Scalar v) = v
+materialize (Tuple a b rest) = toCBOR (Schema.tuple (a : b : foldr (:) [] rest))
 
 -- | Construct a leaf 'Gen' from a typed schema and a parse function.
 -- The schema is encoded via 'CBOR.Class.toCBOR' and sent in a single
@@ -78,7 +104,7 @@ schema bg = case bg.schemaParts of
 --
 -- See 'Hegel.Gen.Bool.bool' for a worked example.
 basic :: (ToCBOR s) => s -> (Value -> Either ParseError a) -> Gen a
-basic s p = Basic (BasicGenerator (toCBOR s :| []) p)
+basic s p = Basic (BasicGenerator (Scalar (toCBOR s)) p)
 
 -- | A generator that produces values of type @a@.
 --
@@ -109,7 +135,7 @@ data Gen a where
 
 toBasic :: Gen a -> Maybe (BasicGenerator a)
 toBasic (Basic bg) = Just bg
-toBasic (Pure a) = Just (BasicGenerator (NE.singleton (toCBOR Schema.unit)) (\_ -> Right a))
+toBasic (Pure a) = Just (BasicGenerator (Scalar (toCBOR Schema.unit)) (\_ -> Right a))
 toBasic (Map c _ _) = c
 toBasic (Ap c _ _) = c
 toBasic (OneOf c _) = c
@@ -144,34 +170,32 @@ instance Applicative Gen where
       basicAp l r = do
         bf <- toBasic l
         ba <- toBasic r
-        let leftArity = NE.length bf.schemaParts
-            rightArity = NE.length ba.schemaParts
+        let leftArity = schemaArity bf.schema
+            rightArity = schemaArity ba.schema
             n = leftArity + rightArity
-            newParts = bf.schemaParts <> ba.schemaParts
-            p (Array arr) | V.length arr == n = do
-              let leftV =
-                    if leftArity == 1
-                      then arr V.! 0
-                      else Array (V.slice 0 leftArity arr)
-                  rightV =
-                    if rightArity == 1
-                      then arr V.! leftArity
-                      else Array (V.slice leftArity rightArity arr)
-              f <- bf.parse leftV
-              a <- ba.parse rightV
-              pure (f a)
+            -- Each sub-spec's parser expects its input shaped to match the
+            -- sub-spec: a scalar wants its raw component value; a tuple
+            -- wants those components re-wrapped in an 'Array'.
+            sliceFor spec offset arity arr = case spec of
+              Scalar _ -> arr V.! offset
+              Tuple {} -> Array (V.slice offset arity arr)
+            p (Array arr)
+              | V.length arr == n = do
+                  f <- bf.parse (sliceFor bf.schema 0 leftArity arr)
+                  a <- ba.parse (sliceFor ba.schema leftArity rightArity arr)
+                  pure (f a)
             p v = Left ParseError {expected = T.pack (show n) <> "-element array", got = v}
-        pure (BasicGenerator newParts p)
+        pure (BasicGenerator (bf.schema <> ba.schema) p)
 
 instance Monad Gen where
   (>>=) = Bind
 
 runBasic :: TestCase -> BasicGenerator a -> IO a
 runBasic tc bg = do
-  raw <- generate tc (schema bg)
+  raw <- generate tc (materialize bg.schema)
   case bg.parse raw of
     Right a -> pure a
-    Left err -> throwIO UnexpectedResponse {sentSchema = schema bg, received = raw, cause = err}
+    Left err -> throwIO UnexpectedResponse {sentSchema = materialize bg.schema, received = raw, cause = err}
 
 -- Count non-'Pure' leaves in an 'Ap' spine, to decide whether a TUPLE span
 -- is needed: fewer than 2 real draws don't require one.
@@ -343,7 +367,7 @@ oneOf gens = OneOf basicOneOf gens
                     { expected = "0 <= index < " <> T.pack (show n),
                       got = v
                     }
-      pure (BasicGenerator (NE.singleton sch) p)
+      pure (BasicGenerator (Scalar sch) p)
 
     pureVal :: Gen a -> Maybe a
     pureVal (Pure a) = Just a
@@ -352,7 +376,7 @@ oneOf gens = OneOf basicOneOf gens
     fullOpt :: Maybe (BasicGenerator a)
     fullOpt = do
       bs <- traverse toBasic gens
-      let sch = toCBOR (Schema.oneOf (NE.toList (fmap schema bs)))
+      let sch = toCBOR (Schema.oneOf (NE.toList (fmap (materialize . (.schema)) bs)))
           parsers = V.fromList (NE.toList (fmap (.parse) bs))
           p (Array arr) | V.length arr == 2 = do
             let idxV = arr V.! 0
@@ -367,7 +391,7 @@ oneOf gens = OneOf basicOneOf gens
                       got = idxV
                     }
           p v = Left ParseError {expected = "[index, value] array", got = v}
-      pure (BasicGenerator (NE.singleton sch) p)
+      pure (BasicGenerator (Scalar sch) p)
 
 -- | Generate one of the given values.
 element :: NonEmpty a -> Gen a

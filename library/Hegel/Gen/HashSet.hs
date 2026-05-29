@@ -25,7 +25,7 @@ import Data.Hashable (Hashable)
 import Data.Vector qualified as V
 import Hegel.Collection qualified as Collection
 import Hegel.Gen.Builder (Build (..), HasSize (..))
-import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), basic, draw, schema, toBasic)
+import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), basic, draw, materialize, toBasic)
 import Hegel.Protocol.Cbor (ParseError (..))
 import Hegel.Schema qualified as Schema
 import Hegel.TestCase (Label (..), startSpan, stopSpan)
@@ -48,7 +48,7 @@ instance (Hashable a) => Build (HashSetBuilder a) (HashSet a) where
   build b = case toBasic b.sElement of
     Just be ->
       basic
-        (Schema.list (schema be) b.sMinSize b.sMaxSize True)
+        (Schema.list (materialize be.schema) b.sMinSize b.sMaxSize True)
         (parseHashSet be.parse)
     Nothing ->
       Draw $ \tc -> do

@@ -12,7 +12,7 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hegel (Gen, runProperty_)
 import Hegel.Gen qualified as Gen
-import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), schema, toBasic)
+import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), materialize, schemaArity, toBasic)
 import Hegel.Protocol.Cbor (ParseError (..))
 import Hegel.Runner (defaultSettings)
 import Hegel.Schema qualified as Schema
@@ -82,10 +82,10 @@ spec = do
     runProperty_ defaultSettings g $ \n ->
       n `shouldNotBe` 7
 
-  it "ap chain of length 3 produces flat schemaParts, not nested" $ do
+  it "ap chain of length 3 produces flat schema parts, not nested" $ do
     let g = (,,) <$> (Gen.bool & Gen.build) <*> intR (0, 10) <*> (Gen.bool & Gen.build)
     case g of
-      Ap (Just bg) _ _ -> length bg.schemaParts `shouldBe` 3
+      Ap (Just bg) _ _ -> schemaArity bg.schema `shouldBe` 3
       _ -> expectationFailure "expected Ap with basic schema"
 
   it "ap chain of length 3 parser round-trips a 3-element array" $ do
@@ -136,13 +136,13 @@ spec = do
     it "schema: default bounds, no max_size" $ do
       let g = Gen.binary & Gen.build
       case toBasic g of
-        Just bg -> schema bg `shouldBe` toCBOR (Schema.binary 0 Nothing)
+        Just bg -> materialize bg.schema `shouldBe` toCBOR (Schema.binary 0 Nothing)
         Nothing -> expectationFailure "expected basic generator"
 
     it "schema: explicit minSize and maxSize" $ do
       let g = Gen.binary & Gen.minSize 4 & Gen.maxSize 64 & Gen.build
       case toBasic g of
-        Just bg -> schema bg `shouldBe` toCBOR (Schema.binary 4 (Just 64))
+        Just bg -> materialize bg.schema `shouldBe` toCBOR (Schema.binary 4 (Just 64))
         Nothing -> expectationFailure "expected basic generator"
 
     it "parser rejects non-ByteString values" $ do
@@ -157,7 +157,7 @@ spec = do
   describe "Gen.list" $ do
     let elemGen = Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
         intElemSchema = case toBasic elemGen of
-          Just bg -> schema bg
+          Just bg -> materialize bg.schema
           Nothing -> error "intElemSchema: elemGen should be basic"
 
     it "basic path: produces a Basic gen with list schema" $ do
@@ -201,19 +201,19 @@ spec = do
     it "schema: default bounds, unique=False" $ do
       let g = Gen.list elemGen & Gen.build
       case toBasic g of
-        Just bg -> schema bg `shouldBe` toCBOR (Schema.list intElemSchema 0 Nothing False)
+        Just bg -> materialize bg.schema `shouldBe` toCBOR (Schema.list intElemSchema 0 Nothing False)
         Nothing -> expectationFailure "expected basic generator"
 
     it "schema: min/max size present" $ do
       let g = Gen.list elemGen & Gen.minSize 1 & Gen.maxSize 5 & Gen.build
       case toBasic g of
-        Just bg -> schema bg `shouldBe` toCBOR (Schema.list intElemSchema 1 (Just 5) False)
+        Just bg -> materialize bg.schema `shouldBe` toCBOR (Schema.list intElemSchema 1 (Just 5) False)
         Nothing -> expectationFailure "expected basic generator"
 
     it "schema: unique=True when predicate set" $ do
       let g = Gen.list elemGen & Gen.unique (==) & Gen.build
       case toBasic g of
-        Just bg -> schema bg `shouldBe` toCBOR (Schema.list intElemSchema 0 Nothing True)
+        Just bg -> materialize bg.schema `shouldBe` toCBOR (Schema.list intElemSchema 0 Nothing True)
         Nothing -> expectationFailure "expected basic generator"
 
     it "non-basic path: toBasic returns Nothing for filtered elements" $ do
@@ -234,19 +234,19 @@ spec = do
   describe "Gen.set" $ do
     let elemGen' = Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
         intElemSchema' = case toBasic elemGen' of
-          Just bg -> schema bg
+          Just bg -> materialize bg.schema
           Nothing -> error "intElemSchema': elemGen' should be basic"
 
     it "basic path: schema is list with unique=True" $ do
       let g = Gen.set elemGen' & Gen.build :: Gen (Set Int)
       case toBasic g of
-        Just bg -> schema bg `shouldBe` toCBOR (Schema.list intElemSchema' 0 Nothing True)
+        Just bg -> materialize bg.schema `shouldBe` toCBOR (Schema.list intElemSchema' 0 Nothing True)
         Nothing -> expectationFailure "expected basic generator"
 
     it "schema: min/max size present" $ do
       let g = Gen.set elemGen' & Gen.minSize 2 & Gen.maxSize 8 & Gen.build :: Gen (Set Int)
       case toBasic g of
-        Just bg -> schema bg `shouldBe` toCBOR (Schema.list intElemSchema' 2 (Just 8) True)
+        Just bg -> materialize bg.schema `shouldBe` toCBOR (Schema.list intElemSchema' 2 (Just 8) True)
         Nothing -> expectationFailure "expected basic generator"
 
     it "basic path: produces distinct elements"
@@ -260,22 +260,22 @@ spec = do
     let keyGen' = Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
         valGen' = Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
         keySchema' = case toBasic keyGen' of
-          Just bg -> schema bg
+          Just bg -> materialize bg.schema
           Nothing -> error "keySchema': keyGen' should be basic"
         valSchema' = case toBasic valGen' of
-          Just bg -> schema bg
+          Just bg -> materialize bg.schema
           Nothing -> error "valSchema': valGen' should be basic"
 
     it "basic path: schema is dict with key and value sub-schemas" $ do
       let g = Gen.map keyGen' valGen' & Gen.build :: Gen (Map Int Int)
       case toBasic g of
-        Just bg -> schema bg `shouldBe` toCBOR (Schema.map keySchema' valSchema' 0 Nothing)
+        Just bg -> materialize bg.schema `shouldBe` toCBOR (Schema.map keySchema' valSchema' 0 Nothing)
         Nothing -> expectationFailure "expected basic generator"
 
     it "schema: min/max size present" $ do
       let g = Gen.map keyGen' valGen' & Gen.minSize 1 & Gen.maxSize 5 & Gen.build :: Gen (Map Int Int)
       case toBasic g of
-        Just bg -> schema bg `shouldBe` toCBOR (Schema.map keySchema' valSchema' 1 (Just 5))
+        Just bg -> materialize bg.schema `shouldBe` toCBOR (Schema.map keySchema' valSchema' 1 (Just 5))
         Nothing -> expectationFailure "expected basic generator"
 
     it "non-basic path when key generator is non-basic" $ do

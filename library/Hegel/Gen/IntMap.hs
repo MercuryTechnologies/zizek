@@ -25,7 +25,7 @@ import Data.IntMap.Strict qualified as IntMap
 import Data.Vector qualified as V
 import Hegel.Collection qualified as Collection
 import Hegel.Gen.Builder (Build (..), HasSize (..))
-import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), basic, draw, schema, toBasic)
+import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), basic, draw, materialize, toBasic)
 import Hegel.Protocol.Cbor (ParseError (..))
 import Hegel.Schema qualified as Schema
 import Hegel.TestCase (Label (..), startSpan, stopSpan)
@@ -50,7 +50,7 @@ instance Build (IntMapBuilder v) (IntMap v) where
   build b = case (toBasic b.mKeys, toBasic b.mValues) of
     (Just bk, Just bv) ->
       basic
-        (Schema.map (schema bk) (schema bv) b.mMinSize b.mMaxSize)
+        (Schema.map (materialize bk.schema) (materialize bv.schema) b.mMinSize b.mMaxSize)
         (parseIntMap bk.parse bv.parse)
     _ ->
       Draw $ \tc -> do
