@@ -3,9 +3,9 @@
 let
   # nixpkgs pins hypothesis 6.136.9; observability_enabled was added in 6.137.0.
   # Build from the wheel to avoid the upstream monorepo sourceRoot issue.
-  hypothesis_6_152_9 = python3Packages.buildPythonPackage rec {
+  hypothesis_6_155_0 = python3Packages.buildPythonPackage rec {
     pname = "hypothesis";
-    version = "6.152.9";
+    version = "6.155.0";
     format = "wheel";
     src = python3Packages.fetchPypi {
       inherit pname version;
@@ -14,7 +14,7 @@ let
       python = "py3";
       abi = "none";
       platform = "any";
-      hash = "sha256-nE/cyx6sCxLsdAwSKQ0OagvqNSaj8L+BK3ZDu1Y8LYs=";
+      hash = "sha256-1v+jBir6uvkISRvnB8YIQ/ZnH3w+ny7SSdWCcgfrvzM=";
     };
     doCheck = false;
   };
@@ -38,7 +38,7 @@ python3Packages.buildPythonPackage rec {
   dependencies = with python3Packages; [
     cbor2
     click
-    hypothesis_6_152_9
+    hypothesis_6_155_0
     sortedcontainers
   ];
 
