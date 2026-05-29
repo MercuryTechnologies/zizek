@@ -6,13 +6,13 @@
 -- > import Data.Function ((&))
 -- > import Hegel.Gen qualified as Gen
 -- >
--- > gen1 = Gen.bool                                              & Gen.build
--- > gen2 = Gen.integral @Int & Gen.min 0 & Gen.max 100           & Gen.build
--- > gen3 = Gen.double & Gen.min 0 & Gen.max 1 & Gen.disallowNan  & Gen.build
--- > gen4 = Gen.binary & Gen.minSize 4 & Gen.maxSize 64           & Gen.build
--- > gen5 = Gen.text  & Gen.minSize 1 & Gen.maxSize 64            & Gen.build
--- > gen6 = Gen.char                                              & Gen.build
--- > gen7 = Gen.regex "[a-z]+" & Gen.fullMatch                    & Gen.build
+-- > gen1 = Gen.bool                                             & Gen.build
+-- > gen2 = Gen.int & Gen.min 0 & Gen.max 100                    & Gen.build
+-- > gen3 = Gen.double & Gen.min 0 & Gen.max 1 & Gen.disallowNan & Gen.build
+-- > gen4 = Gen.binary & Gen.minSize 4 & Gen.maxSize 64          & Gen.build
+-- > gen5 = Gen.text  & Gen.minSize 1 & Gen.maxSize 64           & Gen.build
+-- > gen6 = Gen.char                                             & Gen.build
+-- > gen7 = Gen.regex "[a-z]+" & Gen.fullMatch                   & Gen.build
 --
 -- Applying a modifier that doesn't belong to a builder (e.g.
 -- @Gen.integral & Gen.disallowNan@) is a type error.
@@ -68,6 +68,30 @@ module Hegel.Gen
     ListBuilder,
     list,
     unique,
+
+    -- * Set
+    SetBuilder,
+    set,
+
+    -- * HashSet
+    HashSetBuilder,
+    hashSet,
+
+    -- * IntSet
+    IntSetBuilder,
+    intSet,
+
+    -- * Map
+    MapBuilder,
+    map,
+
+    -- * HashMap
+    HashMapBuilder,
+    hashMap,
+
+    -- * IntMap
+    IntMapBuilder,
+    intMap,
 
     -- * Text
     TextBuilder,
@@ -155,6 +179,10 @@ import Hegel.Gen.Float
     exclusiveMin,
     float,
   )
+import Hegel.Gen.HashMap (HashMapBuilder, hashMap)
+import Hegel.Gen.HashSet (HashSetBuilder, hashSet)
+import Hegel.Gen.IntMap (IntMapBuilder, intMap)
+import Hegel.Gen.IntSet (IntSetBuilder, intSet)
 import Hegel.Gen.Integer
   ( IntegralBuilder,
     enum,
@@ -190,8 +218,10 @@ import Hegel.Gen.Internal
     oneOf,
   )
 import Hegel.Gen.List (ListBuilder, list, unique)
+import Hegel.Gen.Map (MapBuilder, map)
 import Hegel.Gen.Regex (RegexBuilder, alphabet, fullMatch, regex)
+import Hegel.Gen.Set (SetBuilder, set)
 import Hegel.Gen.Text (TextBuilder, text)
 import Hegel.Gen.Uri (UriBuilder, UriTextBuilder, uri, uriText)
 import Hegel.Gen.Uuid (UuidBuilder, uuid, version)
-import Prelude hiding (either, maybe)
+import Prelude hiding (either, map, maybe)

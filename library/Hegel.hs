@@ -8,7 +8,7 @@
 -- prop_addCommutes :: IO ()
 -- prop_addCommutes =
 --   'runProperty_' 'defaultSettings'
---     (Gen.integral @Int & Gen.build)
+--     (Gen.int & Gen.build)
 --     (\\x -> 'assert' (x + 0 == x) "identity")
 -- @
 module Hegel

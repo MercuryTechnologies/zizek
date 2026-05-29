@@ -53,13 +53,14 @@ common library
     bytestring ^>=0.12,
     containers ^>=0.7,
     digest ^>=0.0,
+    hashable ^>=1.4 || ^>=1.5,
     network-uri ^>=2.6,
-    patrol,
     stm ^>=2.5,
     stm-containers ^>=1.2,
     text ^>=2.1,
     typed-process ^>=0.2,
     unliftio ^>=0.2,
+    unordered-containers ^>=0.2,
     uuid ^>=1.3,
     vector ^>=0.13,
     wireform-cbor,
@@ -80,10 +81,16 @@ library
     Hegel.Gen.Char
     Hegel.Gen.Domain
     Hegel.Gen.Float
+    Hegel.Gen.HashMap
+    Hegel.Gen.HashSet
+    Hegel.Gen.IntMap
+    Hegel.Gen.IntSet
     Hegel.Gen.Integer
     Hegel.Gen.Internal
     Hegel.Gen.List
+    Hegel.Gen.Map
     Hegel.Gen.Regex
+    Hegel.Gen.Set
     Hegel.Gen.Text
     Hegel.Gen.Uri
     Hegel.Gen.Uuid
@@ -196,6 +203,26 @@ executable test-list
     zizek,
     zizek:conformance-utils,
 
+executable test-set
+  import: library
+  hs-source-dirs: tests/conformance/set
+  main-is: Main.hs
+  build-depends:
+    aeson ^>=2.2,
+    containers ^>=0.7,
+    zizek,
+    zizek:conformance-utils,
+
+executable test-map
+  import: library
+  hs-source-dirs: tests/conformance/map
+  main-is: Main.hs
+  build-depends:
+    aeson ^>=2.2,
+    containers ^>=0.7,
+    zizek,
+    zizek:conformance-utils,
+
 executable test-char
   import: library
   hs-source-dirs: tests/conformance/char
@@ -233,6 +260,7 @@ test-suite unit
     StandardGenerators
 
   build-depends:
+    containers ^>=0.7,
     hspec ^>=2.11,
     tasty ^>=1.5,
     tasty-hspec ^>=1.2,

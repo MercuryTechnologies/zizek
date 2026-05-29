@@ -32,6 +32,8 @@ module Hegel.Schema
     -- * Collection schemas
     ListSchema (..),
     list,
+    MapSchema (..),
+    map,
 
     -- * Composite \/ wire-only schemas (used by @Hegel.Gen.Internal@)
     UnitSchema,
@@ -48,6 +50,7 @@ import CBOR.Value (Value (..))
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import Hegel.Protocol.Cbor (buildMap, (.=), (.=?))
+import Prelude hiding (map)
 
 -- | Boolean schema. Server emits 'True' or 'False' uniformly.
 data BoolSchema = BoolSchema
@@ -312,6 +315,32 @@ instance ToCBOR ListSchema where
 -- | Build a list schema from element schema, size bounds, and uniqueness flag.
 list :: Value -> Int -> Maybe Int -> Bool -> ListSchema
 list = ListSchema
+
+-- | Map (dictionary) schema: variable-length key-value entries.
+data MapSchema = MapSchema
+  { -- | Schema for keys.
+    keys :: !Value,
+    -- | Schema for values.
+    values :: !Value,
+    -- | Minimum number of entries (inclusive).
+    minSize :: !Int,
+    -- | Maximum number of entries (inclusive), or unbounded.
+    maxSize :: !(Maybe Int)
+  }
+
+instance ToCBOR MapSchema where
+  toCBOR s =
+    buildMap $
+      [ "type" .= ("dict" :: Text),
+        "keys" .= s.keys,
+        "values" .= s.values,
+        "min_size" .= s.minSize
+      ]
+        <> catMaybes ["max_size" .=? s.maxSize]
+
+-- | Build a map schema from key schema, value schema, and size bounds.
+map :: Value -> Value -> Int -> Maybe Int -> MapSchema
+map = MapSchema
 
 -- | Constant schema: always returns @null@. Used as a sentinel in
 -- @Hegel.Gen.Internal@ for 'Pure' branches of 'oneOf'.

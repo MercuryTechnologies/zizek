@@ -384,7 +384,7 @@ element = oneOf . fmap pure
 -- > treeGen :: Gen Tree
 -- > treeGen = oneOf (leaf :| [branch])
 -- >   where
--- >     leaf   = Leaf <$> (Gen.integral @Int & Gen.build)
+-- >     leaf   = Leaf <$> (Gen.int & Gen.build)
 -- >     branch = Branch <$> defer treeGen <*> defer treeGen
 --
 -- 'defer' always falls back to interactive generation (spans are emitted

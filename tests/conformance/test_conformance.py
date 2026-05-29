@@ -38,6 +38,15 @@ def test_conformance(subtests):
                 max_value=INT64_MAX,
             ),
             ListConformance(BIN_DIR / "test-list", skip_unique=True),
+            ListConformance(BIN_DIR / "test-set", skip_unique=False),
+            DictConformance(
+                BIN_DIR / "test-map",
+                min_key=-(2**63),
+                max_key=2**63 - 1,
+                min_value=-(2**63),
+                max_value=2**63 - 1,
+                skip_server_metrics=True,
+            ),
             OriginDeduplicationConformance(BIN_DIR / "test-origin-deduplication"),
             SampledFromConformance(BIN_DIR / "test-sampled-from"),
             OneOfConformance(BIN_DIR / "test-one-of"),
@@ -47,7 +56,6 @@ def test_conformance(subtests):
         ],
         subtests,
         skip_tests=[
-            DictConformance,
             StopTestOnGenerateConformance,
             StopTestOnMarkCompleteConformance,
             ErrorResponseConformance,

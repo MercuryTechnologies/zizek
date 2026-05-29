@@ -3,7 +3,7 @@
 -- Unbounded by default; narrow with 'Hegel.Gen.Builder.min' and
 -- 'Hegel.Gen.Builder.max':
 --
--- > Gen.integral @Int & Gen.min 0 & Gen.max 100 & Gen.build
+-- > Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
 module Hegel.Gen.Integer
   ( -- * Builder
     IntegralBuilder,
@@ -47,8 +47,8 @@ data IntegralBuilder a = IntegralBuilder
 --
 -- Use a type application or a type-pinned alias to fix the element type:
 --
--- > Gen.integral @Int   & Gen.build
--- > Gen.int             & Gen.build
+-- > Gen.integral @Int & Gen.build
+-- > Gen.int           & Gen.build
 integral :: IntegralBuilder a
 integral = IntegralBuilder {bMin = Nothing, bMax = Nothing}
 

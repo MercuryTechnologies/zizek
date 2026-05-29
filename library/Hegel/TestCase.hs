@@ -152,10 +152,12 @@ collectionMore tc cid = do
       _ -> throwIO e
 
 -- | Notify the server that the last drawn element was rejected (e.g. a
--- duplicate). The optional reason string is advisory only.
+-- duplicate). The optional reason string is advisory only. Throws
+-- 'TestStopped' if the server exhausts its rejection budget with
+-- @count < min_size@ and signals @StopTest@.
 collectionReject :: TestCase -> Int -> Maybe Text -> IO ()
 collectionReject tc cid why = do
-  _ <- requestCbor tc.stream req
+  _ <- requestCbor tc.stream req `catch` mapStopTest
   pure ()
   where
     req =
@@ -164,6 +166,10 @@ collectionReject tc cid why = do
           "collection_id" .= cid,
           ("why", maybe Null TextString why)
         ]
+    mapStopTest :: ServerError -> IO Value
+    mapStopTest (e :: ServerError) = case e.errorType of
+      "StopTest" -> throwIO TestStopped
+      _ -> throwIO e
 
 -- | Open a span that groups related draws under the given 'Label'.
 startSpan :: TestCase -> Label -> IO ()

@@ -30,7 +30,7 @@ instance ToJSON Metrics where
   toJSON = genericToJSON aesonOpts
 
 branch :: Range -> Gen Int
-branch r = Gen.integral @Int & Gen.min r.minValue & Gen.max r.maxValue & Gen.build
+branch r = Gen.int & Gen.min r.minValue & Gen.max r.maxValue & Gen.build
 
 main :: IO ()
 main = do

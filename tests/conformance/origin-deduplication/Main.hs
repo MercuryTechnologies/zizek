@@ -29,7 +29,7 @@ instance Aeson.FromJSON Params where
 main :: IO ()
 main = do
   params <- decodeArgs @Params
-  let gen = Gen.integral @Int & Gen.min 0 & Gen.max 100 & Gen.build
+  let gen = Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
       body x = do
         -- The harness pairs client metrics 1:1 with server metrics, so we
         -- emit a sentinel line per test case to keep the lengths aligned.

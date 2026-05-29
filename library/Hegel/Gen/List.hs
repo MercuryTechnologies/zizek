@@ -3,7 +3,7 @@
 -- Build a list generator by chaining modifiers onto 'list' and materialising
 -- with 'Hegel.Gen.Builder.build':
 --
--- > Gen.list (Gen.integral @Int & Gen.min 0 & Gen.max 100 & Gen.build)
+-- > Gen.list (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
 -- >   & Gen.minSize 1
 -- >   & Gen.maxSize 10
 -- >   & Gen.build
@@ -62,7 +62,15 @@ instance Build (ListBuilder a) [a] where
     Nothing ->
       Draw $ \tc -> do
         startSpan tc LabelList
-        coll <- Collection.new tc b.lMinSize b.lMaxSize
+        -- For unique lists, see Note [Variable-size mode required for reject]
+        -- in Hegel.Collection.
+        --
+        -- Non-unique lists don't call 'Collection.reject' so we don't need to
+        -- normalize the bounds.
+        let poolMax = case (b.lUnique, b.lMaxSize) of
+              (Just _, Just mx) -> Just (Prelude.max (b.lMinSize + 1) mx)
+              _ -> b.lMaxSize
+        coll <- Collection.new tc b.lMinSize poolMax
         let dup = case b.lUnique of
               Just eq -> \x xs -> any (eq x) xs
               Nothing -> \_ _ -> False
@@ -73,11 +81,14 @@ instance Build (ListBuilder a) [a] where
                 else do
                   x <- draw tc b.lElement
                   if dup x acc
-                    then Collection.reject coll (Just "duplicate element") >> loop acc
+                    then Collection.reject coll (Just "duplicate element") *> loop acc
                     else loop (x : acc)
         result <- loop []
+        let trimmed = case b.lMaxSize of
+              Just mx | length result > mx -> take mx result
+              _ -> result
         stopSpan tc False
-        pure result
+        pure trimmed
 
 parseList :: (Value -> Either ParseError a) -> Value -> Either ParseError [a]
 parseList p (Array vec) = traverse p (V.toList vec)

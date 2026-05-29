@@ -5,6 +5,9 @@ import CBOR.Value (Value (..))
 import Data.Function ((&))
 import Data.List (nub)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Map.Strict (Map)
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hegel (Gen, runProperty_)
@@ -152,7 +155,7 @@ spec = do
         Nothing -> expectationFailure "expected basic generator"
 
   describe "Gen.list" $ do
-    let elemGen = Gen.integral @Int & Gen.min 0 & Gen.max 100 & Gen.build
+    let elemGen = Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
         intElemSchema = case toBasic elemGen of
           Just bg -> schema bg
           Nothing -> error "intElemSchema: elemGen should be basic"
@@ -174,7 +177,7 @@ spec = do
     it "basic path with unique: produces distinct elements"
       $ runProperty_
         defaultSettings
-        ( Gen.list (Gen.integral @Int & Gen.min 0 & Gen.max 1000 & Gen.build)
+        ( Gen.list (Gen.int & Gen.min 0 & Gen.max 1000 & Gen.build)
             & Gen.minSize 3
             & Gen.maxSize 10
             & Gen.unique (==)
@@ -227,3 +230,56 @@ spec = do
             Left err -> T.unpack err.expected `shouldBe` "array"
             Right _ -> expectationFailure "expected parse error"
         Nothing -> expectationFailure "expected basic generator"
+
+  describe "Gen.set" $ do
+    let elemGen' = Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
+        intElemSchema' = case toBasic elemGen' of
+          Just bg -> schema bg
+          Nothing -> error "intElemSchema': elemGen' should be basic"
+
+    it "basic path: schema is list with unique=True" $ do
+      let g = Gen.set elemGen' & Gen.build :: Gen (Set Int)
+      case toBasic g of
+        Just bg -> schema bg `shouldBe` toCBOR (Schema.list intElemSchema' 0 Nothing True)
+        Nothing -> expectationFailure "expected basic generator"
+
+    it "schema: min/max size present" $ do
+      let g = Gen.set elemGen' & Gen.minSize 2 & Gen.maxSize 8 & Gen.build :: Gen (Set Int)
+      case toBasic g of
+        Just bg -> schema bg `shouldBe` toCBOR (Schema.list intElemSchema' 2 (Just 8) True)
+        Nothing -> expectationFailure "expected basic generator"
+
+    it "basic path: produces distinct elements"
+      $ runProperty_
+        defaultSettings
+        (Gen.set (Gen.int & Gen.min 0 & Gen.max 1000 & Gen.build) & Gen.minSize 3 & Gen.maxSize 10 & Gen.build)
+      $ \s ->
+        length (nub (Set.toList s)) `shouldBe` length (Set.toList s)
+
+  describe "Gen.map" $ do
+    let keyGen' = Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
+        valGen' = Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
+        keySchema' = case toBasic keyGen' of
+          Just bg -> schema bg
+          Nothing -> error "keySchema': keyGen' should be basic"
+        valSchema' = case toBasic valGen' of
+          Just bg -> schema bg
+          Nothing -> error "valSchema': valGen' should be basic"
+
+    it "basic path: schema is dict with key and value sub-schemas" $ do
+      let g = Gen.map keyGen' valGen' & Gen.build :: Gen (Map Int Int)
+      case toBasic g of
+        Just bg -> schema bg `shouldBe` toCBOR (Schema.map keySchema' valSchema' 0 Nothing)
+        Nothing -> expectationFailure "expected basic generator"
+
+    it "schema: min/max size present" $ do
+      let g = Gen.map keyGen' valGen' & Gen.minSize 1 & Gen.maxSize 5 & Gen.build :: Gen (Map Int Int)
+      case toBasic g of
+        Just bg -> schema bg `shouldBe` toCBOR (Schema.map keySchema' valSchema' 1 (Just 5))
+        Nothing -> expectationFailure "expected basic generator"
+
+    it "non-basic path when key generator is non-basic" $ do
+      let g = Gen.map (Gen.filtered even keyGen') valGen' & Gen.build :: Gen (Map Int Int)
+      case toBasic g of
+        Nothing -> pure ()
+        Just _ -> expectationFailure "expected non-basic generator"
