@@ -103,7 +103,7 @@ Server-managed collections use `Collection.new`/`Collection.more`/`Collection.re
 
 ### Conformance Tests
 
-Located in `tests/conformance/`. Haskell test binaries in `tests/conformance/haskell/` are invoked by a Python test runner (`tests/conformance/test_conformance.py`) that validates generators produce values matching their declared constraints.
+Located in `tests/conformance/`. The Haskell test binaries (one per generator category, e.g. `tests/conformance/integers/Main.hs`) are invoked by the Python test runner in `tests/conformance/pytest/test_conformance.py`, which validates generators produce values matching their declared constraints. Built binaries are symlinked into `tests/conformance/pytest/bin/`.
 
 ## Miscellaneous Conventions
 

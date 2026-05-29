@@ -187,4 +187,4 @@ spec = do
         T.length t `shouldSatisfy` (<= 30)
 
 -- StopTest (server entropy exhausted mid-case) is exercised end-to-end by
--- StopTestOnGenerateConformance in tests/conformance/test_conformance.py.
+-- StopTestOnGenerateConformance in tests/conformance/pytest/test_conformance.py.

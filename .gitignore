@@ -19,7 +19,8 @@ cabal/*
 .claude/settings.local.json
 
 # conformance test binaries (built by just check-conformance)
-tests/conformance/bin/
+tests/conformance/pytest/bin/*
+!tests/conformance/pytest/bin/.gitkeep
 
 # python bytecode cache
 __pycache__/
