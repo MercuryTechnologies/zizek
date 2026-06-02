@@ -1,0 +1,10 @@
+prefix=@dev@
+libdir=@out@/lib
+includedir=@dev@/include
+
+Name: hegel
+Description: libhegel native Hypothesis engine (hegeltest-c)
+Version: @version@
+Cflags: -I${includedir}
+Libs: -L${libdir} -lhegel
+Libs.private: -lpthread -ldl -lm

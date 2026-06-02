@@ -21,6 +21,7 @@
     {
       packages = forAllSystems ({ pkgs, ... }: {
         hegel-core = (pkgs.callPackage ./nix/hegel-core.nix { });
+        libhegel = pkgs.callPackage ./nix/libhegel { };
       });
 
       devShells = forAllSystems (
@@ -53,6 +54,9 @@
                 zlib.dev
                 # python interpreter with hegel-core + conformance test deps
                 python
+                # native libhegel C library + pkg-config for discovery
+                self'.packages.libhegel
+                pkg-config
               ]
               ++ lib.optionals stdenv.hostPlatform.isDarwin [
                 apple-sdk_15
