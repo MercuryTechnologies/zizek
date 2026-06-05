@@ -11,6 +11,11 @@ license-file: LICENSE
 tested-with: ghc ^>=9.10 && ^>=9.12
 build-type: Simple
 
+flag native
+  description: Build the native libhegel FFI backend.
+  default: True
+  manual: True
+
 common all
   default-language: GHC2021
   build-depends:
@@ -112,6 +117,11 @@ library
       CoreFoundation
       IOKit
       Security
+
+  if flag(native)
+    hs-source-dirs: library-native
+    exposed-modules: Hegel.Native.FFI
+    pkgconfig-depends: hegel
 
 library conformance-utils
   import: library
@@ -283,3 +293,21 @@ test-suite unit
     tasty ^>=1.5,
     tasty-hspec ^>=1.2,
     zizek,
+
+test-suite native
+  import: library
+  type: exitcode-stdio-1.0
+  hs-source-dirs: tests/native
+  main-is: Main.hs
+  ghc-options:
+    -threaded
+    -rtsopts
+    -with-rtsopts=-N
+
+  build-depends:
+    tasty ^>=1.5,
+    tasty-hunit ^>=0.10,
+    zizek,
+
+  if !flag(native)
+    buildable: False
