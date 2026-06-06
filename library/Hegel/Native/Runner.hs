@@ -188,6 +188,9 @@ runCase settings gen body tcPtr =
         (Right <$> draw tc gen)
           `catches` [ Handler \AssumeRejected ->
                         markComplete tc Invalid $> Left CaseInvalid,
+                      -- libhegel owns the choice budget but does not observe
+                      -- that we stopped, so report Overrun explicitly to let
+                      -- the engine shrink.
                       Handler \TestStopped ->
                         markComplete tc Overrun $> Left CaseOverrun,
                       Handler \(e :: SomeException) ->

@@ -20,9 +20,10 @@ import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BL
 import Data.Char (isUpper, toLower)
 import Data.IORef (newIORef, readIORef, writeIORef)
-import Hegel (Gen, closeSession, globalSession, runProperty)
+import Hegel (Gen, runProperty)
 import Hegel.Outcome (Outcome (..))
-import Hegel.Runner (Settings (..), defaultSettings)
+import Hegel.Server.Session (closeSession, globalSession)
+import Hegel.Settings (Settings (..), defaultSettings)
 import System.Environment (getArgs, getProgName, lookupEnv)
 import System.Exit (ExitCode (..), die, exitSuccess, exitWith)
 import System.IO (Handle, IOMode (..), hFlush, openFile)

@@ -3,9 +3,10 @@ module SessionRecovery (spec) where
 import Data.Function ((&))
 import Hegel.Gen qualified as Gen
 import Hegel.Outcome (Outcome (..))
-import Hegel.Runner (Settings (..), defaultSettings, runPropertyOn)
-import Hegel.Session (defaultSessionConfig, withSession)
-import Hegel.Session.Internal (liveProcess)
+import Hegel.Server.Runner (runPropertyOn)
+import Hegel.Server.Session (defaultSessionConfig, withSession)
+import Hegel.Server.Session.Internal (liveProcess)
+import Hegel.Settings (Settings (..), defaultSettings)
 import System.Process.Typed (stopProcess)
 import Test.Hspec
 

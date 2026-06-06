@@ -5,11 +5,11 @@ module Hegel.Native.Settings
 where
 
 import Data.Bits ((.|.))
-import Data.Text qualified as T
 import Data.Word (Word32)
 import Foreign (Ptr)
 import Foreign.C.String (withCString)
 import Foreign.C.Types (CBool (..))
+import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Native.FFI
 import Hegel.Phase (Phase (..))
 import Hegel.Settings (Settings (..))
@@ -35,9 +35,12 @@ applySettings s ptr = do
 boolC :: Bool -> CBool
 boolC b = CBool (if b then 1 else 0)
 
+-- | OR the per-phase flags into a bitmask. An empty list yields @0@, which
+-- libhegel runs as a no-op (a vacuous pass) — matching the server backend,
+-- which forwards an empty phase list verbatim. Do not special-case @[]@ to
+-- mean \"all phases\"; an empty selection deliberately disables every phase.
 phasesBitmask :: [Phase] -> Word32
-phasesBitmask [] = HEGEL_PHASE_ALL
-phasesBitmask ps = foldl' (\acc p -> acc .|. phaseFlag p) 0 ps
+phasesBitmask = foldl' (\acc p -> acc .|. phaseFlag p) 0
 
 phaseFlag :: Phase -> Word32
 phaseFlag Explicit = HEGEL_PHASE_EXPLICIT
@@ -46,12 +49,11 @@ phaseFlag Generate = HEGEL_PHASE_GENERATE
 phaseFlag Target = HEGEL_PHASE_TARGET
 phaseFlag Shrink = HEGEL_PHASE_SHRINK
 
-hcBitmask :: [T.Text] -> Word32
-hcBitmask = foldl' (\acc t -> acc .|. wireFlag t) 0
+hcBitmask :: [HealthCheck] -> Word32
+hcBitmask = foldl' (\acc hc -> acc .|. healthCheckFlag hc) 0
 
-wireFlag :: T.Text -> Word32
-wireFlag "filter_too_much" = HEGEL_HC_FILTER_TOO_MUCH
-wireFlag "too_slow" = HEGEL_HC_TOO_SLOW
-wireFlag "test_cases_too_large" = HEGEL_HC_TEST_CASES_TOO_LARGE
-wireFlag "large_initial_test_case" = HEGEL_HC_LARGE_INITIAL_TEST_CASE
-wireFlag _ = 0
+healthCheckFlag :: HealthCheck -> Word32
+healthCheckFlag FilterTooMuch = HEGEL_HC_FILTER_TOO_MUCH
+healthCheckFlag TooSlow = HEGEL_HC_TOO_SLOW
+healthCheckFlag TestCasesTooLarge = HEGEL_HC_TEST_CASES_TOO_LARGE
+healthCheckFlag LargeInitialTestCase = HEGEL_HC_LARGE_INITIAL_TEST_CASE

@@ -1,21 +1,32 @@
 module Main (main) where
 
 import BasicProperties qualified
-import Control.Exception (bracket_)
 import GeneratorSchemas qualified
-import Hegel (closeSession, globalSession)
 import PipelinedRequests qualified
 import SessionRecovery qualified
 import StandardGenerators qualified
-import Test.Tasty (defaultMain, testGroup)
+import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.Hspec (testSpec)
+import TestBackends (backends)
+import TestRunner (Runner)
 
 main :: IO ()
 main = do
-  basics <- testSpec "basic properties" BasicProperties.spec
-  schemas <- testSpec "generator schemas" GeneratorSchemas.spec
-  standards <- testSpec "standard generators" StandardGenerators.spec
-  recovery <- testSpec "session recovery" SessionRecovery.spec
-  pipelined <- testSpec "pipelined requests" PipelinedRequests.spec
-  let tree = testGroup "zizek:unit" [basics, schemas, standards, recovery, pipelined]
-  bracket_ (pure ()) (closeSession globalSession) (defaultMain tree)
+  trees <- traverse (uncurry buildBackendTree) backends
+  defaultMain (testGroup "zizek:unit" trees)
+
+buildBackendTree :: String -> Runner -> IO TestTree
+buildBackendTree name runner = do
+  basics <- testSpec "basic properties" (BasicProperties.spec runner)
+  schemas <- testSpec "generator schemas" (GeneratorSchemas.spec runner)
+  standards <- testSpec "standard generators" (StandardGenerators.spec runner)
+
+  serverOnly <-
+    if name == "server"
+      then do
+        recovery <- testSpec "session recovery" SessionRecovery.spec
+        pipelined <- testSpec "pipelined requests" PipelinedRequests.spec
+        pure [recovery, pipelined]
+      else pure []
+
+  pure $ testGroup name ([basics, schemas, standards] <> serverOnly)

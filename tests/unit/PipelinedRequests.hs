@@ -4,8 +4,9 @@ import Control.Concurrent.Async (concurrently)
 import Data.Function ((&))
 import Hegel.Gen qualified as Gen
 import Hegel.Outcome (Outcome (..))
-import Hegel.Runner (defaultSettings, runPropertyOn)
-import Hegel.Session (defaultSessionConfig, withSession)
+import Hegel.Server.Runner (runPropertyOn)
+import Hegel.Server.Session (defaultSessionConfig, withSession)
+import Hegel.Settings (defaultSettings)
 import Test.Hspec
 
 spec :: Spec
