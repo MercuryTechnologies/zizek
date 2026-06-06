@@ -1,7 +1,9 @@
-{-# LANGUAGE ViewPatterns #-}
-
--- | Per-test-case state and the protocol commands a generator can send
--- through it.
+-- | Per-test-case vtable: a record of closures through which generators
+-- communicate with whichever backend is driving the current run.
+--
+-- Each backend constructs a 'TestCase' value that closes over its own
+-- transport; the 'Gen.*' tree and 'Hegel.Collection' are entirely
+-- independent of the backend chosen.
 module Hegel.TestCase
   ( -- * Test case
     TestCase (..),
@@ -17,6 +19,7 @@ module Hegel.TestCase
 
     -- * Spans
     Label (..),
+    labelValue,
     startSpan,
     stopSpan,
 
@@ -26,23 +29,39 @@ module Hegel.TestCase
   )
 where
 
-import CBOR.Decode qualified as CD
-import CBOR.Encode qualified as CE
-import CBOR.Value (Value (..))
+import CBOR.Value (Value)
 import Control.Exception (Exception)
 import Data.Text (Text)
-import Hegel.Protocol.Cbor (asBool, asInt, asText, buildMap, intVal, lookupKey, (.=))
-import Hegel.Protocol.Error (ProtocolError (..), ServerError (..))
-import Hegel.Protocol.Stream (Stream, closeStream, requestCbor, requestRaw, sendRequest)
-import UnliftIO.Exception (catch, finally, onException, throwIO)
 
--- | The 'Stream' carrying one test case's generation traffic, passed to
--- 'Hegel.Gen.Internal.Draw' actions.
-newtype TestCase = TestCase {stream :: Stream}
+-- | A per-test-case vtable. Each field is a closure that dispatches to the
+-- active backend. The 'Gen.*' tree and 'Hegel.Collection' call through
+-- these fields via the free-function shims below.
+--
+-- Construct via 'Hegel.Server.TestCase.mkTestCase' (server backend).
+data TestCase = TestCase
+  { -- | Ask the engine for a value matching the CBOR schema; throws
+    -- 'TestStopped' when the choice budget is exhausted.
+    generate :: Value -> IO Value,
+    -- | Begin a variable-length collection; returns its integer ID.
+    -- Throws 'TestStopped' on exhaustion.
+    newCollection :: Int -> Maybe Int -> IO Int,
+    -- | Ask whether the engine wants another element.
+    -- Throws 'TestStopped' on exhaustion.
+    collectionMore :: Int -> IO Bool,
+    -- | Notify the engine that the last element was rejected.
+    -- Throws 'TestStopped' if the engine gives up.
+    collectionReject :: Int -> Maybe Text -> IO (),
+    -- | Open a labeled span.
+    startSpan :: Label -> IO (),
+    -- | Close the most-recently-opened span.
+    -- Pass 'True' to mark it discarded.
+    stopSpan :: Bool -> IO (),
+    -- | Report the final outcome for this test case.
+    markComplete :: Status -> IO ()
+  }
 
--- | Thrown when the server signals @StopTest@ during 'generate', meaning
--- the current test case should be abandoned. The runner treats this as a
--- discard.
+-- | Thrown when the engine signals that the current test case should be
+-- abandoned (choice budget exhausted). The runner treats this as a discard.
 data TestStopped = TestStopped
   deriving stock (Show)
 
@@ -57,11 +76,11 @@ data Status
   | -- | The case ran out of entropy mid-generation.
     Overrun
   | -- | The case failed; the payload is the origin string used for
-    -- server-side deduplication.
+    -- deduplication.
     Interesting Text
 
--- | Span labels used to group related draws so the server can shrink them
--- as a unit. Values match @hegel@'s wire-level numeric ids.
+-- | Span labels used to group related draws so the engine can shrink them
+-- as a unit. Numeric values match @libhegel@'s constants.
 data Label
   = LabelList
   | LabelListElement
@@ -80,6 +99,8 @@ data Label
   | LabelEnumVariant
   deriving stock (Show)
 
+-- | Map a 'Label' to its integer wire identifier (1–15, matching
+-- @HEGEL_LABEL_*@ constants).
 labelValue :: Label -> Int
 labelValue LabelList = 1
 labelValue LabelListElement = 2
@@ -97,116 +118,39 @@ labelValue LabelMapped = 13
 labelValue LabelSampledFrom = 14
 labelValue LabelEnumVariant = 15
 
--- | Ask the server to produce a value matching the given CBOR schema;
--- throws 'TestStopped' on @StopTest@.
+-- ---------------------------------------------------------------------------
+-- Free-function shims
+--
+-- Call sites in 'Hegel.Gen.Internal', 'Hegel.Collection', and the collection
+-- generators use these as ordinary functions — e.g. @generate tc schema@.
+-- Each shim simply delegates to the vtable field, so none of those modules
+-- need to change.
+-- ---------------------------------------------------------------------------
+
+-- | Shim for 'TestCase.generate'.
 generate :: TestCase -> Value -> IO Value
-generate tc sch = req `onException` closeStream tc.stream
-  where
-    req =
-      requestCbor tc.stream (buildMap ["command" .= ("generate" :: Text), "schema" .= sch])
-        `catch` mapStopTest
-    mapStopTest :: ServerError -> IO Value
-    mapStopTest (e :: ServerError) = case e.errorType of
-      "StopTest" -> throwIO TestStopped
-      _ -> throwIO e
+generate tc = tc.generate
 
--- | Ask the server to begin a new variable-length collection; returns an
--- integer collection id used with 'collectionMore' and 'collectionReject'.
--- Throws 'TestStopped' if the server signals @StopTest@.
+-- | Shim for 'TestCase.newCollection'.
 newCollection :: TestCase -> Int -> Maybe Int -> IO Int
-newCollection tc minSz maxSz = do
-  rep <- requestCbor tc.stream req `catch` mapStopTest
-  case asInt rep of
-    Just cid -> pure cid
-    Nothing -> throwIO (UnexpectedReply "newCollection" rep)
-  where
-    req =
-      buildMap
-        [ "command" .= ("new_collection" :: Text),
-          "min_size" .= minSz,
-          ("max_size", maybe Null intVal maxSz)
-        ]
-    mapStopTest :: ServerError -> IO Value
-    mapStopTest (e :: ServerError) = case e.errorType of
-      "StopTest" -> throwIO TestStopped
-      _ -> throwIO e
+newCollection tc = tc.newCollection
 
--- | Ask whether the server wants another element for the given collection.
--- Returns 'True' to draw one more element, 'False' when the collection is
--- complete. Throws 'TestStopped' on @StopTest@.
+-- | Shim for 'TestCase.collectionMore'.
 collectionMore :: TestCase -> Int -> IO Bool
-collectionMore tc cid = do
-  rep <- requestCbor tc.stream req `catch` mapStopTest
-  case asBool rep of
-    Just b -> pure b
-    Nothing -> throwIO (UnexpectedReply "collectionMore" rep)
-  where
-    req =
-      buildMap
-        [ "command" .= ("collection_more" :: Text),
-          "collection_id" .= cid
-        ]
-    mapStopTest :: ServerError -> IO Value
-    mapStopTest (e :: ServerError) = case e.errorType of
-      "StopTest" -> throwIO TestStopped
-      _ -> throwIO e
+collectionMore tc = tc.collectionMore
 
--- | Notify the server that the last drawn element was rejected (e.g. a
--- duplicate). The optional reason string is advisory only. Throws
--- 'TestStopped' if the server exhausts its rejection budget with
--- @count < min_size@ and signals @StopTest@.
+-- | Shim for 'TestCase.collectionReject'.
 collectionReject :: TestCase -> Int -> Maybe Text -> IO ()
-collectionReject tc cid why = do
-  _ <- requestCbor tc.stream req `catch` mapStopTest
-  pure ()
-  where
-    req =
-      buildMap
-        [ "command" .= ("collection_reject" :: Text),
-          "collection_id" .= cid,
-          ("why", maybe Null TextString why)
-        ]
-    mapStopTest :: ServerError -> IO Value
-    mapStopTest (e :: ServerError) = case e.errorType of
-      "StopTest" -> throwIO TestStopped
-      _ -> throwIO e
+collectionReject tc = tc.collectionReject
 
--- | Open a span that groups related draws under the given 'Label'.
+-- | Shim for 'TestCase.startSpan'.
 startSpan :: TestCase -> Label -> IO ()
-startSpan tc (labelValue -> label) =
-  sendRequest tc.stream . CE.encode $
-    buildMap ["command" .= ("start_span" :: Text), "label" .= label]
+startSpan tc = tc.startSpan
 
--- | Close the most-recently-opened span. Pass 'True' to mark the span as
--- discarded so the server doesn't try to shrink within it.
+-- | Shim for 'TestCase.stopSpan'.
 stopSpan :: TestCase -> Bool -> IO ()
-stopSpan tc isDiscard =
-  sendRequest tc.stream . CE.encode $
-    buildMap ["command" .= ("stop_span" :: Text), "discard" .= isDiscard]
+stopSpan tc = tc.stopSpan
 
--- | Send the final 'Status' for this test case and close the stream.
+-- | Shim for 'TestCase.markComplete'.
 markComplete :: TestCase -> Status -> IO ()
-markComplete tc status = send `finally` closeStream tc.stream
-  where
-    send = do
-      let req =
-            CE.encode $
-              buildMap
-                [ "command" .= ("mark_complete" :: Text),
-                  "status" .= statusText,
-                  "origin" .= originVal
-                ]
-      rep <- requestRaw tc.stream req
-      case CD.decode rep of
-        Left err -> throwIO (CborDecodeFailure "markComplete" err)
-        Right val -> case lookupKey "error" val of
-          Nothing -> pure ()
-          Just _ -> case lookupKey "type" val >>= asText of
-            Just "StopTest" -> pure ()
-            _ -> throwIO (UnexpectedReply "markComplete" val)
-    statusText :: Text
-    (statusText, originVal) = case status of
-      Valid -> ("VALID", Null)
-      Invalid -> ("INVALID", Null)
-      Overrun -> ("OVERRUN", Null)
-      Interesting msg -> ("INTERESTING", TextString msg)
+markComplete tc = tc.markComplete
