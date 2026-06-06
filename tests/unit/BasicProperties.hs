@@ -1,28 +1,30 @@
 module BasicProperties (spec) where
 
 import Data.Function ((&))
-import Hegel (Gen, Phase (..), runProperty, runProperty_)
+import Hegel (Gen)
 import Hegel.Gen qualified as Gen
 import Hegel.Outcome (Outcome (..))
-import Hegel.Runner (Settings (..), defaultSettings)
+import Hegel.Phase (Phase (..))
+import Hegel.Settings (Settings (..), defaultSettings)
 import Test.Hspec
+import TestRunner (Runner, runWith, runWith_)
 
 intR :: (Int, Int) -> Gen Int
 intR (lo, hi) = Gen.integral & Gen.min lo & Gen.max hi & Gen.build
 
-spec :: Spec
-spec = do
-  it "all integers in [0,100] are in [0,100]" $
-    runProperty_ defaultSettings (intR (0, 100)) $ \n ->
+spec :: Runner -> Spec
+spec runner = do
+  it "all integers in [0,100] are in [0,100]" $ do
+    runWith_ runner defaultSettings (intR (0, 100)) $ \n ->
       n `shouldSatisfy` (\x -> x >= 0 && x <= 100)
 
   it "shrinks to 42 when forbidding 42" $ do
-    outcome <- runProperty defaultSettings (intR (0, 100)) $ \n ->
-      n `shouldNotBe` 42
+    outcome <- runWith runner defaultSettings (intR (0, 100)) $ \n ->
+      n `shouldNotBe` (42 :: Int)
     outcome `shouldSatisfy` \case
       Failed {} -> True
       _ -> False
 
-  it "honours phases = [Generate]" $
-    runProperty_ (defaultSettings {phases = [Generate]}) (intR (0, 100)) $ \n ->
+  it "honours phases = [Generate]" $ do
+    runWith_ runner (defaultSettings {phases = [Generate]}) (intR (0, 100)) $ \n ->
       n `shouldSatisfy` (\x -> x >= 0 && x <= 100)

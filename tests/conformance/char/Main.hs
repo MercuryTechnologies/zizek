@@ -1,7 +1,7 @@
 module Main (main) where
 
 import ConformanceUtils (decodeArgs, runConformancePropertyPaired)
-import Data.Aeson (FromJSON (..), ToJSON (..))
+import Data.Aeson (FromJSON (..))
 import Data.Aeson qualified as Aeson
 import Data.Function ((&))
 import GHC.Generics (Generic)

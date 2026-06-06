@@ -11,11 +11,6 @@ license-file: LICENSE
 tested-with: ghc ^>=9.10 && ^>=9.12
 build-type: Simple
 
-flag native
-  description: Build the native libhegel FFI backend.
-  default: True
-  manual: True
-
 common all
   default-language: GHC2021
   build-depends:
@@ -47,6 +42,7 @@ common all
     -Wno-missing-role-annotations
     -Wno-missing-safe-haskell-mode
     -Wno-safe
+    -Wno-partial-fields
     -Wno-unsafe
     -Wno-unused-packages
 
@@ -73,6 +69,7 @@ common library
 library
   import: library
   hs-source-dirs: library
+  pkgconfig-depends: hegel
   -- cabal-gild: discover library
   exposed-modules:
     Hegel
@@ -125,10 +122,12 @@ library
       IOKit
       Security
 
-  if flag(native)
-    hs-source-dirs: library-native
-    exposed-modules: Hegel.Native.FFI
-    pkgconfig-depends: hegel
+common conformance
+  import: library
+  ghc-options:
+    -threaded
+    -rtsopts
+    -with-rtsopts=-N
 
 library conformance-utils
   import: library
@@ -140,7 +139,7 @@ library conformance-utils
     zizek,
 
 executable test-booleans
-  import: library
+  import: conformance
   hs-source-dirs: tests/conformance/booleans
   main-is: Main.hs
   build-depends:
@@ -149,7 +148,7 @@ executable test-booleans
     zizek:conformance-utils,
 
 executable test-binary
-  import: library
+  import: conformance
   hs-source-dirs: tests/conformance/binary
   main-is: Main.hs
   build-depends:
@@ -158,7 +157,7 @@ executable test-binary
     zizek:conformance-utils,
 
 executable test-floats
-  import: library
+  import: conformance
   hs-source-dirs: tests/conformance/floats
   main-is: Main.hs
   build-depends:
@@ -167,7 +166,7 @@ executable test-floats
     zizek:conformance-utils,
 
 executable test-integers
-  import: library
+  import: conformance
   hs-source-dirs: tests/conformance/integers
   main-is: Main.hs
   build-depends:
@@ -176,7 +175,7 @@ executable test-integers
     zizek:conformance-utils,
 
 executable test-integers-narrow
-  import: library
+  import: conformance
   hs-source-dirs: tests/conformance/integers-narrow
   main-is: Main.hs
   build-depends:
@@ -185,7 +184,7 @@ executable test-integers-narrow
     zizek:conformance-utils,
 
 executable test-frequency
-  import: library
+  import: conformance
   hs-source-dirs: tests/conformance/frequency
   main-is: Main.hs
   build-depends:
@@ -194,7 +193,7 @@ executable test-frequency
     zizek:conformance-utils,
 
 executable test-origin-deduplication
-  import: library
+  import: conformance
   hs-source-dirs: tests/conformance/origin-deduplication
   main-is: Main.hs
   build-depends:
@@ -203,7 +202,7 @@ executable test-origin-deduplication
     zizek:conformance-utils,
 
 executable test-sampled-from
-  import: library
+  import: conformance
   hs-source-dirs: tests/conformance/sampled-from
   main-is: Main.hs
   build-depends:
@@ -212,7 +211,7 @@ executable test-sampled-from
     zizek:conformance-utils,
 
 executable test-one-of
-  import: library
+  import: conformance
   hs-source-dirs: tests/conformance/one-of
   main-is: Main.hs
   build-depends:
@@ -221,7 +220,7 @@ executable test-one-of
     zizek:conformance-utils,
 
 executable test-text
-  import: library
+  import: conformance
   hs-source-dirs: tests/conformance/text
   main-is: Main.hs
   build-depends:
@@ -230,7 +229,7 @@ executable test-text
     zizek:conformance-utils,
 
 executable test-list
-  import: library
+  import: conformance
   hs-source-dirs: tests/conformance/list
   main-is: Main.hs
   build-depends:
@@ -239,7 +238,7 @@ executable test-list
     zizek:conformance-utils,
 
 executable test-set
-  import: library
+  import: conformance
   hs-source-dirs: tests/conformance/set
   main-is: Main.hs
   build-depends:
@@ -249,7 +248,7 @@ executable test-set
     zizek:conformance-utils,
 
 executable test-map
-  import: library
+  import: conformance
   hs-source-dirs: tests/conformance/map
   main-is: Main.hs
   build-depends:
@@ -259,7 +258,7 @@ executable test-map
     zizek:conformance-utils,
 
 executable test-char
-  import: library
+  import: conformance
   hs-source-dirs: tests/conformance/char
   main-is: Main.hs
   build-depends:
@@ -268,7 +267,7 @@ executable test-char
     zizek:conformance-utils,
 
 executable test-regex
-  import: library
+  import: conformance
   hs-source-dirs: tests/conformance/regex
   main-is: Main.hs
   build-depends:
@@ -293,9 +292,10 @@ test-suite unit
     PipelinedRequests
     SessionRecovery
     StandardGenerators
+    TestBackends
+    TestRunner
 
   build-depends:
-    containers ^>=0.7,
     hspec ^>=2.11,
     tasty ^>=1.5,
     tasty-hspec ^>=1.2,
@@ -315,6 +315,3 @@ test-suite native
     tasty ^>=1.5,
     tasty-hunit ^>=0.10,
     zizek,
-
-  if !flag(native)
-    buildable: False
