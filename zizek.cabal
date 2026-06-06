@@ -99,17 +99,20 @@ library
     Hegel.Gen.Text
     Hegel.Gen.Uri
     Hegel.Gen.Uuid
+    Hegel.HealthCheck
+    Hegel.Native.FFI
     Hegel.Outcome
     Hegel.Phase
     Hegel.Protocol.Cbor
-    Hegel.Protocol.Connection
-    Hegel.Protocol.Error
-    Hegel.Protocol.Packet
-    Hegel.Protocol.Stream
     Hegel.Runner
     Hegel.Schema
-    Hegel.Session
-    Hegel.Session.Internal
+    Hegel.Server.Protocol.Connection
+    Hegel.Server.Protocol.Error
+    Hegel.Server.Protocol.Packet
+    Hegel.Server.Protocol.Stream
+    Hegel.Server.Session
+    Hegel.Server.Session.Internal
+    Hegel.Settings
     Hegel.TestCase
 
   if os(osx)
