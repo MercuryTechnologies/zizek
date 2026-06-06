@@ -1,5 +1,5 @@
--- | Exceptions raised by the @hegel@ wire protocol layer.
-module Hegel.Protocol.Error
+-- | Exceptions raised by the @hegel@ server wire-protocol layer.
+module Hegel.Server.Protocol.Error
   ( ProtocolError (..),
     ConnectionClosedError (..),
     ServerError (..),
@@ -21,20 +21,18 @@ data ProtocolError
   = BadMagic !Word32
   | ChecksumMismatch
   | BadTerminator
-  | CborDecodeFailure !Text !String -- context, decoder error
-  | UnexpectedReply !Text !Value -- context, payload
-  | MissingField !Text !Text -- context, field name
+  | CborDecodeFailure !Text !String
+  | UnexpectedReply !Text !Value
+  | MissingField !Text !Text
   | UnknownEvent !Text
   | ProtocolStateViolation !Text
   | HandshakeFailure !Text
-  | VersionMismatch !Text !Text !Text -- got, lo, hi
+  | VersionMismatch !Text !Text !Text
   | StreamClosed
   deriving stock (Show)
   deriving anyclass (Exception)
 
--- | The server returned an application-level error response to a request.
--- Distinct from 'ProtocolError' because these are valid protocol messages,
--- not wire-format or state-machine violations.
+-- | The server returned an application-level error response.
 data ServerError = ServerError
   { errorType :: !Text,
     errorPayload :: !Value
