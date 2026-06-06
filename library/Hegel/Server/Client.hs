@@ -11,6 +11,7 @@ import CBOR.Encode qualified as CE
 import CBOR.Value (Value (..))
 import Control.Exception (SomeException, toException)
 import Data.ByteString.Char8 qualified as BS8
+import Data.Functor (($>))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Word (Word32, Word64)
@@ -130,7 +131,7 @@ runCase conn sid gen body finalizer = run `finally` finalizer
       let tc = mkTestCase caseStream
       eVal <-
         (Right <$> draw tc gen)
-          `catches` [ Handler \AssumeRejected -> pure (Left Nothing),
+          `catches` [ Handler \AssumeRejected -> markComplete tc Invalid $> Left Nothing,
                       -- The server tracks the choice budget itself, so a stop
                       -- needs no acknowledgement; just discard the case.
                       Handler \TestStopped -> pure (Left Nothing),

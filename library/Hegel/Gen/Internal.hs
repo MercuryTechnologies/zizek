@@ -46,10 +46,8 @@ import Hegel.Protocol.Cbor (ParseError (..))
 import Hegel.Schema qualified as Schema
 import Hegel.TestCase
   ( Label (..),
-    Status (..),
     TestCase (..),
     generate,
-    markComplete,
     startSpan,
     stopSpan,
   )
@@ -276,16 +274,12 @@ draw = runGenerator
 -- failure.
 assume :: Bool -> Gen ()
 assume True = Pure ()
-assume False = Draw \tc -> do
-  markComplete tc Invalid
-  throwIO AssumeRejected
+assume False = Draw \_ -> throwIO AssumeRejected
 
 -- | Discard the current test case unconditionally. Polymorphic in the result
 -- type so it can appear anywhere in a monadic generator expression.
 discard :: Gen a
-discard = Draw \tc -> do
-  markComplete tc Invalid
-  throwIO AssumeRejected
+discard = Draw \_ -> throwIO AssumeRejected
 
 -- | Apply a function to values drawn from a generator, retrying up to 3 times
 -- when the function returns 'Nothing'. Discards the test case when all retries
@@ -302,7 +296,7 @@ mapMaybe f g = Draw \tc -> go tc (3 :: Int)
           stopSpan tc True
           if n > 1
             then go tc (n - 1)
-            else markComplete tc Invalid *> throwIO AssumeRejected
+            else throwIO AssumeRejected
 
 -- | Draw a 'Just' value from a 'Maybe' generator, discarding test cases where
 -- 'Nothing' is drawn.
@@ -331,7 +325,7 @@ filtered p g = case enumerate g of
           stopSpan tc True
           if n > 1
             then go tc (n - 1)
-            else markComplete tc Invalid *> throwIO AssumeRejected
+            else throwIO AssumeRejected
 
 -- | Choose one of the given generators. The list must be non-empty;
 -- passing @[]@ raises an error at the call site.

@@ -33,7 +33,7 @@ main =
 -- | Drive 50 boolean test cases through the raw C API and assert that every
 -- returned CBOR value decodes to a 'Bool' and the run passes overall.
 --
--- The entire sequence runs in a bound thread so that 'checkReturn' always reads
+-- The entire sequence runs in a bound thread so that 'throwOnError' always reads
 -- 'hegel_last_error_message' on the OS thread that made the failing call.
 boolRoundTrip :: IO ()
 boolRoundTrip = runInBoundThread $ do
@@ -69,7 +69,7 @@ driveRun schemaBytes run = go
               pure ()
             Right v ->
               assertFailure ("expected Bool, got: " <> show v)
-          hegel_mark_complete tc HEGEL_STATUS_VALID nullPtr >>= checkReturn
+          hegel_mark_complete tc HEGEL_STATUS_VALID nullPtr >>= throwOnError
           go
 
 -- | Verify the failure-reproduction round-trip:
@@ -169,7 +169,7 @@ markComplete tc status origin = do
   case rc of
     HEGEL_OK -> pure ()
     HEGEL_E_STOP_TEST -> pure ()
-    _ -> checkReturn rc
+    _ -> throwOnError rc
 
 -- | Drive a run to failure: mark each drawn integer as 'HEGEL_STATUS_INTERESTING'
 -- when it is >= @threshold@, and 'HEGEL_STATUS_VALID' otherwise.
