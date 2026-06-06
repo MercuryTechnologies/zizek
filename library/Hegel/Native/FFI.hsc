@@ -12,7 +12,7 @@
 --
 -- Therefore, __all__ libhegel call sequences must run under
 -- 'Control.Concurrent.runInBoundThread' (or 'Control.Concurrent.forkOS') so
--- that 'checkReturn' reads the error string on the same OS thread that set it.
+-- that 'throwOnError' reads the error string on the same OS thread that set it.
 module Hegel.Native.FFI
   ( -- * Opaque handle phantoms
     -- $handles
@@ -151,7 +151,7 @@ module Hegel.Native.FFI
 
     -- * Haskell helpers
     -- $helpers
-    checkReturn,
+    throwOnError,
     withSettings,
     withRun,
     generate,
@@ -229,7 +229,7 @@ instance Exception HegelStartupError
 -- 'HEGEL_E_STOP_TEST' and 'HEGEL_E_ASSUME' are control-flow signals as
 -- opposed to true errors.
 -- 
--- Match on these directly, or let 'checkReturn' translate any non-zero
+-- Match on these directly, or let 'throwOnError' translate any non-zero
 -- code into a 'HegelError'.
 
 pattern HEGEL_OK :: CInt
@@ -768,8 +768,8 @@ lastErrorMessage = do
 -- __NOTE__: This /must/ be called on the same OS thread as the failing
 -- @libhegel@ call (establish this by running all sequences under
 -- 'Control.Concurrent.runInBoundThread').
-checkReturn :: CInt -> IO ()
-checkReturn rc
+throwOnError :: CInt -> IO ()
+throwOnError rc
   | rc == HEGEL_OK = pure ()
   | otherwise = do
       msg <- lastErrorMessage
@@ -849,7 +849,7 @@ withTestCaseFromBlob s blob action =
 -- libhegel call on the same test case; this function copies it before
 -- returning so the caller does not need to worry about the lifetime.
 --
--- Calls 'checkReturn' on the return code.
+-- Calls 'throwOnError' on the return code.
 --
 -- Control-flow codes ('HEGEL_E_STOP_TEST', 'HEGEL_E_ASSUME') are converted to
 -- 'HegelError's with the corresponding code so callers can branch on them.
@@ -865,7 +865,7 @@ generate tc schema =
             (fromIntegral schemaLen)
             outPtrPtr
             outLenPtr
-        checkReturn rc
+        throwOnError rc
         valuePtr <- peek outPtrPtr
         valueLen <- peek outLenPtr
         BS.packCStringLen (castPtr valuePtr, fromIntegral valueLen)

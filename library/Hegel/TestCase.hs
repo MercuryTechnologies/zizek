@@ -37,7 +37,8 @@ import Data.Text (Text)
 -- active backend. The 'Gen.*' tree and 'Hegel.Collection' call through
 -- these fields via the free-function shims below.
 --
--- Construct via 'Hegel.Server.TestCase.mkTestCase' (server backend).
+-- Construct via 'Hegel.Server.TestCase.mkTestCase' (server backend)
+-- or 'Hegel.Native.TestCase.mkTestCase' (native backend).
 data TestCase = TestCase
   { -- | Ask the engine for a value matching the CBOR schema; throws
     -- 'TestStopped' when the choice budget is exhausted.
