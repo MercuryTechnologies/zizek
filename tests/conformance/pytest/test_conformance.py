@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Any
 
@@ -32,35 +33,40 @@ from local_tests import (
 
 BIN_DIR = Path(__file__).parent / "bin"
 
+# Which backend the Haskell binaries are using.  The justfile sets this
+# explicitly; when absent (e.g. ad-hoc runs) the binaries default to native.
+_BACKEND = os.environ.get("HEGEL_BACKEND", "native")
+_NATIVE = _BACKEND == "native"
+
 INT32_MIN = -(2**31)
 INT32_MAX = 2**31 - 1
 INT64_MIN = -(2**63)
 INT64_MAX = 2**63 - 1
 
 _TESTS: list[ConformanceTest] = [
-    BooleanConformance(BIN_DIR / "test-booleans"),
-    BinaryConformance(BIN_DIR / "test-binary"),
-    FloatConformance(BIN_DIR / "test-floats"),
-    IntegerConformance(BIN_DIR / "test-integers", min_value=INT64_MIN, max_value=INT64_MAX),
-    IntegerConformance(BIN_DIR / "test-integers-narrow", min_value=INT32_MIN, max_value=INT32_MAX),
-    ListConformance(BIN_DIR / "test-list", skip_unique=True),
-    ListConformance(BIN_DIR / "test-set", skip_unique=False),
+    BooleanConformance(BIN_DIR / "test-booleans", skip_server_metrics=_NATIVE),
+    BinaryConformance(BIN_DIR / "test-binary", skip_server_metrics=_NATIVE),
+    FloatConformance(BIN_DIR / "test-floats", skip_server_metrics=_NATIVE),
+    IntegerConformance(BIN_DIR / "test-integers", min_value=INT64_MIN, max_value=INT64_MAX, skip_server_metrics=_NATIVE),
+    IntegerConformance(BIN_DIR / "test-integers-narrow", min_value=INT32_MIN, max_value=INT32_MAX, skip_server_metrics=_NATIVE),
+    ListConformance(BIN_DIR / "test-list", skip_unique=True, skip_server_metrics=_NATIVE),
+    ListConformance(BIN_DIR / "test-set", skip_unique=False, skip_server_metrics=_NATIVE),
     DictConformance(
         BIN_DIR / "test-map",
         min_key=INT64_MIN,
         max_key=INT64_MAX,
         min_value=INT64_MIN,
         max_value=INT64_MAX,
-        skip_server_metrics=True,
+        skip_server_metrics=True,  # always: map doesn't use server metrics
     ),
-    OriginDeduplicationConformance(BIN_DIR / "test-origin-deduplication"),
-    SampledFromConformance(BIN_DIR / "test-sampled-from"),
-    OneOfConformance(BIN_DIR / "test-one-of"),
-    TextConformance(BIN_DIR / "test-text", no_surrogates=True),
-    StopTestOnCollectionMoreConformance(BIN_DIR / "test-list", skip_server_metrics=True),
-    StopTestOnNewCollectionConformance(BIN_DIR / "test-list", skip_server_metrics=True),
-    FrequencyConformance(BIN_DIR / "test-frequency"),
-    RegexFeatureConformance(BIN_DIR / "test-regex"),
+    OriginDeduplicationConformance(BIN_DIR / "test-origin-deduplication", skip_server_metrics=_NATIVE),
+    SampledFromConformance(BIN_DIR / "test-sampled-from", skip_server_metrics=_NATIVE),
+    OneOfConformance(BIN_DIR / "test-one-of", skip_server_metrics=_NATIVE),
+    TextConformance(BIN_DIR / "test-text", no_surrogates=True, skip_server_metrics=_NATIVE),
+    StopTestOnCollectionMoreConformance(BIN_DIR / "test-list", skip_server_metrics=True),  # always
+    StopTestOnNewCollectionConformance(BIN_DIR / "test-list", skip_server_metrics=True),  # always
+    FrequencyConformance(BIN_DIR / "test-frequency", skip_server_metrics=_NATIVE),
+    RegexFeatureConformance(BIN_DIR / "test-regex", skip_server_metrics=_NATIVE),
 ]
 
 _SKIP_TESTS: list[type[ConformanceTest]] = [
