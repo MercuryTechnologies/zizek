@@ -20,8 +20,10 @@ import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BL
 import Data.Char (isUpper, toLower)
 import Data.IORef (newIORef, readIORef, writeIORef)
-import Hegel (Gen, runProperty)
+import Hegel (Gen)
+import Hegel.Native.Runner qualified as Native
 import Hegel.Outcome (Outcome (..))
+import Hegel.Server.Runner qualified as Server
 import Hegel.Server.Session (closeSession, globalSession)
 import Hegel.Settings (Settings (..), defaultSettings)
 import System.Environment (getArgs, getProgName, lookupEnv)
@@ -29,6 +31,39 @@ import System.Exit (ExitCode (..), die, exitSuccess, exitWith)
 import System.IO (Handle, IOMode (..), hFlush, openFile)
 import System.IO.Unsafe (unsafePerformIO)
 import Text.Read (readMaybe)
+
+-- | Which backend the conformance binary should use.
+-- Controlled by the @HEGEL_BACKEND@ environment variable:
+-- @"native"@ or absent → 'NativeBackend'; @"server"@ → 'ServerBackend'.
+data Backend = NativeBackend | ServerBackend
+
+-- | Read 'Backend' from @HEGEL_BACKEND@, defaulting to 'NativeBackend'.
+getBackend :: IO Backend
+getBackend =
+  lookupEnv "HEGEL_BACKEND" >>= \case
+    Nothing -> pure NativeBackend
+    Just "native" -> pure NativeBackend
+    Just "server" -> pure ServerBackend
+    Just other -> die ("HEGEL_BACKEND: expected native|server, got: " <> other)
+
+-- | Dispatch to the backend selected by 'getBackend'.
+runSelected ::
+  Settings ->
+  Gen a ->
+  (a -> IO ()) ->
+  IO (Outcome a)
+runSelected settings gen body =
+  getBackend >>= \case
+    NativeBackend -> Native.runProperty settings gen body
+    ServerBackend -> Server.runProperty settings gen body
+
+-- | Close the server session only when running under the server backend.
+-- No-op for the native backend.
+closeSelectedSession :: IO ()
+closeSelectedSession =
+  getBackend >>= \case
+    NativeBackend -> pure ()
+    ServerBackend -> closeSession globalSession
 
 _metricsHandle :: MVar (Maybe Handle)
 _metricsHandle = unsafePerformIO (newMVar Nothing)
@@ -111,11 +146,11 @@ nonBasic _ g = g
 
 -- | Standard conformance runner: exits non-zero on any non-passing outcome.
 runConformanceProperty :: Gen a -> (a -> IO ()) -> IO ()
-runConformanceProperty gen body = run `finally` closeSession globalSession
+runConformanceProperty gen body = run `finally` closeSelectedSession
   where
     run = do
       n <- getTestCases
-      outcome <- runProperty (defaultSettings {testCases = n}) gen body
+      outcome <- runSelected (defaultSettings {testCases = n}) gen body
       case outcome of
         Passed _ -> exitSuccess
         Rejected msg -> do
@@ -147,7 +182,7 @@ runConformancePropertyPaired ::
   (a -> Maybe m) ->
   IO ()
 runConformancePropertyPaired gen toMetric =
-  run `finally` closeSession globalSession
+  run `finally` closeSelectedSession
   where
     run = do
       n <- getTestCases
@@ -160,7 +195,7 @@ runConformancePropertyPaired gen toMetric =
             unless wrote writeEmptyMetrics
             writeIORef wroteRef False
       outcome <-
-        runProperty
+        runSelected
           (defaultSettings {testCases = n, perCaseFinalizer = finalizer})
           gen
           body
@@ -186,11 +221,11 @@ runConformancePropertyPaired gen toMetric =
 -- Exits zero on 'Passed', 'Failed', or 'Rejected'; only 'Errored' or
 -- 'UnhealthyInput' (binary-level breakage) propagate as a non-zero exit.
 runConformancePropertyExpectFailures :: Gen a -> (a -> IO ()) -> IO ()
-runConformancePropertyExpectFailures gen body = run `finally` closeSession globalSession
+runConformancePropertyExpectFailures gen body = run `finally` closeSelectedSession
   where
     run = do
       n <- getTestCases
-      outcome <- runProperty (defaultSettings {testCases = n}) gen body
+      outcome <- runSelected (defaultSettings {testCases = n}) gen body
       case outcome of
         Passed _ -> exitSuccess
         Failed {} -> exitSuccess

@@ -48,8 +48,8 @@ lint:
   @echo "lint: not yet implemented — add hlint to flake.nix devShell and wire up here"
   @exit 1
 
-# Run the Python conformance harness against the Haskell test binaries.
-check-conformance:
+# Build all conformance test binaries and install symlinks (shared helper).
+_conformance-build:
   @cabal build zizek:test-booleans zizek:test-binary zizek:test-floats zizek:test-integers zizek:test-integers-narrow zizek:test-frequency zizek:test-list zizek:test-set zizek:test-map zizek:test-origin-deduplication zizek:test-sampled-from zizek:test-one-of zizek:test-text zizek:test-char zizek:test-regex
   @mkdir -p tests/conformance/pytest/bin
   @ln -sf $(cabal list-bin zizek:test-booleans) tests/conformance/pytest/bin/test-booleans
@@ -67,7 +67,17 @@ check-conformance:
   @ln -sf $(cabal list-bin zizek:test-text) tests/conformance/pytest/bin/test-text
   @ln -sf $(cabal list-bin zizek:test-char) tests/conformance/pytest/bin/test-char
   @ln -sf $(cabal list-bin zizek:test-regex) tests/conformance/pytest/bin/test-regex
-  @pytest tests/conformance/pytest/ -n auto
+
+# Run the Python conformance harness using the server backend (CI gate).
+check-conformance-server: _conformance-build
+  @HEGEL_BACKEND=server pytest tests/conformance/pytest/ -n auto
+
+# Run the Python conformance harness using the native backend (WIP).
+check-conformance-native: _conformance-build
+  @HEGEL_BACKEND=native pytest tests/conformance/pytest/ -n auto
+
+# Run the conformance gate (server backend only until native is fully green).
+check-conformance: check-conformance-server
 
 # Build with coverage and produce a report (add hpc-codecov to flake.nix first).
 check-coverage:
