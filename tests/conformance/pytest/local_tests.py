@@ -12,7 +12,10 @@ import math
 from typing import Any, ClassVar
 
 import hypothesis.strategies as st
-from hegel.conformance import ConformanceTest
+from hypothesis import assume
+from hypothesis.errors import InvalidArgument
+from hegel.conformance import ALL_CATEGORIES, ConformanceTest, TextConformance
+
 
 
 def _wilson_score_interval(successes: int, n: int, z: float) -> tuple[float, float]:
@@ -178,3 +181,110 @@ class RegexFeatureConformance(ConformanceTest):
             assert compiled.fullmatch(value) is not None, (
                 f"pattern {pattern!r} did not fullmatch generated string {value!r}"
             )
+
+
+class NativeTextConformance(TextConformance):
+    """TextConformance restricted to the codec values libhegel recognises.
+
+    The upstream ``TextConformance`` samples ``codec`` from ``ALL_CODECS``
+    (~100+ Python codec aliases). libhegel's native schema interpreter only
+    accepts ``"ascii"``, ``"latin-1"``/``"iso-8859-1"``, and ``"utf-8"``
+    (mapped to codepoint ranges [0,127], [0,255], and [0,0x10FFFF]
+    respectively); anything else returns ``HEGEL_E_INVALID_ARG``, causing
+    every test case to be rejected with "no valid examples found".
+
+    This subclass covers the same parameter space for size bounds, codepoint
+    ranges, Unicode category filters, and include/exclude characters — just
+    with the codec choice narrowed to ``["ascii", "latin-1", "utf-8"]``
+    (the only values libhegel's ``build_intervals_uncached`` recognises;
+    anything else returns ``HEGEL_E_INVALID_ARG``).  The inherited
+    ``validate()`` method is unchanged, so the same per-codepoint assertions
+    apply.
+
+    Runs under both backends.  Under the server backend it exercises a useful
+    subset of the text parameter space on top of the (skipped-under-native)
+    upstream ``TextConformance``.  Surrogates are always excluded since
+    Haskell ``Text`` cannot represent them.
+    """
+
+    def params_strategy(self) -> st.SearchStrategy[dict[str, Any]]:
+        @st.composite
+        def strategy(draw: st.DrawFn) -> dict[str, Any]:
+            params: dict[str, Any] = {}
+
+            use_codec = draw(st.booleans())
+            use_min_codepoint = draw(st.booleans())
+            use_max_codepoint = draw(st.booleans())
+            use_categories = draw(st.booleans())
+            use_exclude_categories = draw(st.booleans())
+            use_exclude_chars = draw(st.booleans())
+            use_include_chars = draw(st.booleans())
+
+            # categories and exclude_categories are mutually exclusive
+            assume(not (use_categories and use_exclude_categories))
+
+            if use_codec:
+                # libhegel only accepts "ascii" → [0,127], "latin-1" → [0,255],
+                # "utf-8" → [0,0x10FFFF]; anything else → HEGEL_E_INVALID_ARG.
+                params["codec"] = draw(st.sampled_from(["ascii", "latin-1", "utf-8"]))
+            if use_min_codepoint:
+                # Restrict to the BMP: libhegel's category filtering only
+                # covers U+0000–U+FFFF, so a min_codepoint above U+FFFF
+                # combined with a category filter produces an empty interval
+                # set inside build_intervals_uncached, causing every draw to
+                # return HEGEL_E_INVALID_ARG even when Hypothesis considers
+                # the combination valid (it has a full supplementary-plane
+                # Unicode database).
+                params["min_codepoint"] = draw(st.integers(0, 0xFFFF))
+            if use_max_codepoint:
+                lo = params.get("min_codepoint", 0)
+                params["max_codepoint"] = draw(st.integers(lo, 0xFFFF))
+            if use_categories:
+                params["categories"] = draw(
+                    st.lists(st.sampled_from(ALL_CATEGORIES))
+                )
+            if use_exclude_categories:
+                params["exclude_categories"] = draw(
+                    st.lists(st.sampled_from(ALL_CATEGORIES))
+                )
+
+            # Always exclude surrogates — Haskell Text cannot represent them.
+            if use_categories:
+                params["categories"] = [
+                    c for c in params["categories"] if c != "Cs"
+                ]
+            else:
+                excl = set(params.get("exclude_categories", [])) | {"Cs"}
+                params["exclude_categories"] = list(excl)
+
+            # libhegel only applies Unicode category filtering within the BMP
+            # (U+0000–U+FFFF); above that it emits codepoints of any category —
+            # including unassigned (Cn) and other excluded categories — so a
+            # category filter with an unbounded max produces out-of-category
+            # codepoints. When a user-driven category filter is active and no
+            # max is set, cap the range to the BMP so generation stays within
+            # libhegel's filtering coverage. Mirrors the min_codepoint cap
+            # above; tracked upstream as a libhegel bug.
+            if (use_categories or use_exclude_categories) and "max_codepoint" not in params:
+                params["max_codepoint"] = 0xFFFF
+
+            if use_exclude_chars:
+                params["exclude_characters"] = draw(st.text())
+            if use_include_chars:
+                params["include_characters"] = draw(st.text())
+
+            # Reject combinations that produce an empty alphabet (e.g.
+            # codec="ascii" with min_codepoint=200).
+            try:
+                st.characters(**params).validate()
+            except (InvalidArgument, ValueError):
+                assume(False)
+
+            min_size = draw(st.integers(0, 20))
+            max_size = draw(st.none() | st.integers(min_size, 20))
+            result: dict[str, Any] = {"min_size": min_size, **params}
+            if max_size is not None:
+                result["max_size"] = max_size
+            return result
+
+        return strategy()
