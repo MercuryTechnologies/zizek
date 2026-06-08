@@ -46,11 +46,6 @@ INT64_MAX = 2**63 - 1
 
 # Tests that cannot pass under the native backend and are skipped there.
 #
-# FrequencyConformance: Gen.frequency draws a bounded-integer branch index; the
-#   libhegel engine biases low integers during the generate phase, causing the
-#   lightest-weight branch to be over-selected relative to its declared weight.
-#   Engine-internal; not fixable in this repo.
-#
 # TextConformance: the conformance harness samples codec names from ALL_CODECS
 #   (all Python codec aliases recognised by `codecs`). libhegel only accepts
 #   three codec strings — "ascii", "latin-1"/"iso-8859-1", "utf-8" — returning
@@ -58,7 +53,7 @@ INT64_MAX = 2**63 - 1
 #   Since conformance.py is an external wheel we cannot narrow the codec
 #   strategy there.  TODO: re-enable once libhegel widens its codec vocabulary
 #   (hegeldev/hegel-rust).
-_NATIVE_SKIP: frozenset[str] = frozenset({"FrequencyConformance", "TextConformance"})
+_NATIVE_SKIP: frozenset[str] = frozenset({"TextConformance"})
 
 _TESTS: list[ConformanceTest] = [
     BooleanConformance(BIN_DIR / "test-booleans", skip_server_metrics=_NATIVE),
