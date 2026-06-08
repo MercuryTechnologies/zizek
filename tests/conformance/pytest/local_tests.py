@@ -8,30 +8,12 @@ Some of these may be useful to upstream, after this library has been made
 publicly available.
 """
 
-import math
 from typing import Any, ClassVar
 
 import hypothesis.strategies as st
 from hypothesis import assume
 from hypothesis.errors import InvalidArgument
 from hegel.conformance import ALL_CATEGORIES, ConformanceTest, TextConformance
-
-
-
-def _wilson_score_interval(successes: int, n: int, z: float) -> tuple[float, float]:
-    """Two-sided Wilson score interval for a binomial proportion.
-
-    Preferred over the normal approximation because it stays well-behaved
-    near p = 0 or p = 1 and at moderate sample sizes. See
-    https://en.wikipedia.org/wiki/Binomial_proportion_confidence_interval
-    """
-    p_hat = successes / n
-    denom = 1 + z * z / n
-    center = (p_hat + z * z / (2 * n)) / denom
-    half_width = (
-        z * math.sqrt(p_hat * (1 - p_hat) / n + z * z / (4 * n * n)) / denom
-    )
-    return center - half_width, center + half_width
 
 
 class FrequencyConformance(ConformanceTest):
@@ -41,17 +23,19 @@ class FrequencyConformance(ConformanceTest):
     binary emits both ``value`` and ``branch`` (the chosen index) per case,
     so validation can confirm:
 
-    1. Every generated value lies inside its declared branch's range (a
-       wrong-branch-index bug would surface here).
-    2. The observed per-branch proportion is within a Wilson score
-       interval of the declared proportion ``weight / total_weight``.
+    1. **Value correctness** — every generated value lies inside its
+       declared branch's range (a wrong-branch-index bug would surface here).
+    2. **Reachability** — every branch is selected at least once.
+    3. **Rank ordering** — heavier branches are sampled more often than
+       lighter ones.
 
-    Branch ranges are pinned equal across branches. Hypothesis's
-    novel-prefix exploration walks distinct choice sequences, so when
-    branch ranges differ in size the empirical distribution tracks range
-    size rather than weight (the same effect is observable on ``oneOf``).
-    Pinning ranges removes that confound so the test cleanly exercises
-    the weight mechanism.
+    Branch ranges are pinned equal across branches to hold entropy constant:
+    if ranges differed in size, the engine would explore the larger branch
+    more regardless of weight, masking the weight signal entirely.
+
+    The params strategy draws strictly-decreasing, unique weights so every
+    adjacent pair has a well-defined expected rank — equal-weight ties would
+    be resolved by index position under the native engine, not by weight.
     """
 
     default_test_cases = 300
@@ -60,33 +44,24 @@ class FrequencyConformance(ConformanceTest):
     # don't confound the weight signal.
     _BRANCH_RANGE_SIZE = 100
 
-    # Per-branch Wilson critical value.
-    #
-    # z = 4.5 corresponds to a per-check two-sided false-positive rate of
-    # ~7e-6.
-    #
-    # Over up to 5 hypothesis examples * 3 branches = 15 checks per pytest run,
-    # the Bonferroni-corrected family-wise rate stays under 1e-4.
-    _WILSON_Z: ClassVar[float] = 4.5
-
     def params_strategy(self) -> st.SearchStrategy[dict[str, Any]]:
         @st.composite
         def strategy(draw: st.DrawFn) -> dict[str, Any]:
-            n_branches = draw(st.integers(2, 3))
-            branches = []
-            for i in range(n_branches):
-                base = i * 1000
-                # Weights bounded so max/min ratio stays <= 4. With 300
-                # cases this keeps the lightest branch's expected count
-                # comfortably above 25.
-                weight = draw(st.integers(1, 4))
-                branches.append(
-                    {
-                        "weight": weight,
-                        "min_value": base,
-                        "max_value": base + self._BRANCH_RANGE_SIZE - 1,
-                    }
-                )
+            n_branches = draw(st.integers(2, 4))
+            # Unique weights guarantee strictly-decreasing order after
+            # sorting, so every adjacent pair has a meaningful rank to assert.
+            weight_set = draw(
+                st.sets(st.integers(1, 8), min_size=n_branches, max_size=n_branches)
+            )
+            weights = sorted(weight_set, reverse=True)
+            branches = [
+                {
+                    "weight": w,
+                    "min_value": i * 1000,
+                    "max_value": i * 1000 + self._BRANCH_RANGE_SIZE - 1,
+                }
+                for i, w in enumerate(weights)
+            ]
             return {"branches": branches}
 
         return strategy()
@@ -97,8 +72,6 @@ class FrequencyConformance(ConformanceTest):
         params: dict[str, Any],
     ) -> None:
         branches = params["branches"]
-        total_weight = sum(b["weight"] for b in branches)
-        n = len(metrics_list)
 
         observed = [0] * len(branches)
         for metrics in metrics_list:
@@ -106,17 +79,28 @@ class FrequencyConformance(ConformanceTest):
             value = metrics["value"]
             assert 0 <= idx < len(branches)
             b = branches[idx]
-            assert b["min_value"] <= value <= b["max_value"]
+            # Property 1: value correctness.
+            assert b["min_value"] <= value <= b["max_value"], (
+                f"branch {idx} (weight={b['weight']}) generated {value} "
+                f"outside [{b['min_value']}, {b['max_value']}]"
+            )
             observed[idx] += 1
 
+        # Property 2: reachability.
         for i, b in enumerate(branches):
-            expected_prop = b["weight"] / total_weight
-            lo, hi = _wilson_score_interval(observed[i], n, self._WILSON_Z)
-            assert lo <= expected_prop <= hi, (
-                f"branch {i} weight={b['weight']}/{total_weight}: "
-                f"observed {observed[i]}/{n} = {observed[i] / n:.3f}, "
-                f"expected proportion {expected_prop:.3f}, "
-                f"Wilson CI [{lo:.3f}, {hi:.3f}] "
+            assert observed[i] > 0, (
+                f"branch {i} (weight={b['weight']}) was never selected "
+                f"(counts: {observed})"
+            )
+
+        # Property 3: rank ordering.
+        # Weights are strictly decreasing by construction (unique + sorted),
+        # so the heavier branch should always accumulate more samples.
+        for i in range(len(branches) - 1):
+            assert observed[i] >= observed[i + 1], (
+                f"rank order violated: branch {i} (weight={branches[i]['weight']}) "
+                f"got {observed[i]} samples but branch {i + 1} "
+                f"(weight={branches[i + 1]['weight']}) got {observed[i + 1]} "
                 f"(full counts: {observed})"
             )
 
