@@ -13,14 +13,16 @@ module ConformanceUtils
 where
 
 import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
-import Control.Exception (finally)
+import Control.Exception (SomeException, catch, finally, throwIO)
 import Control.Monad (unless)
-import Data.Aeson (FromJSON, Options (..), ToJSON, defaultOptions, eitherDecodeStrict', encode, object)
+import Data.Aeson (FromJSON, Options (..), ToJSON, defaultOptions, eitherDecodeStrict', encode, object, (.=))
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BL
 import Data.Char (isUpper, toLower)
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import Data.Set qualified as Set
 import Hegel (Gen)
+import Hegel.Assertion (originOf)
 import Hegel.Native.Runner qualified as Native
 import Hegel.Outcome (Outcome (..))
 import Hegel.Server.Runner qualified as Server
@@ -128,10 +130,17 @@ writeMetrics v = do
 
 -- | Append an empty JSON object to the metrics file, if one is configured.
 --
--- Used by tests that need to keep client and server metric line counts paired
--- without emitting per-test-case data.
+-- Empty @{}@ lines exist solely to keep client and server metric line counts
+-- 1:1 for the server backend's pairing step (which then drops INVALID/OVERRUN
+-- cases). The native backend does no such pairing — the harness sets
+-- @skip_server_metrics@ and feeds the raw metrics list straight to the
+-- validators — so an empty @{}@ there only crashes validators that index
+-- required keys. Emit empty metrics under the server backend only.
 writeEmptyMetrics :: IO ()
-writeEmptyMetrics = writeMetrics (object [])
+writeEmptyMetrics =
+  getBackend >>= \case
+    NativeBackend -> pure ()
+    ServerBackend -> writeMetrics (object [])
 
 -- | Force the generator into the compositional (non-basic) fallback path by
 -- wrapping it with a trivial monadic bind when @mode == "non_basic"@.
@@ -215,8 +224,16 @@ runConformancePropertyPaired gen toMetric =
           exitWith (ExitFailure 1)
 
 -- | Variant of 'runConformanceProperty' for tests whose property is *expected*
--- to find failures (the Python harness inspects the server's interesting test
--- cases, not this binary's exit status).
+-- to find failures (the Python harness inspects the interesting test-case
+-- count, not this binary's exit status).
+--
+-- Under the native backend the harness has no server to report
+-- @interesting_test_cases@, so it counts distinct failure origins itself —
+-- wrapping @body@ to record 'originOf' for each failure — and writes
+-- @{\"interesting_test_cases\": N}@ to @CONFORMANCE_SERVER_RUN_METRICS_FILE@.
+-- This is exactly the dedup key the runner reports to libhegel, so the count
+-- matches the engine's. Under the server backend the @hegel-core@ process
+-- writes that file, so we leave it alone.
 --
 -- Exits zero on 'Passed', 'Failed', or 'Rejected'; only 'Errored' or
 -- 'UnhealthyInput' (binary-level breakage) propagate as a non-zero exit.
@@ -225,7 +242,20 @@ runConformancePropertyExpectFailures gen body = run `finally` closeSelectedSessi
   where
     run = do
       n <- getTestCases
-      outcome <- runSelected (defaultSettings {testCases = n}) gen body
+      let settings = defaultSettings {testCases = n}
+      outcome <-
+        getBackend >>= \case
+          NativeBackend -> do
+            seen <- newIORef Set.empty
+            let body' x =
+                  body x `catch` \(e :: SomeException) -> do
+                    modifyIORef' seen (Set.insert (originOf e))
+                    throwIO e
+            o <- Native.runProperty settings gen body'
+            distinct <- Set.size <$> readIORef seen
+            writeNativeRunMetrics distinct
+            pure o
+          ServerBackend -> Server.runProperty settings gen body
       case outcome of
         Passed _ -> exitSuccess
         Failed {} -> exitSuccess
@@ -236,3 +266,14 @@ runConformancePropertyExpectFailures gen body = run `finally` closeSelectedSessi
         UnhealthyInput msg -> do
           putStrLn ("conformance health check failed: " <> show msg)
           exitWith (ExitFailure 1)
+
+-- | Write @{\"interesting_test_cases\": N}@ to @CONFORMANCE_SERVER_RUN_METRICS_FILE@.
+-- No-op when the env var is absent.
+writeNativeRunMetrics :: Int -> IO ()
+writeNativeRunMetrics n =
+  lookupEnv "CONFORMANCE_SERVER_RUN_METRICS_FILE" >>= \case
+    Nothing -> pure ()
+    Just path -> do
+      h <- openFile path WriteMode
+      BL.hPut h (encode (object ["interesting_test_cases" .= n]) <> "\n")
+      hFlush h
