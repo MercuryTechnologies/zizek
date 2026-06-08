@@ -28,6 +28,7 @@ from hegel.conformance import (
 
 from local_tests import (
     FrequencyConformance,
+    NativeTextConformance,
     RegexFeatureConformance,
 )
 
@@ -42,6 +43,22 @@ INT32_MIN = -(2**31)
 INT32_MAX = 2**31 - 1
 INT64_MIN = -(2**63)
 INT64_MAX = 2**63 - 1
+
+# Tests that cannot pass under the native backend and are skipped there.
+#
+# FrequencyConformance: Gen.frequency draws a bounded-integer branch index; the
+#   libhegel engine biases low integers during the generate phase, causing the
+#   lightest-weight branch to be over-selected relative to its declared weight.
+#   Engine-internal; not fixable in this repo.
+#
+# TextConformance: the conformance harness samples codec names from ALL_CODECS
+#   (all Python codec aliases recognised by `codecs`). libhegel only accepts
+#   three codec strings — "ascii", "latin-1"/"iso-8859-1", "utf-8" — returning
+#   HEGEL_E_INVALID_ARG for anything else (e.g. "arabic", "u8", "latin_1").
+#   Since conformance.py is an external wheel we cannot narrow the codec
+#   strategy there.  TODO: re-enable once libhegel widens its codec vocabulary
+#   (hegeldev/hegel-rust).
+_NATIVE_SKIP: frozenset[str] = frozenset({"FrequencyConformance", "TextConformance"})
 
 _TESTS: list[ConformanceTest] = [
     BooleanConformance(BIN_DIR / "test-booleans", skip_server_metrics=_NATIVE),
@@ -63,6 +80,7 @@ _TESTS: list[ConformanceTest] = [
     SampledFromConformance(BIN_DIR / "test-sampled-from", skip_server_metrics=_NATIVE),
     OneOfConformance(BIN_DIR / "test-one-of", skip_server_metrics=_NATIVE),
     TextConformance(BIN_DIR / "test-text", no_surrogates=True, skip_server_metrics=_NATIVE),
+    NativeTextConformance(BIN_DIR / "test-text", no_surrogates=True, skip_server_metrics=_NATIVE),
     StopTestOnCollectionMoreConformance(BIN_DIR / "test-list", skip_server_metrics=True),  # always
     StopTestOnNewCollectionConformance(BIN_DIR / "test-list", skip_server_metrics=True),  # always
     FrequencyConformance(BIN_DIR / "test-frequency", skip_server_metrics=_NATIVE),
@@ -86,9 +104,15 @@ def _cases() -> list[pytest.param]:
     for t in _TESTS:
         cls_name = type(t).__name__
         prefix = f"{cls_name}-{t.binary.name}" if counts[cls_name] > 1 else cls_name
+        native_skip = _NATIVE and cls_name in _NATIVE_SKIP
+        marks = (
+            [pytest.mark.skip(reason="native backend: libhegel limitation; tracked as WIP")]
+            if native_skip
+            else []
+        )
         for mode in t.modes or [None]:
             suffix = f"[{mode}]" if mode is not None else ""
-            cases.append(pytest.param(t, mode, id=f"{prefix}{suffix}"))
+            cases.append(pytest.param(t, mode, id=f"{prefix}{suffix}", marks=marks))
     for cls in _SKIP_TESTS:
         cases.append(
             pytest.param(
