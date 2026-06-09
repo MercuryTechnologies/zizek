@@ -12,7 +12,6 @@ import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Foreign (Ptr, nullPtr)
-import Foreign.C.String (CString, peekCString)
 import Hegel.Assertion (originOf)
 import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
 import Hegel.Native.FFI
@@ -87,8 +86,8 @@ readPrimaryFailure run = do
       if f == nullPtr
         then pure Nothing
         else do
-          org <- peekText =<< hegel_failure_origin f
-          diag <- peekText =<< hegel_failure_diagnostic f
+          org <- peekUtf8 =<< hegel_failure_origin f
+          diag <- peekUtf8 =<< hegel_failure_diagnostic f
           blob <- failureReproductionBlob f
           pure (Just Failure {origin = org, diagnostic = diag, reproductionBlob = blob})
 
@@ -203,12 +202,3 @@ runCase settings gen body tcPtr =
           case eRes of
             Right () -> markComplete tc Valid $> CaseValid
             Left exc -> markComplete tc (Interesting (originOf exc)) $> CaseInteresting
-
--- ---------------------------------------------------------------------------
--- Helpers
--- ---------------------------------------------------------------------------
-
-peekText :: CString -> IO Text
-peekText p
-  | p == nullPtr = pure ""
-  | otherwise = T.pack <$> peekCString p
