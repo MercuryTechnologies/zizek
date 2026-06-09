@@ -294,6 +294,7 @@ test-suite unit
     StandardGenerators
     TestBackends
     TestRunner
+    UnsupportedCapabilities
 
   build-depends:
     hspec ^>=2.11,

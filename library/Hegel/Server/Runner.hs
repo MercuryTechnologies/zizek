@@ -14,6 +14,7 @@ import Hegel.Server.Protocol.Error (ConnectionClosedError (..), ProtocolError (.
 import Hegel.Server.Session (Session, invalidateSession)
 import Hegel.Server.Session.Internal (LiveSession (..), globalSession, liveSession)
 import Hegel.Settings (Settings)
+import Hegel.TestCase (UnsupportedCapability)
 import UnliftIO.Exception (Handler (..), catches)
 
 -- | Run a property against the global server session.
@@ -39,7 +40,12 @@ runPropertyOn ::
 runPropertyOn ses settings gen body =
   run
     `catches` [ Handler \(e :: ConnectionClosedError) -> recover (toException e),
-                Handler \(e :: ProtocolError) -> recover (toException e)
+                Handler \(e :: ProtocolError) -> recover (toException e),
+                -- A generator used a primitive this backend lacks. The
+                -- exception escapes runCase mid-case (before the per-case
+                -- stream is closed), so invalidate the session like the other
+                -- mid-protocol aborts rather than reuse it in an unknown state.
+                Handler \(e :: UnsupportedCapability) -> recover (toException e)
               ]
   where
     run = do

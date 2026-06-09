@@ -26,6 +26,9 @@ module Hegel.TestCase
     -- * Completion
     Status (..),
     markComplete,
+
+    -- * Capabilities
+    UnsupportedCapability (..),
   )
 where
 
@@ -67,6 +70,14 @@ data TestStopped = TestStopped
   deriving stock (Show)
 
 instance Exception TestStopped
+
+-- | Thrown when a generator uses a per-case primitive the active backend does
+-- not implement (e.g. pools on a backend whose protocol lacks them). The
+-- server runner maps this to an 'Hegel.Outcome.Errored' outcome.
+newtype UnsupportedCapability = UnsupportedCapability Text
+  deriving stock (Show)
+
+instance Exception UnsupportedCapability
 
 -- | Final outcome of a test case, sent via 'markComplete'.
 data Status

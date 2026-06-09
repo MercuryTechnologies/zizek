@@ -45,7 +45,7 @@ import Hegel.Server.Protocol.Stream
   )
 import Hegel.Server.TestCase (mkTestCase)
 import Hegel.Settings (Settings (..))
-import Hegel.TestCase (Status (..), TestStopped (..), markComplete)
+import Hegel.TestCase (Status (..), TestStopped (..), UnsupportedCapability, markComplete)
 import Text.Read (readMaybe)
 import UnliftIO.Exception (Handler (..), catches, finally, throwIO, tryAny)
 
@@ -141,6 +141,11 @@ runCase conn sid gen body finalizer = run `finally` finalizer
                       -- The server tracks the choice budget itself, so a stop
                       -- needs no acknowledgement; just discard the case.
                       Handler \TestStopped -> pure (Left Nothing),
+                      -- Not a counterexample: a generator used a primitive this
+                      -- backend lacks. Let it propagate to runPropertyOn, which
+                      -- maps it to Errored. Must precede the SomeException
+                      -- handler, which would otherwise swallow it as a failure.
+                      Handler \(e :: UnsupportedCapability) -> throwIO e,
                       Handler \(e :: SomeException) -> pure (Left (Just e))
                     ]
       case eVal of

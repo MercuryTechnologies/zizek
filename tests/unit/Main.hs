@@ -9,6 +9,7 @@ import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.Hspec (testSpec)
 import TestBackends (backends)
 import TestRunner (Runner)
+import UnsupportedCapabilities qualified
 
 main :: IO ()
 main = do
@@ -26,7 +27,8 @@ buildBackendTree name runner = do
       then do
         recovery <- testSpec "session recovery" SessionRecovery.spec
         pipelined <- testSpec "pipelined requests" PipelinedRequests.spec
-        pure [recovery, pipelined]
+        unsupported <- testSpec "unsupported capabilities" UnsupportedCapabilities.spec
+        pure [recovery, pipelined, unsupported]
       else pure []
 
   pure $ testGroup name ([basics, schemas, standards] <> serverOnly)
