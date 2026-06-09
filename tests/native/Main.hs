@@ -1,8 +1,15 @@
 -- | Native-backend test suite.
 --
--- Phase 3: verifies the raw FFI binding end-to-end using the boolean
--- schema — no 'Hegel.Gen', no 'Hegel.TestCase', no transport.
--- Later phases add further test cases alongside 'boolRoundTrip'.
+-- Exercises the raw @libhegel@ FFI binding end-to-end: driving runs, drawing
+-- values (via the boolean schema directly and through the 'Hegel.Gen'
+-- machinery), the failure+shrink cycle, and per-case completion semantics.
+-- These talk to the FFI directly rather than going through
+-- 'Hegel.Native.Runner', so they live here rather than in the
+-- backend-parameterized unit suite.
+--
+-- Every sequence runs in a bound thread so that 'throwOnError' always reads
+-- 'hegel_last_error_message' on the OS thread that made the failing call, and
+-- disables the on-disk database so tests do not create @.hegel/@ dirs.
 module Main (main) where
 
 import CBOR.Class (ToCBOR (toCBOR))
@@ -23,161 +30,172 @@ import Hegel.Native.TestCase (mkTestCase)
 import Hegel.Schema qualified as Schema
 import Hegel.TestCase (Status (..), TestStopped (..))
 import Hegel.TestCase qualified as TC
-import Test.Tasty (defaultMain, testGroup)
-import Test.Tasty.HUnit (assertBool, assertFailure, testCase)
+import Test.Hspec
+import Test.Tasty (defaultMain)
+import Test.Tasty.Hspec (testSpec)
 
 main :: IO ()
-main =
-  defaultMain $
-    testGroup
-      "zizek:native"
-      [ testCase "boolean schema round-trip" boolRoundTrip,
-        testCase "mark interesting smoke test" markInterestingSmoke,
-        testCase "integer shrink smoke test" integerShrinkSmoke,
-        testCase "draw via Gen machinery smoke test" drawGenSmoke,
-        testCase "draw+fail+shrink via Gen smoke test" drawFailShrinkSmoke
-      ]
+main = defaultMain =<< testSpec "zizek:native" spec
 
--- | Drive 50 boolean test cases through the raw C API and assert that every
--- returned CBOR value decodes to a 'Bool' and the run passes overall.
---
--- The entire sequence runs in a bound thread so that 'throwOnError' always reads
--- 'hegel_last_error_message' on the OS thread that made the failing call.
-boolRoundTrip :: IO ()
-boolRoundTrip = runInBoundThread $ do
-  let schemaBytes :: ByteString
-      schemaBytes = CE.encode (toCBOR Schema.bool)
-  withSettings $ \s -> do
-    hegel_settings_test_cases s 50
-    hegel_settings_verbosity s HEGEL_VERBOSITY_QUIET
-    -- Disable the on-disk database so the test does not create .hegel/ dirs.
-    withCString "" (hegel_settings_database s)
-    withRun s $ \run -> do
-      driveRun schemaBytes run
-      resultPtr <- hegel_run_result run
-      passed <- hegel_run_result_passed resultPtr
-      assertBool "all 50 boolean cases should pass" (passed /= 0)
+spec :: Spec
+spec = do
+  rawCApiSpec
+  genMachinerySpec
+  completionSpec
 
--- | Smoke test: run 5 boolean cases, mark the first INTERESTING to verify
--- hegel_mark_complete with INTERESTING doesn't crash.
-markInterestingSmoke :: IO ()
-markInterestingSmoke = runInBoundThread $ do
-  withSettings $ \s -> do
-    hegel_settings_test_cases s 5
-    hegel_settings_verbosity s HEGEL_VERBOSITY_QUIET
-    withCString "" (hegel_settings_database s)
-    withRun s $ \run -> go run True
-    pure ()
-  where
-    go :: Ptr HegelRun -> Bool -> IO ()
-    go run markFirst = do
-      tc <- hegel_next_test_case run
-      if tc == nullPtr
-        then pure ()
-        else do
-          _ <- generate tc (CE.encode (toCBOR Schema.bool))
-          if markFirst
-            then do
-              rc <- withCString "smoke:0" $ \p ->
-                hegel_mark_complete tc HEGEL_STATUS_INTERESTING p
-              case rc of
-                HEGEL_E_STOP_TEST -> pure () -- normal continue signal
-                _ -> throwOnError rc
-              go run False
-            else do
-              hegel_mark_complete tc HEGEL_STATUS_VALID nullPtr >>= throwOnError
-              go run False
+-- | Drive runs straight through the C API with CBOR schema bytes and raw
+-- @hegel_mark_complete@ status codes.
+rawCApiSpec :: Spec
+rawCApiSpec = describe "raw C API" $ do
+  it "round-trips 50 boolean cases" $ runInBoundThread $ do
+    let schemaBytes :: ByteString
+        schemaBytes = CE.encode (toCBOR Schema.bool)
+    withSettings $ \s -> do
+      hegel_settings_test_cases s 50
+      hegel_settings_verbosity s HEGEL_VERBOSITY_QUIET
+      withCString "" (hegel_settings_database s)
+      withRun s $ \run -> do
+        driveRun schemaBytes run
+        resultPtr <- hegel_run_result run
+        passed <- hegel_run_result_passed resultPtr
+        passed `shouldSatisfy` (/= 0)
 
--- | Drive an integer property that fails for n >= 10, with full shrinking.
--- Verifies the entire failure+shrink cycle at the raw FFI level.
-integerShrinkSmoke :: IO ()
-integerShrinkSmoke = runInBoundThread $ do
-  let schemaBytes = CE.encode (toCBOR (Schema.integer @Word64 0 255))
-      threshold = 10 :: Word64
-  withSettings $ \s -> do
-    hegel_settings_test_cases s 50
-    hegel_settings_verbosity s HEGEL_VERBOSITY_QUIET
-    withCString "" (hegel_settings_database s)
-    withRun s $ \run -> do
-      shrinkLoop schemaBytes threshold run
-      resultPtr <- hegel_run_result run
-      passed <- hegel_run_result_passed resultPtr
-      assertBool "run should have failed" (passed == 0)
-  where
-    shrinkLoop :: ByteString -> Word64 -> Ptr HegelRun -> IO ()
-    shrinkLoop schemaBytes threshold run = do
-      tc <- hegel_next_test_case run
-      if tc == nullPtr
-        then pure ()
-        else do
-          mbs <- tryDraw tc schemaBytes
-          case mbs of
-            Nothing -> do
-              rc <- hegel_mark_complete tc HEGEL_STATUS_OVERRUN nullPtr
-              case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError rc
-            Just bs -> case CD.decode bs of
-              Right (UInt v)
-                | v >= fromIntegral threshold ->
-                    withCString "smoke:0" $ \p -> do
-                      rc <- hegel_mark_complete tc HEGEL_STATUS_INTERESTING p
-                      case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError rc
-              _ -> hegel_mark_complete tc HEGEL_STATUS_VALID nullPtr >>= throwOnError
-          shrinkLoop schemaBytes threshold run
+  it "marks a case INTERESTING without crashing" $ runInBoundThread $ do
+    withSettings $ \s -> do
+      hegel_settings_test_cases s 5
+      hegel_settings_verbosity s HEGEL_VERBOSITY_QUIET
+      withCString "" (hegel_settings_database s)
+      let go :: Ptr HegelRun -> Bool -> IO ()
+          go run markFirst = do
+            tc <- hegel_next_test_case run
+            if tc == nullPtr
+              then pure ()
+              else do
+                _ <- generate tc (CE.encode (toCBOR Schema.bool))
+                if markFirst
+                  then do
+                    rc <- withCString "smoke:0" $ \p ->
+                      hegel_mark_complete tc HEGEL_STATUS_INTERESTING p
+                    case rc of
+                      HEGEL_E_STOP_TEST -> pure () -- normal continue signal
+                      _ -> throwOnError rc
+                    go run False
+                  else do
+                    hegel_mark_complete tc HEGEL_STATUS_VALID nullPtr >>= throwOnError
+                    go run False
+      withRun s $ \run -> go run True
 
--- | Verify that 'draw' via the Haskell Gen machinery works with the native backend.
-drawGenSmoke :: IO ()
-drawGenSmoke = runInBoundThread $ do
-  let gen = Gen.integral @Int & Gen.min 0 & Gen.max 100 & Gen.build
-  withSettings $ \s -> do
-    hegel_settings_test_cases s 10
-    hegel_settings_verbosity s HEGEL_VERBOSITY_QUIET
-    withCString "" (hegel_settings_database s)
-    withRun s $ \run -> loop gen run
-  where
-    loop :: Gen Int -> Ptr HegelRun -> IO ()
-    loop gen run = do
-      tcPtr <- hegel_next_test_case run
-      if tcPtr == nullPtr
-        then pure ()
-        else do
+  it "drives a full integer failure+shrink cycle" $ runInBoundThread $ do
+    let schemaBytes = CE.encode (toCBOR (Schema.integer @Word64 0 255))
+        threshold = 10 :: Word64
+    withSettings $ \s -> do
+      hegel_settings_test_cases s 50
+      hegel_settings_verbosity s HEGEL_VERBOSITY_QUIET
+      withCString "" (hegel_settings_database s)
+      let shrinkLoop :: Ptr HegelRun -> IO ()
+          shrinkLoop run = do
+            tc <- hegel_next_test_case run
+            if tc == nullPtr
+              then pure ()
+              else do
+                mbs <- tryDraw tc schemaBytes
+                case mbs of
+                  Nothing -> do
+                    rc <- hegel_mark_complete tc HEGEL_STATUS_OVERRUN nullPtr
+                    case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError rc
+                  Just bs -> case CD.decode bs of
+                    Right (UInt v)
+                      | v >= fromIntegral threshold ->
+                          withCString "smoke:0" $ \p -> do
+                            rc <- hegel_mark_complete tc HEGEL_STATUS_INTERESTING p
+                            case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError rc
+                    _ -> hegel_mark_complete tc HEGEL_STATUS_VALID nullPtr >>= throwOnError
+                shrinkLoop run
+      withRun s $ \run -> do
+        shrinkLoop run
+        resultPtr <- hegel_run_result run
+        passed <- hegel_run_result_passed resultPtr
+        passed `shouldSatisfy` (== 0)
+
+-- | Drive runs through the 'Hegel.Gen' machinery: 'mkTestCase', 'draw', and the
+-- 'Hegel.TestCase' vtable rather than raw schema bytes.
+genMachinerySpec :: Spec
+genMachinerySpec = describe "Gen machinery" $ do
+  it "draws values within range" $ runInBoundThread $ do
+    let gen = Gen.integral @Int & Gen.min 0 & Gen.max 100 & Gen.build
+    withSettings $ \s -> do
+      hegel_settings_test_cases s 10
+      hegel_settings_verbosity s HEGEL_VERBOSITY_QUIET
+      withCString "" (hegel_settings_database s)
+      let loop :: Ptr HegelRun -> IO ()
+          loop run = do
+            tcPtr <- hegel_next_test_case run
+            if tcPtr == nullPtr
+              then pure ()
+              else do
+                let tc = mkTestCase tcPtr
+                n <- draw tc gen
+                n `shouldSatisfy` (\x -> x >= 0 && x <= 100)
+                TC.markComplete tc Valid
+                loop run
+      withRun s loop
+
+  it "draws, fails, and shrinks" $ runInBoundThread $ do
+    let gen = Gen.integral @Int & Gen.min 0 & Gen.max 100 & Gen.build
+    withSettings $ \s -> do
+      hegel_settings_test_cases s 100
+      hegel_settings_verbosity s HEGEL_VERBOSITY_QUIET
+      withCString "" (hegel_settings_database s)
+      let loop :: Ptr HegelRun -> IO ()
+          loop run = do
+            tcPtr <- hegel_next_test_case run
+            if tcPtr == nullPtr
+              then pure ()
+              else do
+                let tc = mkTestCase tcPtr
+                eVal <- try @TestStopped (draw tc gen)
+                case eVal of
+                  -- Budget exhausted for this shrink probe; mark overrun.
+                  Left TestStopped -> TC.markComplete tc Overrun
+                  Right n ->
+                    if n == (42 :: Int)
+                      then withCString "smoke:0" $ \p -> do
+                        rc <- hegel_mark_complete tcPtr HEGEL_STATUS_INTERESTING p
+                        case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError rc
+                      else TC.markComplete tc Valid
+                loop run
+      withRun s $ \run -> do
+        loop run
+        resultPtr <- hegel_run_result run
+        passed <- hegel_run_result_passed resultPtr
+        passed `shouldSatisfy` (== 0)
+
+-- | Per-case completion error semantics.
+completionSpec :: Spec
+completionSpec = describe "completion semantics" $
+  -- A run-owned test case may be completed exactly once. A second
+  -- 'TC.markComplete' is rejected by libhegel with a non-control-flow error
+  -- code, which the native vtable raises as a 'HegelError'. In
+  -- 'Hegel.Native.Runner' such an error escapes the per-case @catches@ (which
+  -- wraps only generation and the body) and surfaces as an
+  -- 'Hegel.Outcome.Errored' outcome rather than crashing the run; this pins the
+  -- premise that 'markComplete' genuinely throws.
+  it "raises HegelError when a run-owned case is completed twice" $
+    runInBoundThread $ do
+      withSettings $ \s -> do
+        hegel_settings_test_cases s 1
+        hegel_settings_verbosity s HEGEL_VERBOSITY_QUIET
+        withCString "" (hegel_settings_database s)
+        withRun s $ \run -> do
+          tcPtr <- hegel_next_test_case run
+          tcPtr `shouldNotBe` nullPtr
           let tc = mkTestCase tcPtr
-          n <- draw tc gen
-          assertBool ("expected 0-100, got " <> show n) (n >= 0 && n <= 100)
+          _ <- draw tc (Gen.bool & Gen.build)
           TC.markComplete tc Valid
-          loop gen run
-
--- | Full failing+shrinking cycle driven via 'draw' and body failure.
-drawFailShrinkSmoke :: IO ()
-drawFailShrinkSmoke = runInBoundThread $ do
-  let gen = Gen.integral @Int & Gen.min 0 & Gen.max 100 & Gen.build
-  withSettings $ \s -> do
-    hegel_settings_test_cases s 100
-    hegel_settings_verbosity s HEGEL_VERBOSITY_QUIET
-    withCString "" (hegel_settings_database s)
-    withRun s $ \run -> do
-      loop gen run
-      resultPtr <- hegel_run_result run
-      passed <- hegel_run_result_passed resultPtr
-      assertBool "run should have failed (found 42)" (passed == 0)
-  where
-    loop gen run = do
-      tcPtr <- hegel_next_test_case run
-      if tcPtr == nullPtr
-        then pure ()
-        else do
-          let tc = mkTestCase tcPtr
-          eVal <- try @TestStopped (draw tc gen)
-          case eVal of
-            Left TestStopped -> do
-              -- Budget exhausted for this shrink probe; mark overrun.
-              TC.markComplete tc Overrun
-            Right n ->
-              if n == (42 :: Int)
-                then withCString "smoke:0" $ \p -> do
-                  rc <- hegel_mark_complete tcPtr HEGEL_STATUS_INTERESTING p
-                  case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError rc
-                else TC.markComplete tc Valid
-          loop gen run
+          result <- try @HegelError (TC.markComplete tc Valid)
+          case result of
+            Left _ -> pure ()
+            Right () -> expectationFailure "expected HegelError on double completion"
 
 -- | Loop over every test case the engine produces, draw one boolean each
 -- time, assert the CBOR decodes correctly, and mark the case valid.
@@ -193,11 +211,11 @@ driveRun schemaBytes run = go
           bs <- generate tc schemaBytes
           case CD.decode bs of
             Left err ->
-              assertFailure ("CBOR decode failed: " <> err)
+              expectationFailure ("CBOR decode failed: " <> err)
             Right (Bool _) ->
               pure ()
             Right v ->
-              assertFailure ("expected Bool, got: " <> show v)
+              expectationFailure ("expected Bool, got: " <> show v)
           hegel_mark_complete tc HEGEL_STATUS_VALID nullPtr >>= throwOnError
           go
 
