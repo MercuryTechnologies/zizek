@@ -312,6 +312,7 @@ test-suite native
     -with-rtsopts=-N
 
   build-depends:
+    hspec ^>=2.11,
     tasty ^>=1.5,
-    tasty-hunit ^>=0.10,
+    tasty-hspec ^>=1.2,
     zizek,
