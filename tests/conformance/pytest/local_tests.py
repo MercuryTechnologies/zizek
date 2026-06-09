@@ -16,6 +16,42 @@ from hypothesis.errors import InvalidArgument
 from hegel.conformance import ALL_CATEGORIES, ConformanceTest, TextConformance
 
 
+def _average_ranks(values: list[float]) -> list[float]:
+    """1-based ranks, averaging within tie groups (scipy-free)."""
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        avg = (i + j) / 2 + 1  # mean of the 1-based ranks i+1..j+1
+        for k in range(i, j + 1):
+            ranks[order[k]] = avg
+        i = j + 1
+    return ranks
+
+
+def _spearman(xs: list[float], ys: list[float]) -> float:
+    """Spearman's rho, computed as the Pearson correlation of average ranks.
+
+    Using average ranks (rather than the tie-free ``1 - 6*sum(d^2)/...`` form)
+    keeps the coefficient correct when sample counts tie. Returns 0.0 if a
+    sequence has zero rank variance — only possible here when every branch got
+    the same count, which should fail the ordering check, and does (0.0 < the
+    threshold).
+    """
+    n = len(xs)
+    rx, ry = _average_ranks(xs), _average_ranks(ys)
+    mean_x, mean_y = sum(rx) / n, sum(ry) / n
+    cov = sum((a - mean_x) * (b - mean_y) for a, b in zip(rx, ry))
+    var_x = sum((a - mean_x) ** 2 for a in rx)
+    var_y = sum((b - mean_y) ** 2 for b in ry)
+    if var_x == 0 or var_y == 0:
+        return 0.0
+    return cov / (var_x * var_y) ** 0.5
+
+
 class FrequencyConformance(ConformanceTest):
     """Exercise Gen.frequency (weighted one-of).
 
@@ -26,8 +62,10 @@ class FrequencyConformance(ConformanceTest):
     1. **Value correctness** — every generated value lies inside its
        declared branch's range (a wrong-branch-index bug would surface here).
     2. **Reachability** — every branch is selected at least once.
-    3. **Rank ordering** — heavier branches are sampled more often than
-       lighter ones.
+    3. **Weight ordering (trend)** — the heaviest branch outranks the
+       lightest, and weight and sample count are strongly rank-correlated.
+       A noise-tolerant check, since a finite engine run does not sample in
+       exact proportion to the weights (see ``validate``).
 
     Branch ranges are pinned equal across branches to hold entropy constant:
     if ranges differed in size, the engine would explore the larger branch
@@ -43,6 +81,11 @@ class FrequencyConformance(ConformanceTest):
     # Each branch covers the same number of values so range-size effects
     # don't confound the weight signal.
     _BRANCH_RANGE_SIZE = 100
+
+    # Minimum weight/count Spearman correlation. 0.5 tolerates a local adjacent
+    # inversion (one swap gives rho >= 0.5 for n in 2..4) while rejecting any
+    # broadly wrong ordering (a full reversal gives rho <= 0).
+    _MIN_SPEARMAN = 0.5
 
     def params_strategy(self) -> st.SearchStrategy[dict[str, Any]]:
         @st.composite
@@ -93,16 +136,32 @@ class FrequencyConformance(ConformanceTest):
                 f"(counts: {observed})"
             )
 
-        # Property 3: rank ordering.
-        # Weights are strictly decreasing by construction (unique + sorted),
-        # so the heavier branch should always accumulate more samples.
-        for i in range(len(branches) - 1):
-            assert observed[i] >= observed[i + 1], (
-                f"rank order violated: branch {i} (weight={branches[i]['weight']}) "
-                f"got {observed[i]} samples but branch {i + 1} "
-                f"(weight={branches[i + 1]['weight']}) got {observed[i + 1]} "
-                f"(full counts: {observed})"
-            )
+        # Property 3: weight ordering (noise-tolerant).
+        #
+        # The engine guarantees heavier branches are *favored*, not that
+        # realized counts at this sample size are strictly monotonic. Adjacent
+        # near-equal weights routinely invert under multinomial noise, and the
+        # params search actively hunts for those near-ties — so strict
+        # per-adjacent-pair ordering is flaky by construction. Assert the two
+        # robust signals instead.
+        weights = [b["weight"] for b in branches]
+
+        # 3a. The heaviest branch outranks the lightest. Weights are sorted
+        # strictly decreasing, so this is the largest, most reliable gap.
+        assert observed[0] > observed[-1], (
+            f"heaviest branch (weight={weights[0]}) got {observed[0]} samples "
+            f"but lightest (weight={weights[-1]}) got {observed[-1]} "
+            f"(full counts: {observed})"
+        )
+
+        # 3b. Weight and sample count are strongly rank-correlated overall, so a
+        # local inversion is tolerated but a systematically wrong distribution
+        # is not.
+        rho = _spearman([float(w) for w in weights], [float(c) for c in observed])
+        assert rho >= self._MIN_SPEARMAN, (
+            f"weight/count Spearman correlation {rho:.3f} < {self._MIN_SPEARMAN} "
+            f"(weights: {weights}, counts: {observed})"
+        )
 
 
 _REGEX_FEATURE_PATTERNS: list[str] = [
