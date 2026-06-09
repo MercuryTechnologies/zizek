@@ -8,7 +8,6 @@ import Control.Concurrent (runInBoundThread)
 import Control.Exception (SomeException, toException)
 import Data.ByteString (ByteString)
 import Data.Functor (($>))
-import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Foreign (Ptr, nullPtr)
@@ -145,26 +144,21 @@ driveLoop ::
   (a -> IO ()) ->
   Ptr HegelRun ->
   IO (Int, Int)
-driveLoop settings gen body run = do
-  nValidRef <- newIORef (0 :: Int)
-  nInvalidRef <- newIORef (0 :: Int)
-  let loop = do
-        tcPtr <- hegel_next_test_case run
-        if tcPtr == nullPtr
-          then pure ()
-          else do
-            result <- runCase settings gen body tcPtr
-            case result of
-              CaseValid -> modifyIORef' nValidRef (+ 1)
-              CaseInvalid -> modifyIORef' nInvalidRef (+ 1)
-              -- A failure (counted via the run result) or an overrun (a
-              -- budget-exhausted shrink probe) — neither is a valid example
-              -- nor an assume\/filter rejection, so it affects neither tally.
-              CaseInteresting -> pure ()
-              CaseOverrun -> pure ()
-            loop
-  loop
-  (,) <$> readIORef nValidRef <*> readIORef nInvalidRef
+driveLoop settings gen body run = loop 0 0
+  where
+    loop !nValid !nInvalid = do
+      tcPtr <- hegel_next_test_case run
+      if tcPtr == nullPtr
+        then pure (nValid, nInvalid)
+        else
+          runCase settings gen body tcPtr >>= \case
+            CaseValid -> loop (nValid + 1) nInvalid
+            CaseInvalid -> loop nValid (nInvalid + 1)
+            -- A failure (counted via the run result) or an overrun (a
+            -- budget-exhausted shrink probe) — neither is a valid example
+            -- nor an assume\/filter rejection, so it affects neither tally.
+            CaseInteresting -> loop nValid nInvalid
+            CaseOverrun -> loop nValid nInvalid
 
 -- | Outcome of running one engine-produced test case. 'CaseInvalid' is
 -- reserved for assume\/filter rejections (it feeds 'Stats.invalid');
