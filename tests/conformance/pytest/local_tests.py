@@ -1,7 +1,7 @@
 """Local ConformanceTest subclasses.
 
 These are extensions to the upstream ``hegel.conformance`` tests that have
-been added in an attempt to characterize additional functionality that fallse
+been added in an attempt to characterize additional functionality that falls
 outside the purview of our unit test suite.
 
 Some of these may be useful to upstream, after this library has been made
@@ -238,11 +238,9 @@ class NativeTextConformance(TextConformance):
 
     This subclass covers the same parameter space for size bounds, codepoint
     ranges, Unicode category filters, and include/exclude characters — just
-    with the codec choice narrowed to ``["ascii", "latin-1", "utf-8"]``
-    (the only values libhegel's ``build_intervals_uncached`` recognises;
-    anything else returns ``HEGEL_E_INVALID_ARG``).  The inherited
-    ``validate()`` method is unchanged, so the same per-codepoint assertions
-    apply.
+    with the codec choice narrowed to ``["ascii", "latin-1", "utf-8"]``.  The
+    inherited ``validate()`` method is unchanged, so the same per-codepoint
+    assertions apply.
 
     Runs under both backends.  Under the server backend it exercises a useful
     subset of the text parameter space on top of the (skipped-under-native)

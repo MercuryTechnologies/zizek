@@ -56,7 +56,7 @@ assert cond msg = unless cond (withFrozenCallStack (failure msg))
 -- For 'AssertionFailure', the @file:line@ comes from the innermost
 -- 'CallStack' frame. For all other exceptions we don't have a Haskell
 -- traceback, so we emit @\<unknown\>:0@ — dedup remains correct by exception
--- type. Users who want frame-accurate dedup should call 'assert' / 'failure'.
+-- type.
 originOf :: SomeException -> Text
 originOf exc = case fromException exc of
   Just AssertionFailure {callStack = cs} -> formatWithStack (typeName exc) cs

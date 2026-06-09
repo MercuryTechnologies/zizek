@@ -1,16 +1,23 @@
 -- | A logical stream multiplexed over a 'Connection'.
 module Hegel.Server.Protocol.Stream
-  ( Stream,
+  ( -- * Stream
+    Stream,
     mkStream,
     closeStream,
+
+    -- * Client-initiated requests
     sendRequest,
     request,
     await,
     requestRaw,
     PendingRequest,
+
+    -- * CBOR requests
     requestCbor,
     requestCborPending,
     awaitCbor,
+
+    -- * Server-initiated requests
     receiveRequest,
     writeReply,
   )

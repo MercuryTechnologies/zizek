@@ -35,10 +35,8 @@ applySettings s ptr = do
 boolC :: Bool -> CBool
 boolC b = CBool (if b then 1 else 0)
 
--- | OR the per-phase flags into a bitmask. An empty list yields @0@, which
--- libhegel runs as a no-op (a vacuous pass) — matching the server backend,
--- which forwards an empty phase list verbatim. Do not special-case @[]@ to
--- mean \"all phases\"; an empty selection deliberately disables every phase.
+-- | OR the per-phase flags into a bitmask. An empty list yields @0@ (no phases
+-- enabled).
 phasesBitmask :: [Phase] -> Word32
 phasesBitmask = foldl' (\acc p -> acc .|. phaseFlag p) 0
 

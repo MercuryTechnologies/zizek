@@ -1,7 +1,10 @@
 -- | Lower-level client API for talking to a @hegel@ server.
 module Hegel.Server.Client
-  ( Client (..),
+  ( -- * Client
+    Client (..),
     newClient,
+
+    -- * Running tests
     runTest,
   )
 where

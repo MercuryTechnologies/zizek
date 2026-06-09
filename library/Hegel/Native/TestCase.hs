@@ -36,11 +36,9 @@ mkTestCase tc =
 -- | Like 'mkTestCase', but for a caller-owned replay handle obtained from
 -- 'Hegel.Native.FFI.withTestCaseFromBlob'.
 --
--- Its 'markComplete' is a no-op: calling @hegel_mark_complete@ on a standalone
--- (from-blob) test case aborts the process via a Rust panic, and replay only
--- needs to redraw the counterexample value. Note that 'draw' may still invoke
--- 'markComplete' internally (e.g. an exhausted 'Hegel.Gen.filtered'), so the
--- no-op is load-bearing, not merely defensive.
+-- Its 'markComplete' is a no-op: @hegel_mark_complete@ panics on a standalone
+-- (from-blob) handle, and 'draw' may invoke 'markComplete' internally (e.g. an
+-- exhausted 'Hegel.Gen.filtered').
 mkReplayTestCase :: Ptr HegelTestCase -> TestCase
 mkReplayTestCase tc = (mkTestCase tc) {markComplete = \_ -> pure ()}
 

@@ -1,17 +1,9 @@
--- | 'Data.HashMap.Strict.HashMap' generator.
---
--- Build a hash-map generator by chaining modifiers onto 'hashMap' and
--- materialising with 'Hegel.Gen.Builder.build':
+-- | 'Data.HashMap.Strict.HashMap' generator (keys always unique).
 --
 -- > Gen.hashMap (Gen.text & Gen.build) (Gen.int & Gen.build)
 -- >   & Gen.minSize 1
 -- >   & Gen.maxSize 10
 -- >   & Gen.build
---
--- Keys are always unique. When both key and value generators are basic,
--- a @dict@ schema is used for a single round-trip. Otherwise the interactive
--- @new_collection@ \/ @collection_more@ loop is used with server-side
--- duplicate-key rejection.
 module Hegel.Gen.HashMap
   ( HashMapBuilder,
     hashMap,

@@ -9,7 +9,7 @@ import Hegel.Assertion qualified as Assertion
 import Hegel.Gen qualified as Gen
 import System.Exit (die)
 
--- A single buggy function with a single bug site. Both call paths funnel into
+-- | A single buggy function with a single bug site. Both call paths funnel into
 -- it so a correct innermost-frame origin dedups them to one failure.
 buggy :: Int -> IO ()
 buggy x = Assertion.assert (x <= 10) "x exceeds threshold"

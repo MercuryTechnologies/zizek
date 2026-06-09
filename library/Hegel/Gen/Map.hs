@@ -1,17 +1,9 @@
--- | 'Data.Map.Strict.Map' generator.
---
--- Build a map generator by chaining modifiers onto 'map' and materialising
--- with 'Hegel.Gen.Builder.build':
+-- | 'Data.Map.Strict.Map' generator (keys always unique).
 --
 -- > Gen.map (Gen.text & Gen.build) (Gen.int & Gen.build)
 -- >   & Gen.minSize 1
 -- >   & Gen.maxSize 10
 -- >   & Gen.build
---
--- Keys are always unique. When both key and value generators are basic,
--- a @dict@ schema is used for a single round-trip. Otherwise the interactive
--- @new_collection@ \/ @collection_more@ loop is used with server-side
--- duplicate-key rejection.
 module Hegel.Gen.Map
   ( MapBuilder,
     map,

@@ -1,13 +1,18 @@
 -- | Connection layer: a duplex pipe to the @hegel@ child process, multiplexed
 -- across logical streams.
 module Hegel.Server.Protocol.Connection
-  ( Connection,
+  ( -- * Connection
+    Connection,
     newConnection,
     sendPacket,
+
+    -- * Streams
     controlStream,
     newStream,
     connectStream,
     unregisterStream,
+
+    -- * Exit signalling
     awaitServerExited,
     markServerExited,
     serverHasExited,

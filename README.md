@@ -1,3 +1,11 @@
+> [!CAUTION]
+> This project started off as a bit of an experiment in seeing whether I could tolerate using LLMs for programming tasks (with somewhat mixed results); to that end, there is still a fair amount of slop that needs cleaning up so please mind the dust.
+>
+> You should use this library with care and report anything that seems confusing or incorrect (especially so if it's in the form of an overly prescriptive, sycophantic comment in the code).
+
+> [!NOTE]
+> This is not an official Mercury Technologies product.
+
 # Hegel for Haskell
 
 > "I think that the task of philosophy is not to provide answers, but to show how the way we perceive a problem can be itself part of a problem."
@@ -7,9 +15,6 @@
 `zizek` is a property-based testing library for Haskell; it is based on [Hypothesis] and uses the [Hegel protocol] to expose Hypothesis' [library of high-quality generation strategies](https://hypothesis.readthedocs.io/en/latest/reference/strategies.html) as well as its [integrated shrinking functionality](https://hypothesis.works/articles/integrated-shrinking/).
 
 Should we ever produce an Antithesis SDK for Haskell[^2], tests written with `zizek` will be able to integrate with it and receive more intelligent state-space exploration and increased bug-finding power for free.
-
-> [!NOTE]
-> This is not an official Mercury Technologies product.
 
 [Hypothesis]: https://github.com/hypothesisworks/hypothesis
 [Hegel protocol]: https://hegel.dev/reference/protocol
@@ -89,7 +94,7 @@ source-repository-package
 > [!TIP]
 > `zizek` is in active development and lacks adapters for common testing libraries like `tasty` or `hspec`; please see the test suite for usage examples.
 
-`zizek` tries to wrap the underlying `hegel-core` machinery in a higher-level API for constructing and exercising complex generators.
+`zizek` tries to wrap the underlying `hegel` machinery in a higher-level API for constructing and exercising complex generators.
 
 ### Simple Generators
 
@@ -110,7 +115,7 @@ prop_successor = do
 
 ### Independent Generators
 
-When the draws in a `do` block don't reference each other, and `ApplicativeDo` has been enabled, `zizek` will batch them into a single request to `hegel-core` for the whole tuple and the server can shrink each component independently when a counterexample is found:
+When the draws in a `do` block don't reference each other, and `ApplicativeDo` has been enabled, `zizek` will batch them into a single request to `hegel` for the whole tuple and the server can shrink each component independently when a counterexample is found:
 
 ```haskell
 {-# LANGUAGE ApplicativeDo #-}
@@ -132,7 +137,7 @@ prop_pair = runProperty_ defaultSettings boolAndInt $ \(_, n) ->
 ```
 
 > [!NOTE]
-> The example will compile and run without `ApplicativeDo`, but `zizek` will now issue two calls to `hegel-core` and shrinking will be dependent.
+> The example will compile and run without `ApplicativeDo`, but `zizek` will now issue two calls to `hegel` and shrinking will be dependent.
 
 ### Dependent Generators
 
@@ -280,6 +285,7 @@ $ just repl              # start a GHCi session with this library in-scope
 
 `zizek` passes `hegel-core`'s conformance tests, but some work remains outstanding:
 
+* deprecation & removal of the subprocess backend in favor of the native backend
 * a convenient utility for integrating `Gen` into interactive test cases
   * e.g. `hedgehog`'s `PropertyT`, which lets users build property-based tests into `IO` test cases more easily
 * support for Hypothesis' test database, which makes replaying failed tests faster and more convenient
@@ -288,7 +294,6 @@ $ just repl              # start a GHCi session with this library in-scope
   * pretty-printing for failed property assertions, a la `hedgehog`
   * more convenient utilities for expressing properties than just `runProperty`/`runProperty_`
 * stateful/state-machine testing
-* `hegel-core` package management via `uv` in the style of the other `hegel-*` libraries
 * Hackage publication
 
 ### What's up with the name?

@@ -1,17 +1,9 @@
 -- | @[a]@ generator.
 --
--- Build a list generator by chaining modifiers onto 'list' and materialising
--- with 'Hegel.Gen.Builder.build':
---
 -- > Gen.list (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
 -- >   & Gen.minSize 1
 -- >   & Gen.maxSize 10
 -- >   & Gen.build
---
--- When the element generator is basic (expressible as a single schema
--- request), the list is generated in a single round-trip using the @list@
--- schema. When it is not (e.g. after 'Hegel.Gen.Internal.filtered'), the
--- interactive @new_collection@ \/ @collection_more@ loop is used instead.
 module Hegel.Gen.List
   ( ListBuilder,
     list,

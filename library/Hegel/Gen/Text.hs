@@ -4,8 +4,7 @@
 --
 -- > Gen.text & Gen.minSize 1 & Gen.maxSize 64 & Gen.build
 --
--- Surrogates are excluded by default (the server returns UTF-8; lone
--- surrogates are not valid UTF-8 and cannot be stored in 'Data.Text.Text').
+-- Surrogates are excluded by default (not representable in 'Data.Text.Text').
 module Hegel.Gen.Text
   ( TextBuilder,
     text,

@@ -41,7 +41,7 @@ fullMatch :: RegexBuilder -> RegexBuilder
 fullMatch b = b {bFullMatch = True}
 
 -- | Restrict the generated characters to those described by the given
--- 'CharBuilder'. Equivalent to @hegel-core@'s @alphabet@ parameter.
+-- 'CharBuilder'. Equivalent to @hegel@'s @alphabet@ parameter.
 alphabet :: CharBuilder -> RegexBuilder -> RegexBuilder
 alphabet cb b = b {bAlphabet = Just cb}
 

@@ -55,9 +55,7 @@ runProperty settings gen body =
         pure (nv, ni, f)
       deriveOutcome s gen nValid nInvalid mFailure
 
--- ---------------------------------------------------------------------------
--- Failures
--- ---------------------------------------------------------------------------
+-- * Failures
 
 -- | A single failure copied out of the run result.
 data Failure = Failure
@@ -90,9 +88,7 @@ readPrimaryFailure run = do
           blob <- failureReproductionBlob f
           pure (Just Failure {origin = org, diagnostic = diag, reproductionBlob = blob})
 
--- ---------------------------------------------------------------------------
--- Outcome
--- ---------------------------------------------------------------------------
+-- * Outcome
 
 -- | Derive the 'Outcome' from the engine's run result. A failure carrying a
 -- reproduction blob is replayed to rebuild the typed counterexample; a failure
@@ -134,9 +130,7 @@ reconstruct s gen blob msg =
       Right val -> Failed {counterexample = val, message = msg, notes = []}
       Left e -> Errored e
 
--- ---------------------------------------------------------------------------
--- Per-case loop
--- ---------------------------------------------------------------------------
+-- * Per-case loop
 
 driveLoop ::
   Settings ->

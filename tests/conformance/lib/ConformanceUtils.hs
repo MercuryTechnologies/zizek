@@ -232,7 +232,7 @@ runConformancePropertyPaired gen toMetric =
 -- wrapping @body@ to record 'originOf' for each failure — and writes
 -- @{\"interesting_test_cases\": N}@ to @CONFORMANCE_SERVER_RUN_METRICS_FILE@.
 -- This is exactly the dedup key the runner reports to libhegel, so the count
--- matches the engine's. Under the server backend the @hegel-core@ process
+-- matches the engine's. Under the server backend the @hegel@ process
 -- writes that file, so we leave it alone.
 --
 -- Exits zero on 'Passed', 'Failed', or 'Rejected'; only 'Errored' or

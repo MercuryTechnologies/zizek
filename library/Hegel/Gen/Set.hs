@@ -1,17 +1,9 @@
--- | 'Data.Set.Set' generator.
---
--- Build a set generator by chaining modifiers onto 'set' and materialising
--- with 'Hegel.Gen.Builder.build':
+-- | 'Data.Set.Set' generator (elements always unique).
 --
 -- > Gen.set (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
 -- >   & Gen.minSize 1
 -- >   & Gen.maxSize 10
 -- >   & Gen.build
---
--- Sets are always unique. When the element generator is basic, a @list@
--- schema with @unique=true@ is used for a single round-trip. Otherwise the
--- interactive @new_collection@ \/ @collection_more@ loop is used with
--- server-side duplicate rejection.
 module Hegel.Gen.Set
   ( SetBuilder,
     set,

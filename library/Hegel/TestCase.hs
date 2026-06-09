@@ -119,14 +119,12 @@ labelValue LabelMapped = 13
 labelValue LabelSampledFrom = 14
 labelValue LabelEnumVariant = 15
 
--- ---------------------------------------------------------------------------
--- Free-function shims
---
+-- * Free-function shims
+
 -- Call sites in 'Hegel.Gen.Internal', 'Hegel.Collection', and the collection
 -- generators use these as ordinary functions — e.g. @generate tc schema@.
 -- Each shim simply delegates to the vtable field, so none of those modules
 -- need to change.
--- ---------------------------------------------------------------------------
 
 -- | Shim for 'TestCase.generate'.
 generate :: TestCase -> Value -> IO Value

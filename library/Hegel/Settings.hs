@@ -49,8 +49,6 @@ instance Show Settings where
 -- | Defaults for a property run: 100 test cases, a fresh seed each run,
 -- all phases enabled, and no per-case finalizer.
 --
--- Customize by overriding individual fields:
---
 -- > defaultSettings { testCases = 1000 }
 defaultSettings :: Settings
 defaultSettings =

@@ -646,26 +646,17 @@ foreign import ccall unsafe "hegel_test_case_is_final_replay"
 -- | Build a standalone test case that replays the counterexample encoded in
 -- @blob@.
 --
--- Returns @NULL@ with a diagnostic in 'hegel_last_error_message' when:
+-- Returns @NULL@ with a diagnostic in 'hegel_last_error_message' when @s@ or
+-- @blob@ is @NULL@, or @blob@ is not valid UTF-8, corrupt, or from an
+-- incompatible @libhegel@ version.
 --
--- * @s@ or @blob@ is @NULL@
--- * @blob@ is not valid UTF-8
--- * @blob@ is corrupt or from an incompatible @libhegel@ version
---
--- The returned handle is owned by the __caller__ and must be freed with
--- 'hegel_test_case_free'.
---
--- __Do not call 'hegel_mark_complete' on this handle.__ Standalone test cases
--- have no run to report back to; calling 'hegel_mark_complete' on one will
--- trigger a Rust panic and abort the process. The caller-owned lifecycle is
--- strictly: @from_blob@ → draw → inspect → @free@.
+-- Caller-owned: free with 'hegel_test_case_free'.
+-- __Do not call 'hegel_mark_complete' on this handle__ — it panics and aborts
+-- the process.
 --
 -- A blob whose choice sequence no longer matches the caller's generators
 -- returns 'HEGEL_E_STOP_TEST' on the overrunning draw.
---
 -- 'hegel_test_case_is_final_replay' always returns @true@ on this handle.
---
--- Prefer 'withTestCaseFromBlob' over calling this directly.
 foreign import ccall unsafe "hegel_test_case_from_blob"
   hegel_test_case_from_blob
     :: Ptr HegelSettings
@@ -674,11 +665,9 @@ foreign import ccall unsafe "hegel_test_case_from_blob"
 
 -- | Free a __caller-owned__ test case returned by 'hegel_test_case_from_blob'.
 --
--- __Do not call this on handles owned by 'HegelRun'__ (e.g. those returned by
--- 'hegel_next_test_case'); @libhegel@ will reject the call with a diagnostic
--- error and the handle will be double-freed when the run itself is freed.
--- 
--- Prefer 'withTestCaseFromBlob' to avoid having to guard against this.
+-- __Do not call this on 'HegelRun'-owned handles__ (e.g. from
+-- 'hegel_next_test_case'); @libhegel@ rejects it and the handle is
+-- double-freed by 'hegel_run_free'.
 foreign import ccall unsafe "hegel_test_case_free"
   hegel_test_case_free :: Ptr HegelTestCase -> IO ()
 
@@ -751,9 +740,7 @@ foreign import ccall unsafe "hegel_version"
 
 -- $helpers
 --
--- More idiomatic Haskell wrappers over the FFI bindings:
---
--- These are the intended entry points for higher-level code.
+-- Idiomatic Haskell wrappers over the FFI bindings.
 
 -- | Read the thread-local @libhegel@ error buffer.
 lastErrorMessage :: IO (Maybe Text)
@@ -784,12 +771,8 @@ peekUtf8 p
 -- the given action; the counterpart to 'peekUtf8'.
 --
 -- Encodes explicitly as UTF-8 rather than via the locale-sensitive
--- 'Foreign.C.String.withCString', so non-ASCII strings survive the round-trip
--- on any locale.
---
--- This matters most for the @origin@ passed to 'hegel_mark_complete': it is
--- the shrinker's dedup key, so a locale-mangled encoding could fragment a
--- single failure into several.
+-- 'Foreign.C.String.withCString', so non-ASCII strings survive on any locale.
+-- Matters most for the @origin@ at 'hegel_mark_complete', the shrinker's dedup key.
 withUtf8 :: Text -> (CString -> IO a) -> IO a
 withUtf8 = BS.useAsCString . TE.encodeUtf8
 
@@ -848,15 +831,9 @@ failureReproductionBlob f = do
 -- when @libhegel@ cannot decode the blob (corrupt data, incompatible version,
 -- @NULL@ arguments).
 --
--- The test case handle is __caller-owned__: it is freed by this bracket, not
--- by a run.  'hegel_test_case_is_final_replay' always returns @true@ on it.
--- Drive it with 'generate', 'hegel_start_span'\/'hegel_stop_span', etc.
--- Inspect the drawn values to determine whether the failure reproduced.
---
--- __Do not__ call 'hegel_mark_complete' on the handle — there is no run to
--- report back to, and doing so will abort the process via a Rust panic.
--- __Do not__ pass the handle to 'hegel_test_case_free' yourself — the bracket
--- does that.  __Do not__ pass it to 'hegel_run_free' — there is no run.
+-- The bracket frees the handle; 'hegel_test_case_is_final_replay' always
+-- returns @true@ on it. __Do not call 'hegel_mark_complete' (it panics),
+-- 'hegel_test_case_free', or 'hegel_run_free' on the handle.__
 withTestCaseFromBlob
   :: Ptr HegelSettings
   -> ByteString

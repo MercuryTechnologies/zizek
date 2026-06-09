@@ -53,8 +53,7 @@ integral :: IntegralBuilder a
 integral = IntegralBuilder {bMin = Nothing, bMax = Nothing}
 
 -- $aliases
--- Convenience aliases that fix 'integral' to a specific numeric type, so
--- callers can avoid an explicit type application.
+-- Type-pinned specializations of 'integral'.
 
 -- | Generate a random machine integer.
 --

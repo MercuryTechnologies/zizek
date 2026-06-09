@@ -1,4 +1,4 @@
--- | Wire-schema vocabulary for the @hegel-core@ protocol.
+-- | Wire-schema vocabulary for the Hegel protocol.
 --
 -- All schema records live here so that @Hegel.Gen.*@ modules consume
 -- typed smart constructors instead of building CBOR maps by hand.
@@ -52,7 +52,7 @@ import Data.Text (Text)
 import Hegel.Protocol.Cbor (buildMap, (.=), (.=?))
 import Prelude hiding (map)
 
--- | Boolean schema. Server emits 'True' or 'False' uniformly.
+-- | Boolean schema.
 data BoolSchema = BoolSchema
 
 instance ToCBOR BoolSchema where
@@ -105,7 +105,7 @@ binary = BinarySchema
 
 -- | Float \/ double schema. The 'width' field selects single- or
 -- double-precision; the bounds and toggles correspond directly to the
--- @hegel-core@ float vocabulary.
+-- @hegel@ float vocabulary.
 data FloatSchema a = FloatSchema
   { -- | Floating-point width in bits (32 or 64).
     width :: !Int,
@@ -141,7 +141,7 @@ instance (ToCBOR a) => ToCBOR (FloatSchema a) where
 -- | Character filtering options, shared by 'TextSchema' and 'RegexSchema'.
 -- Every field is optional; absent fields tell the server to apply no
 -- restriction on that axis. Wire representation is a CBOR map with the
--- character-filtering keys described in the @hegel-core@ wire spec.
+-- character-filtering keys described in the @hegel@ wire spec.
 data CharacterFields = CharacterFields
   { -- | Restrict to characters encodable in this codec (e.g. @"ascii"@,
     -- @"latin-1"@).
@@ -191,7 +191,7 @@ charFieldEntries cf =
       "exclude_characters" .=? cf.excludeCharacters
     ]
 
--- | Text schema. Wire type is @\"string\"@ (per the @hegel-core@ spec).
+-- | Text schema. Wire type is @\"string\"@ (per the @hegel@ spec).
 --
 -- Haskell @Text@ cannot represent lone surrogates; the 'text' smart
 -- constructor therefore defaults 'excludeCategories' to @[\"Cs\"]@. Override

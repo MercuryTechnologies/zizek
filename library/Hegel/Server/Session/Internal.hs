@@ -1,6 +1,7 @@
 -- | @hegel@ session lifecycle management.
 module Hegel.Server.Session.Internal
-  ( Session (..),
+  ( -- * Sessions
+    Session (..),
     LiveSession (..),
     globalSession,
     openSession,
@@ -9,6 +10,8 @@ module Hegel.Server.Session.Internal
     invalidateSession,
     liveSession,
     liveProcess,
+
+    -- * Configuration
     SessionConfig (..),
     defaultSessionConfig,
   )

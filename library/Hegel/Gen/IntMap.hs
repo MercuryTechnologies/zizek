@@ -1,18 +1,10 @@
--- | 'Data.IntMap.Strict.IntMap' generator.
---
--- Build an int-map generator by chaining modifiers onto 'intMap' and
--- materialising with 'Hegel.Gen.Builder.build':
+-- | 'Data.IntMap.Strict.IntMap' generator (keys always unique).
 --
 -- > Gen.intMap (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
 -- >            (Gen.text & Gen.build)
 -- >   & Gen.minSize 1
 -- >   & Gen.maxSize 10
 -- >   & Gen.build
---
--- The key generator must produce 'Int' values; keys are always unique.
--- When both generators are basic, a @dict@ schema is used for a single
--- round-trip. Otherwise the interactive @new_collection@ \/ @collection_more@
--- loop is used with server-side duplicate-key rejection.
 module Hegel.Gen.IntMap
   ( IntMapBuilder,
     intMap,

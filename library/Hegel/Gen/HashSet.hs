@@ -1,17 +1,9 @@
--- | 'Data.HashSet.HashSet' generator.
---
--- Build a hash-set generator by chaining modifiers onto 'hashSet' and
--- materialising with 'Hegel.Gen.Builder.build':
+-- | 'Data.HashSet.HashSet' generator (elements always unique).
 --
 -- > Gen.hashSet (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
 -- >   & Gen.minSize 1
 -- >   & Gen.maxSize 10
 -- >   & Gen.build
---
--- Hash sets are always unique. When the element generator is basic, a @list@
--- schema with @unique=true@ is used for a single round-trip. Otherwise the
--- interactive @new_collection@ \/ @collection_more@ loop is used with
--- server-side duplicate rejection.
 module Hegel.Gen.HashSet
   ( HashSetBuilder,
     hashSet,

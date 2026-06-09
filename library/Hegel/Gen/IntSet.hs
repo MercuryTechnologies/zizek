@@ -1,18 +1,9 @@
--- | 'Data.IntSet.IntSet' generator.
---
--- Build an int-set generator by chaining modifiers onto 'intSet' and
--- materialising with 'Hegel.Gen.Builder.build':
+-- | 'Data.IntSet.IntSet' generator (elements always unique).
 --
 -- > Gen.intSet (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
 -- >   & Gen.minSize 1
 -- >   & Gen.maxSize 10
 -- >   & Gen.build
---
--- The element generator must produce 'Int' values. Int sets are always
--- unique. When the element generator is basic, a @list@ schema with
--- @unique=true@ is used for a single round-trip. Otherwise the interactive
--- @new_collection@ \/ @collection_more@ loop is used with server-side
--- duplicate rejection.
 module Hegel.Gen.IntSet
   ( IntSetBuilder,
     intSet,

@@ -1,6 +1,7 @@
 -- | Server-backend property runner.
 module Hegel.Server.Runner
-  ( runProperty,
+  ( -- * Running properties
+    runProperty,
     runPropertyOn,
   )
 where
