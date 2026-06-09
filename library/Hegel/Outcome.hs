@@ -11,8 +11,8 @@ import Data.Text (Text)
 
 -- | Summary statistics for a property run.
 data Stats = Stats
-  { -- | Number of test cases the runner attempted.
-    testsRun :: !Int,
+  { -- | Valid test cases executed.
+    valid :: !Int,
     -- | How many cases were rejected as invalid (via 'Hegel.Gen.assume',
     -- 'Hegel.Gen.filtered', 'Hegel.Gen.discard', or 'Hegel.Gen.mapMaybe'
     -- exhaustion).
