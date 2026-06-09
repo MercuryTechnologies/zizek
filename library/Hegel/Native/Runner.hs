@@ -111,7 +111,7 @@ deriveOutcome s gen nValid nInvalid = \case
     | otherwise -> pure (UnhealthyInput (failureMessage f))
   Nothing
     | nValid == 0 -> pure (Rejected "no valid examples found")
-    | otherwise -> pure (Passed Stats {testsRun = nValid, invalid = nInvalid})
+    | otherwise -> pure (Passed Stats {valid = nValid, invalid = nInvalid})
 
 -- | Prefer the engine's diagnostic; fall back to the (stable) origin string.
 failureMessage :: Failure -> Text

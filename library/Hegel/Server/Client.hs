@@ -106,17 +106,20 @@ runTest client settings gen body = do
   flip finally (closeStream testStream) do
     (results, nInteresting, nInvalid) <-
       runEventLoop testStream client.connection gen body settings.perCaseFinalizer
-    interpretResults settings results nInteresting nInvalid $
+    interpretResults results nInteresting nInvalid $
       replayFinalCases testStream client.connection (fromIntegral nInteresting) (fromIntegral nInvalid) gen body settings.perCaseFinalizer
 
 interpretResults ::
-  Settings -> Value -> Word64 -> Word64 -> IO (Outcome a) -> IO (Outcome a)
-interpretResults settings results nInteresting nInvalid replay
+  Value -> Word64 -> Word64 -> IO (Outcome a) -> IO (Outcome a)
+interpretResults results nInteresting nInvalid replay
   | Just msg <- lookupKey "health_check_failure" results >>= asText = pure (UnhealthyInput msg)
   | Just msg <- lookupKey "error" results >>= asText = pure (Errored (toException (userError (T.unpack msg))))
   | nInteresting > 0 = replay
   | nValid == 0 = pure (Rejected "no valid examples found")
-  | otherwise = pure (Passed Stats {testsRun = settings.testCases, invalid = fromIntegral nInvalid})
+  -- Report the actual count of valid cases the engine ran, not the requested
+  -- target, so 'Stats.valid' means the same thing it does on the native
+  -- backend (which tallies valid cases itself in 'Hegel.Native.Runner').
+  | otherwise = pure (Passed Stats {valid = fromIntegral nValid, invalid = fromIntegral nInvalid})
   where
     nValid = maybe 0 id (lookupKey "valid_test_cases" results >>= asWord64)
 
@@ -188,7 +191,7 @@ replayFinalCases testStream conn n nInvalid gen body finalizer = go n Nothing
   where
     go 0 mFail = pure $ case mFail of
       Just (v, msg) -> Failed {counterexample = v, message = msg, notes = []}
-      Nothing -> Passed Stats {testsRun = 0, invalid = nInvalid}
+      Nothing -> Passed Stats {valid = 0, invalid = nInvalid}
     go k mFail = do
       (evId, ev) <- awaitEvent testStream
       case ev of
