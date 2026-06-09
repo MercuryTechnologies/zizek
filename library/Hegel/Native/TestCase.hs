@@ -112,4 +112,3 @@ nativeMarkComplete tc status = do
     HEGEL_OK -> pure ()
     HEGEL_E_STOP_TEST -> pure ()
     _ -> throwOnError rc
-

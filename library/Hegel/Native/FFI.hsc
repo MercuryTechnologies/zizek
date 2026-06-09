@@ -152,6 +152,8 @@ module Hegel.Native.FFI
     -- * Haskell helpers
     -- $helpers
     throwOnError,
+    peekUtf8,
+    withUtf8,
     withSettings,
     withRun,
     generate,
@@ -168,9 +170,10 @@ import Data.ByteString qualified as BS
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Word (Word32, Word64, Word8)
 import Foreign (Ptr, alloca, castPtr, nullPtr, peek)
-import Foreign.C.String (CString, peekCString)
+import Foreign.C.String (CString)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt (..), CSize (..))
 
 -- $handles
@@ -759,8 +762,36 @@ lastErrorMessage = do
   if msgPtr == nullPtr
     then pure Nothing
     else do
-      msg <- T.pack <$> peekCString msgPtr
+      msg <- peekUtf8 msgPtr
       pure (if T.null msg then Nothing else Just msg)
+
+-- | Decode a borrowed UTF-8 C string from @libhegel@.
+--
+-- @libhegel@ strings (origins, diagnostics, error messages) are UTF-8
+-- regardless of the process locale, so decode them explicitly rather than via
+-- the locale-sensitive 'Foreign.C.String.peekCString'.
+--
+-- Decoding is lenient: a malformed byte becomes U+FFFD, so reporting a failure
+-- can never itself crash the runner.
+--
+-- A @NULL@ pointer decodes to @\"\"@.
+peekUtf8 :: CString -> IO Text
+peekUtf8 p
+  | p == nullPtr = pure ""
+  | otherwise = TE.decodeUtf8Lenient <$> BS.packCString p
+
+-- | Marshal 'Text' into a NUL-terminated UTF-8 C string for the duration of
+-- the given action; the counterpart to 'peekUtf8'.
+--
+-- Encodes explicitly as UTF-8 rather than via the locale-sensitive
+-- 'Foreign.C.String.withCString', so non-ASCII strings survive the round-trip
+-- on any locale.
+--
+-- This matters most for the @origin@ passed to 'hegel_mark_complete': it is
+-- the shrinker's dedup key, so a locale-mangled encoding could fragment a
+-- single failure into several.
+withUtf8 :: Text -> (CString -> IO a) -> IO a
+withUtf8 = BS.useAsCString . TE.encodeUtf8
 
 -- | Check a @libhegel@ return code; throws 'HegelError' on any non-zero
 -- value.
