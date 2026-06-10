@@ -62,12 +62,9 @@ common library
     pretty-show ^>=1.10,
     prettyprinter ^>=1.7,
     prettyprinter-ansi-terminal ^>=1.1,
-    stm ^>=2.5,
-    stm-containers ^>=1.2,
     tasty ^>=1.5,
     text ^>=2.1,
     transformers ^>=0.6,
-    typed-process ^>=0.2,
     unliftio ^>=0.2,
     unordered-containers ^>=0.2,
     uuid ^>=1.3,
@@ -117,15 +114,6 @@ library
     Hegel.Protocol.Cbor
     Hegel.Report
     Hegel.Schema
-    Hegel.Server.Client
-    Hegel.Server.Protocol.Connection
-    Hegel.Server.Protocol.Error
-    Hegel.Server.Protocol.Packet
-    Hegel.Server.Protocol.Stream
-    Hegel.Server.Runner
-    Hegel.Server.Session
-    Hegel.Server.Session.Internal
-    Hegel.Server.TestCase
     Hegel.Settings
     Hegel.Tasty
     Hegel.TestCase
@@ -305,14 +293,11 @@ test-suite unit
     DatabaseReplay
     GeneratorSchemas
     Integrations
-    PipelinedRequests
     PropertyChecks
     ReportRendering
-    SessionRecovery
     StandardGenerators
     TestBackends
     TestRunner
-    UnsupportedCapabilities
 
   build-depends:
     hspec ^>=2.11,

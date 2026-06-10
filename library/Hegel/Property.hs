@@ -24,8 +24,7 @@
 -- 'Hegel.Report.Counterexample', re-collected by replaying the engine's
 -- minimal failing case.
 --
--- 'check' runs against the native backend; use
--- 'Hegel.Server.Runner.check' for the server backend. For application
+-- 'check' runs against the native backend. For application
 -- monads, run @'PropertyT' App ()@ and collapse with 'hoist' before
 -- checking.
 module Hegel.Property

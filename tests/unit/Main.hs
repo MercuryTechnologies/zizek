@@ -4,16 +4,13 @@ import BasicProperties qualified
 import DatabaseReplay qualified
 import GeneratorSchemas qualified
 import Integrations qualified
-import PipelinedRequests qualified
 import PropertyChecks qualified
 import ReportRendering qualified
-import SessionRecovery qualified
 import StandardGenerators qualified
 import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.Hspec (testSpec)
 import TestBackends (backends)
 import TestRunner (Checker, Runner)
-import UnsupportedCapabilities qualified
 
 main :: IO ()
 main = do
@@ -30,14 +27,4 @@ buildBackendTree name runner checker = do
   standards <- testSpec "standard generators" (StandardGenerators.spec runner)
   properties <- testSpec "property monad" (PropertyChecks.spec checker)
   replay <- testSpec "database replay" (DatabaseReplay.spec name checker)
-
-  serverOnly <-
-    if name == "server"
-      then do
-        recovery <- testSpec "session recovery" SessionRecovery.spec
-        pipelined <- testSpec "pipelined requests" PipelinedRequests.spec
-        unsupported <- testSpec "unsupported capabilities" UnsupportedCapabilities.spec
-        pure [recovery, pipelined, unsupported]
-      else pure []
-
-  pure $ testGroup name ([basics, schemas, standards, properties, replay] <> serverOnly)
+  pure $ testGroup name [basics, schemas, standards, properties, replay]

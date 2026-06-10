@@ -68,16 +68,9 @@ _conformance-build:
   @ln -sf $(cabal list-bin zizek:test-char) tests/conformance/pytest/bin/test-char
   @ln -sf $(cabal list-bin zizek:test-regex) tests/conformance/pytest/bin/test-regex
 
-# Run the Python conformance harness using the server backend (CI gate).
-check-conformance-server: _conformance-build
-  @HEGEL_BACKEND=server pytest tests/conformance/pytest/ -n auto
-
-# Run the Python conformance harness using the native backend (WIP).
-check-conformance-native: _conformance-build
-  @HEGEL_BACKEND=native pytest tests/conformance/pytest/ -n auto
-
-# Run the conformance gate (server backend only until native is fully green).
-check-conformance: check-conformance-server
+# Run the Python conformance harness using the native backend.
+check-conformance: _conformance-build
+  @pytest tests/conformance/pytest/ -n auto
 
 # Build with coverage and produce a report (add hpc-codecov to flake.nix first).
 check-coverage:

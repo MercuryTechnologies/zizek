@@ -27,7 +27,7 @@ import Data.Word (Word64)
 import Foreign (Ptr, nullPtr)
 import Foreign.C.String (withCString)
 import Hegel.Gen qualified as Gen
-import Hegel.Gen.Internal (Gen, draw)
+import Hegel.Gen.Internal (draw)
 import Hegel.Native.FFI
 import Hegel.Native.Runner qualified as Runner
 import Hegel.Native.TestCase (mkTestCase)
@@ -112,7 +112,7 @@ rawCApiSpec = describe "raw C API" $ do
                     case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError rc
                   Just bs -> case CD.decode bs of
                     Right (UInt v)
-                      | v >= fromIntegral threshold ->
+                      | v >= threshold ->
                           withCString "smoke:0" $ \p -> do
                             rc <- hegel_mark_complete tc HEGEL_STATUS_INTERESTING p
                             case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError rc

@@ -24,8 +24,6 @@ import Hegel (Gen)
 import Hegel.Assertion (originOf)
 import Hegel.Native.Runner qualified as Native
 import Hegel.Report (Abort (..), Report (..), Result (..))
-import Hegel.Server.Runner qualified as Server
-import Hegel.Server.Session (closeSession, globalSession)
 import Hegel.Settings (Settings (..), defaultSettings)
 import System.Environment (getArgs, getProgName, lookupEnv)
 import System.Exit (ExitCode (..), die, exitSuccess, exitWith)
@@ -33,40 +31,6 @@ import System.IO (Handle, IOMode (..), hFlush, openFile)
 import System.IO.Unsafe (unsafePerformIO)
 import Text.Read (readMaybe)
 import UnliftIO.IORef (modifyIORef', newIORef, readIORef, writeIORef)
-
--- | Which backend the conformance binary should use.
--- Controlled by the @HEGEL_BACKEND@ environment variable:
--- @"native"@ or absent → 'NativeBackend'; @"server"@ → 'ServerBackend'.
-data Backend = NativeBackend | ServerBackend
-
--- | Read 'Backend' from @HEGEL_BACKEND@, defaulting to 'NativeBackend'.
-getBackend :: IO Backend
-getBackend =
-  lookupEnv "HEGEL_BACKEND" >>= \case
-    Nothing -> pure NativeBackend
-    Just "native" -> pure NativeBackend
-    Just "server" -> pure ServerBackend
-    Just other -> die ("HEGEL_BACKEND: expected native|server, got: " <> other)
-
--- | Dispatch to the backend selected by 'getBackend'.
-runSelected ::
-  (Show a) =>
-  Settings ->
-  Gen a ->
-  (a -> IO ()) ->
-  IO Report
-runSelected settings gen body =
-  getBackend >>= \case
-    NativeBackend -> Native.runProperty settings gen body
-    ServerBackend -> Server.runProperty settings gen body
-
--- | Close the server session only when running under the server backend.
--- No-op for the native backend.
-closeSelectedSession :: IO ()
-closeSelectedSession =
-  getBackend >>= \case
-    NativeBackend -> pure ()
-    ServerBackend -> closeSession globalSession
 
 _metricsHandle :: MVar (Maybe Handle)
 _metricsHandle = unsafePerformIO (newMVar Nothing)
@@ -129,19 +93,10 @@ writeMetrics v = do
       BL.hPut h (encode v <> "\n")
       hFlush h
 
--- | Append an empty JSON object to the metrics file, if one is configured.
---
--- Empty @{}@ lines exist solely to keep client and server metric line counts
--- 1:1 for the server backend's pairing step (which then drops INVALID/OVERRUN
--- cases). The native backend does no such pairing — the harness sets
--- @skip_server_metrics@ and feeds the raw metrics list straight to the
--- validators — so an empty @{}@ there only crashes validators that index
--- required keys. Emit empty metrics under the server backend only.
+-- | No-op: previously appended an empty JSON object for server metric pairing.
+-- Retained for call-site compatibility; the native backend has no such pairing step.
 writeEmptyMetrics :: IO ()
-writeEmptyMetrics =
-  getBackend >>= \case
-    NativeBackend -> pure ()
-    ServerBackend -> writeMetrics (object [])
+writeEmptyMetrics = pure ()
 
 -- | Force the generator into the compositional (non-basic) fallback path by
 -- wrapping it with a trivial monadic bind when @mode == "non_basic"@.
@@ -156,11 +111,11 @@ nonBasic _ g = g
 
 -- | Standard conformance runner: exits non-zero on any non-passing outcome.
 runConformanceProperty :: (Show a) => Gen a -> (a -> IO ()) -> IO ()
-runConformanceProperty gen body = run `finally` closeSelectedSession
+runConformanceProperty gen body = run `finally` pure ()
   where
     run = do
       n <- getTestCases
-      report <- runSelected (defaultSettings {testCases = n}) gen body
+      report <- Native.runProperty (defaultSettings {testCases = n}) gen body
       case report.result of
         Ok -> exitSuccess
         GaveUp msg -> do
@@ -176,15 +131,9 @@ runConformanceProperty gen body = run `finally` closeSelectedSession
           putStrLn ("conformance health check failed: " <> show msg)
           exitWith (ExitFailure 1)
 
--- | Conformance runner that guarantees a client metric line per test case the
--- server records, even when the generator rejects (e.g. exhausted
--- 'Hegel.Gen.filtered' retries). Mirrors the @defer EnsureMetric()@ pattern
--- from @hegel-go@'s @internal/conformance/helpers.go@.
---
--- The body returns @Just m@ to emit @m@ as the case's metric, or @Nothing@ to
--- skip (rare; usually return @Just@). After each test case completes the
--- finalizer checks whether the body wrote a metric; if not, it appends an
--- empty @{}@ line so the client and server metric files stay 1:1.
+-- | Conformance runner that guarantees a client metric line per test case,
+-- even when the generator rejects. The body returns @Just m@ to emit @m@ as
+-- the case's metric, or @Nothing@ to skip.
 runConformancePropertyPaired ::
   forall a m.
   (Show a, ToJSON m) =>
@@ -192,7 +141,7 @@ runConformancePropertyPaired ::
   (a -> Maybe m) ->
   IO ()
 runConformancePropertyPaired gen toMetric =
-  run `finally` closeSelectedSession
+  run `finally` pure ()
   where
     run = do
       n <- getTestCases
@@ -205,7 +154,7 @@ runConformancePropertyPaired gen toMetric =
             unless wrote writeEmptyMetrics
             writeIORef wroteRef False
       report <-
-        runSelected
+        Native.runProperty
           (defaultSettings {testCases = n, perCaseFinalizer = finalizer})
           gen
           body
@@ -228,35 +177,27 @@ runConformancePropertyPaired gen toMetric =
 -- to find failures (the Python harness inspects the interesting test-case
 -- count, not this binary's exit status).
 --
--- Under the native backend the harness has no server to report
--- @interesting_test_cases@, so it counts distinct failure origins itself —
--- wrapping @body@ to record 'originOf' for each failure — and writes
+-- Counts distinct failure origins via 'originOf' and writes
 -- @{\"interesting_test_cases\": N}@ to @CONFORMANCE_SERVER_RUN_METRICS_FILE@.
 -- This is exactly the dedup key the runner reports to libhegel, so the count
--- matches the engine's. Under the server backend the @hegel@ process
--- writes that file, so we leave it alone.
+-- matches the engine's.
 --
--- Exits zero on 'Passed', 'Failed', or 'Rejected'; only 'Errored' or
+-- Exits zero on 'Ok', 'Counterexample', or 'GaveUp'; only 'Errored' or
 -- 'UnhealthyInput' (binary-level breakage) propagate as a non-zero exit.
 runConformancePropertyExpectFailures :: (Show a) => Gen a -> (a -> IO ()) -> IO ()
-runConformancePropertyExpectFailures gen body = run `finally` closeSelectedSession
+runConformancePropertyExpectFailures gen body = run `finally` pure ()
   where
     run = do
       n <- getTestCases
       let settings = defaultSettings {testCases = n}
-      report <-
-        getBackend >>= \case
-          NativeBackend -> do
-            seen <- newIORef Set.empty
-            let body' x =
-                  body x `catch` \(e :: SomeException) -> do
-                    modifyIORef' seen (Set.insert (originOf e))
-                    throwIO e
-            r <- Native.runProperty settings gen body'
-            distinct <- Set.size <$> readIORef seen
-            writeNativeRunMetrics distinct
-            pure r
-          ServerBackend -> Server.runProperty settings gen body
+      seen <- newIORef Set.empty
+      let body' x =
+            body x `catch` \(e :: SomeException) -> do
+              modifyIORef' seen (Set.insert (originOf e))
+              throwIO e
+      report <- Native.runProperty settings gen body'
+      distinct <- Set.size <$> readIORef seen
+      writeNativeRunMetrics distinct
       case report.result of
         Ok -> exitSuccess
         Counterexample {} -> exitSuccess
