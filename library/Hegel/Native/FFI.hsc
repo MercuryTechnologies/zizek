@@ -11,7 +11,7 @@
 -- because it blocks).
 --
 -- Therefore, __all__ libhegel call sequences must run under
--- 'Control.Concurrent.runInBoundThread' (or 'Control.Concurrent.forkOS') so
+-- 'Control.Concurrent.Async.withAsyncBound' (or 'Control.Concurrent.forkOS') so
 -- that 'throwOnError' reads the error string on the same OS thread that set it.
 module Hegel.Native.FFI
   ( -- * Opaque handle phantoms

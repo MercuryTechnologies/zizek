@@ -6,7 +6,7 @@ module Hegel.Native.Runner
   )
 where
 
-import Control.Concurrent (runInBoundThread)
+import Control.Concurrent.Async (wait, withAsyncBound)
 import Control.Exception (SomeException, fromException, toException)
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString (ByteString)
@@ -58,7 +58,23 @@ runPropertyWith render settings gen body =
 -- abort; otherwise the tally decides between 'GaveUp' and 'Ok'.
 check :: Settings -> Property () -> IO Report
 check settings prop =
-  runInBoundThread go
+  -- 'withAsyncBound' rather than 'runInBoundThread': both fork a bound OS
+  -- thread (required because 'hegel_last_error_message' is thread-local and
+  -- 'throwOnError' must read it on the same OS thread that made the failing
+  -- call), but 'withAsyncBound' cancels the worker when the caller is
+  -- interrupted. An async exception to the 'check' caller is forwarded into
+  -- 'go', which unwinds the loop and runs 'hegel_run_free' promptly (it
+  -- drains any in-flight case, sets the abort flag, and joins the worker --
+  -- see refs/hegel-rust.md). 'runInBoundThread' has no such cancellation
+  -- path and would orphan the worker.
+  --
+  -- Note: 'safe' blocking FFI calls (notably 'hegel_next_test_case') cannot
+  -- be interrupted by async exceptions; a cancellation signal is deferred
+  -- until that call returns. Teardown latency is therefore bounded by one
+  -- engine step. A cancellation hook in libhegel (e.g.
+  -- 'hegel_run_request_abort') is the only way to remove this bound; tracked
+  -- as a follow-up.
+  withAsyncBound go wait
     `catches` [ Handler \(e :: HegelStartupError) -> pure (aborted (Errored (toException e))),
                 -- A libhegel call outside the per-case try (e.g. markComplete)
                 -- can fail with a HegelError; surface it as Errored rather than

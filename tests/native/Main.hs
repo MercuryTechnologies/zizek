@@ -16,18 +16,24 @@ import CBOR.Class (ToCBOR (toCBOR))
 import CBOR.Decode qualified as CD
 import CBOR.Encode qualified as CE
 import CBOR.Value (Value (..))
-import Control.Concurrent (runInBoundThread)
-import Control.Exception (throwIO, try)
+import Control.Concurrent (runInBoundThread, threadDelay)
+import Control.Concurrent.Async (cancel, withAsync)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
+import Control.Exception (SomeException, finally, throwIO, try)
 import Data.ByteString (ByteString)
+import Data.Either (isLeft)
 import Data.Function ((&))
+import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Word (Word64)
 import Foreign (Ptr, nullPtr)
 import Foreign.C.String (withCString)
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Internal (Gen, draw)
 import Hegel.Native.FFI
+import Hegel.Native.Runner qualified as Runner
 import Hegel.Native.TestCase (mkTestCase)
 import Hegel.Schema qualified as Schema
+import Hegel.Settings (defaultSettings)
 import Hegel.TestCase (Status (..), TestStopped (..))
 import Hegel.TestCase qualified as TC
 import Test.Hspec
@@ -42,6 +48,7 @@ spec = do
   rawCApiSpec
   genMachinerySpec
   completionSpec
+  asyncTeardownSpec
 
 -- | Drive runs straight through the C API with CBOR schema bytes and raw
 -- @hegel_mark_complete@ status codes.
@@ -236,3 +243,33 @@ tryDraw tc schema = do
     Right bs -> pure (Just bs)
     Left HegelError {code = HEGEL_E_STOP_TEST} -> pure Nothing
     Left err -> throwIO err
+
+-- | Async teardown tests. These go through 'Runner.runProperty' rather than
+-- the raw FFI because the fix ('withAsyncBound' in 'Hegel.Native.Runner.check')
+-- lives there.
+asyncTeardownSpec :: Spec
+asyncTeardownSpec = describe "async teardown" $ do
+  it "cancels the bound worker when the check caller is interrupted" $ do
+    started <- newEmptyMVar
+    cleanedUp <- newIORef False
+    withAsync
+      ( Runner.runProperty defaultSettings (Gen.bool & Gen.build) \_ ->
+          putMVar started () >> threadDelay 5_000_000 `finally` writeIORef cleanedUp True
+      )
+      \a -> takeMVar started >> cancel a
+    readIORef cleanedUp `shouldReturn` True
+
+  -- Bailing out of the test loop with an active, un-completed test case must
+  -- not hang; if 'hegel_run_free' blocked on the in-flight case the test
+  -- would time out.
+  it "drains an active, un-completed test case on early exit" $
+    runInBoundThread $
+      withSettings \s -> do
+        hegel_settings_test_cases s 50
+        hegel_settings_verbosity s HEGEL_VERBOSITY_QUIET
+        withCString "" (hegel_settings_database s)
+        r <- try @SomeException @() $ withRun s \run -> do
+          tc <- hegel_next_test_case run
+          _ <- generate tc (CE.encode (toCBOR Schema.bool))
+          throwIO (userError "bail mid-case")
+        r `shouldSatisfy` isLeft
