@@ -176,10 +176,10 @@ completionSpec = describe "completion semantics" $
   -- A run-owned test case may be completed exactly once. A second
   -- 'TC.markComplete' is rejected by libhegel with a non-control-flow error
   -- code, which the native vtable raises as a 'HegelError'. In
-  -- 'Hegel.Native.Runner' such an error escapes the per-case @catches@ (which
-  -- wraps only generation and the body) and surfaces as an
-  -- 'Hegel.Outcome.Errored' outcome rather than crashing the run; this pins the
-  -- premise that 'markComplete' genuinely throws.
+  -- 'Hegel.Native.Runner' such an error escapes the per-case @catches@ (the
+  -- handlers only classify; 'markComplete' runs outside them) and surfaces as
+  -- an 'Hegel.Report.Errored' abort rather than crashing the run; this pins
+  -- the premise that 'markComplete' genuinely throws.
   it "raises HegelError when a run-owned case is completed twice" $
     runInBoundThread $ do
       withSettings $ \s -> do

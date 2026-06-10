@@ -8,7 +8,7 @@ where
 
 import Control.Exception (toException)
 import Hegel.Gen.Internal (Gen)
-import Hegel.Outcome (Outcome (..))
+import Hegel.Report (Abort (..), Report, aborted)
 import Hegel.Server.Client (runTest)
 import Hegel.Server.Protocol.Error (ConnectionClosedError (..), ProtocolError (..))
 import Hegel.Server.Session (Session, invalidateSession)
@@ -23,20 +23,20 @@ runProperty ::
   Settings ->
   Gen a ->
   (a -> IO ()) ->
-  IO (Outcome a)
+  IO (Report a)
 runProperty = runPropertyOn globalSession
 
 -- | Run a property against an explicit 'Session'.
 --
 -- Connection or protocol failures invalidate the session and surface as
--- 'Errored' outcomes.
+-- 'Errored' aborts.
 runPropertyOn ::
   forall a.
   Session ->
   Settings ->
   Gen a ->
   (a -> IO ()) ->
-  IO (Outcome a)
+  IO (Report a)
 runPropertyOn ses settings gen body =
   run
     `catches` [ Handler \(e :: ConnectionClosedError) -> recover (toException e),
@@ -53,4 +53,4 @@ runPropertyOn ses settings gen body =
       runTest live.client settings gen body
     recover se = do
       invalidateSession ses
-      pure (Errored se)
+      pure (aborted (Errored se))

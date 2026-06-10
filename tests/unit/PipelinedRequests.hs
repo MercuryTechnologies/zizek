@@ -3,7 +3,7 @@ module PipelinedRequests (spec) where
 import Control.Concurrent.Async (concurrently)
 import Data.Function ((&))
 import Hegel.Gen qualified as Gen
-import Hegel.Outcome (Outcome (..))
+import Hegel.Report (Report (..), Result (..))
 import Hegel.Server.Runner (runPropertyOn)
 import Hegel.Server.Session (defaultSessionConfig, withSession)
 import Hegel.Settings (defaultSettings)
@@ -19,5 +19,5 @@ spec = do
       let go = runPropertyOn ses defaultSettings (Gen.int & Gen.min 0 & Gen.max 99 & Gen.build) $
             \_ -> pure ()
       (r1, r2) <- concurrently go go
-      r1 `shouldSatisfy` \case Passed _ -> True; _ -> False
-      r2 `shouldSatisfy` \case Passed _ -> True; _ -> False
+      r1.result `shouldSatisfy` \case Ok -> True; _ -> False
+      r2.result `shouldSatisfy` \case Ok -> True; _ -> False

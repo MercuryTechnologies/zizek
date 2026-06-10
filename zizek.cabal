@@ -100,9 +100,9 @@ library
     Hegel.Native.Runner
     Hegel.Native.Settings
     Hegel.Native.TestCase
-    Hegel.Outcome
     Hegel.Phase
     Hegel.Protocol.Cbor
+    Hegel.Report
     Hegel.Schema
     Hegel.Server.Client
     Hegel.Server.Protocol.Connection

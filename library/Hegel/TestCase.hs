@@ -73,7 +73,7 @@ instance Exception TestStopped
 
 -- | Thrown when a generator uses a per-case primitive the active backend does
 -- not implement (e.g. pools on a backend whose protocol lacks them). The
--- server runner maps this to an 'Hegel.Outcome.Errored' outcome.
+-- server runner maps this to an 'Hegel.Report.Errored' abort.
 newtype UnsupportedCapability = UnsupportedCapability Text
   deriving stock (Show)
 

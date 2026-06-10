@@ -16,7 +16,7 @@ import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
 import Hegel.Native.FFI
 import Hegel.Native.Settings (applySettings)
 import Hegel.Native.TestCase (mkReplayTestCase, mkTestCase)
-import Hegel.Outcome (Outcome (..), Stats (..))
+import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
 import Hegel.Settings (Settings (..))
 import Hegel.TestCase (Status (..), TestCase, TestStopped (..), markComplete)
 import UnliftIO.Exception (Handler (..), catches, finally, tryAny)
@@ -34,14 +34,14 @@ runProperty ::
   Settings ->
   Gen a ->
   (a -> IO ()) ->
-  IO (Outcome a)
+  IO (Report a)
 runProperty settings gen body =
   runInBoundThread go
-    `catches` [ Handler \(e :: HegelStartupError) -> pure (Errored (toException e)),
+    `catches` [ Handler \(e :: HegelStartupError) -> pure (aborted (Errored (toException e))),
                 -- A libhegel call outside the per-case try (e.g. markComplete)
                 -- can fail with a HegelError; surface it as Errored rather than
                 -- letting it escape the runner.
-                Handler \(e :: HegelError) -> pure (Errored (toException e))
+                Handler \(e :: HegelError) -> pure (aborted (Errored (toException e)))
               ]
   where
     go = withSettings \s -> do
@@ -53,7 +53,7 @@ runProperty settings gen body =
         -- and copy it out before returning from the lambda.
         f <- readPrimaryFailure run
         pure (nv, ni, f)
-      deriveOutcome s gen nValid nInvalid mFailure
+      deriveReport s gen nValid nInvalid mFailure
 
 -- * Failures
 
@@ -69,7 +69,7 @@ data Failure = Failure
   }
 
 -- | Read and copy the first failure from the engine's run result, if any.
--- 'Outcome' carries a single counterexample, so any additional distinct
+-- 'Report' carries a single counterexample, so any additional distinct
 -- failures are not surfaced. Must be called before 'hegel_run_free' frees the
 -- borrowed result.
 readPrimaryFailure :: Ptr HegelRun -> IO (Maybe Failure)
@@ -88,26 +88,29 @@ readPrimaryFailure run = do
           blob <- failureReproductionBlob f
           pure (Just Failure {origin = org, diagnostic = diag, reproductionBlob = blob})
 
--- * Outcome
+-- * Report
 
--- | Derive the 'Outcome' from the engine's run result. A failure carrying a
+-- | Derive the 'Report' from the engine's run result. A failure carrying a
 -- reproduction blob is replayed to rebuild the typed counterexample; a failure
 -- without one is a health-check abort. With no failure, the per-case tally
--- decides between 'Rejected' (nothing valid) and 'Passed'.
-deriveOutcome ::
+-- decides between 'GaveUp' (nothing valid) and 'Ok'. The tallies are reported
+-- in every case.
+deriveReport ::
   Ptr HegelSettings ->
   Gen a ->
   Int ->
   Int ->
   Maybe Failure ->
-  IO (Outcome a)
-deriveOutcome s gen nValid nInvalid = \case
-  Just f
-    | Just blob <- f.reproductionBlob -> reconstruct s gen blob (failureMessage f)
-    | otherwise -> pure (UnhealthyInput (failureMessage f))
-  Nothing
-    | nValid == 0 -> pure (Rejected "no valid examples found")
-    | otherwise -> pure (Passed Stats {valid = nValid, invalid = nInvalid})
+  IO (Report a)
+deriveReport s gen nValid nInvalid mFailure = do
+  result <- case mFailure of
+    Just f
+      | Just blob <- f.reproductionBlob -> reconstruct s gen blob (failureMessage f)
+      | otherwise -> pure (Aborted (UnhealthyInput (failureMessage f)))
+    Nothing
+      | nValid == 0 -> pure (GaveUp "no valid examples found")
+      | otherwise -> pure Ok
+  pure Report {result, stats = Stats {valid = nValid, invalid = nInvalid}}
 
 -- | Prefer the engine's diagnostic; fall back to the (stable) origin string.
 failureMessage :: Failure -> Text
@@ -121,14 +124,14 @@ failureMessage f
 -- gives it a no-op 'markComplete' (calling @hegel_mark_complete@ on it would
 -- abort the process). If the blob no longer matches the generators the draw
 -- throws, which we surface as 'Errored' since there is no value to report.
-reconstruct :: Ptr HegelSettings -> Gen a -> ByteString -> Text -> IO (Outcome a)
+reconstruct :: Ptr HegelSettings -> Gen a -> ByteString -> Text -> IO (Result a)
 reconstruct s gen blob msg =
   withTestCaseFromBlob s blob \tcPtr -> do
     let tc = mkReplayTestCase tcPtr
     eVal <- tryAny (draw tc gen)
     pure $ case eVal of
-      Right val -> Failed {counterexample = val, message = msg, notes = []}
-      Left e -> Errored e
+      Right val -> Counterexample {value = val, message = msg, notes = [], loc = Nothing}
+      Left e -> Aborted (Errored e)
 
 -- * Per-case loop
 

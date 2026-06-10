@@ -3,8 +3,8 @@ module BasicProperties (spec) where
 import Data.Function ((&))
 import Hegel (Gen)
 import Hegel.Gen qualified as Gen
-import Hegel.Outcome (Outcome (..))
 import Hegel.Phase (Phase (..))
+import Hegel.Report (Report (..), Result (..))
 import Hegel.Settings (Settings (..), defaultSettings)
 import Test.Hspec
 import TestRunner (Runner, runWith, runWith_)
@@ -19,10 +19,10 @@ spec runner = do
       n `shouldSatisfy` (\x -> x >= 0 && x <= 100)
 
   it "shrinks to 42 when forbidding 42" $ do
-    outcome <- runWith runner defaultSettings (intR (0, 100)) $ \n ->
+    report <- runWith runner defaultSettings (intR (0, 100)) $ \n ->
       n `shouldNotBe` (42 :: Int)
-    outcome `shouldSatisfy` \case
-      Failed {} -> True
+    report.result `shouldSatisfy` \case
+      Counterexample {} -> True
       _ -> False
 
   it "honours phases = [Generate]" $ do

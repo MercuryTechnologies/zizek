@@ -24,7 +24,7 @@ import Data.Set qualified as Set
 import Hegel (Gen)
 import Hegel.Assertion (originOf)
 import Hegel.Native.Runner qualified as Native
-import Hegel.Outcome (Outcome (..))
+import Hegel.Report (Abort (..), Report (..), Result (..))
 import Hegel.Server.Runner qualified as Server
 import Hegel.Server.Session (closeSession, globalSession)
 import Hegel.Settings (Settings (..), defaultSettings)
@@ -53,7 +53,7 @@ runSelected ::
   Settings ->
   Gen a ->
   (a -> IO ()) ->
-  IO (Outcome a)
+  IO (Report a)
 runSelected settings gen body =
   getBackend >>= \case
     NativeBackend -> Native.runProperty settings gen body
@@ -159,19 +159,19 @@ runConformanceProperty gen body = run `finally` closeSelectedSession
   where
     run = do
       n <- getTestCases
-      outcome <- runSelected (defaultSettings {testCases = n}) gen body
-      case outcome of
-        Passed _ -> exitSuccess
-        Rejected msg -> do
+      report <- runSelected (defaultSettings {testCases = n}) gen body
+      case report.result of
+        Ok -> exitSuccess
+        GaveUp msg -> do
           putStrLn ("conformance property rejected: " <> show msg)
           exitWith (ExitFailure 1)
-        Failed {} -> do
+        Counterexample {} -> do
           putStrLn "conformance property failed"
           exitWith (ExitFailure 1)
-        Errored e -> do
+        Aborted (Errored e) -> do
           putStrLn ("conformance property errored: " <> show e)
           exitWith (ExitFailure 1)
-        UnhealthyInput msg -> do
+        Aborted (UnhealthyInput msg) -> do
           putStrLn ("conformance health check failed: " <> show msg)
           exitWith (ExitFailure 1)
 
@@ -203,23 +203,23 @@ runConformancePropertyPaired gen toMetric =
             wrote <- readIORef wroteRef
             unless wrote writeEmptyMetrics
             writeIORef wroteRef False
-      outcome <-
+      report <-
         runSelected
           (defaultSettings {testCases = n, perCaseFinalizer = finalizer})
           gen
           body
-      case outcome of
-        Passed _ -> exitSuccess
-        Rejected msg -> do
+      case report.result of
+        Ok -> exitSuccess
+        GaveUp msg -> do
           putStrLn ("conformance property rejected: " <> show msg)
           exitWith (ExitFailure 1)
-        Failed {} -> do
+        Counterexample {} -> do
           putStrLn "conformance property failed"
           exitWith (ExitFailure 1)
-        Errored e -> do
+        Aborted (Errored e) -> do
           putStrLn ("conformance property errored: " <> show e)
           exitWith (ExitFailure 1)
-        UnhealthyInput msg -> do
+        Aborted (UnhealthyInput msg) -> do
           putStrLn ("conformance health check failed: " <> show msg)
           exitWith (ExitFailure 1)
 
@@ -243,7 +243,7 @@ runConformancePropertyExpectFailures gen body = run `finally` closeSelectedSessi
     run = do
       n <- getTestCases
       let settings = defaultSettings {testCases = n}
-      outcome <-
+      report <-
         getBackend >>= \case
           NativeBackend -> do
             seen <- newIORef Set.empty
@@ -251,19 +251,19 @@ runConformancePropertyExpectFailures gen body = run `finally` closeSelectedSessi
                   body x `catch` \(e :: SomeException) -> do
                     modifyIORef' seen (Set.insert (originOf e))
                     throwIO e
-            o <- Native.runProperty settings gen body'
+            r <- Native.runProperty settings gen body'
             distinct <- Set.size <$> readIORef seen
             writeNativeRunMetrics distinct
-            pure o
+            pure r
           ServerBackend -> Server.runProperty settings gen body
-      case outcome of
-        Passed _ -> exitSuccess
-        Failed {} -> exitSuccess
-        Rejected _ -> exitSuccess
-        Errored e -> do
+      case report.result of
+        Ok -> exitSuccess
+        Counterexample {} -> exitSuccess
+        GaveUp _ -> exitSuccess
+        Aborted (Errored e) -> do
           putStrLn ("conformance property errored: " <> show e)
           exitWith (ExitFailure 1)
-        UnhealthyInput msg -> do
+        Aborted (UnhealthyInput msg) -> do
           putStrLn ("conformance health check failed: " <> show msg)
           exitWith (ExitFailure 1)
 

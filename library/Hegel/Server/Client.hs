@@ -23,7 +23,6 @@ import Data.Word (Word32, Word64)
 import Hegel.Assertion (originOf)
 import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
 import Hegel.HealthCheck qualified as HealthCheck
-import Hegel.Outcome (Outcome (..), Stats (..))
 import Hegel.Phase qualified as Phase
 import Hegel.Protocol.Cbor
   ( asBool,
@@ -34,6 +33,7 @@ import Hegel.Protocol.Cbor
     lookupKey,
     (.=),
   )
+import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..))
 import Hegel.Server.Protocol.Connection (Connection, connectStream, controlStream, newStream)
 import Hegel.Server.Protocol.Error (ProtocolError (..))
 import Hegel.Server.Protocol.Stream
@@ -88,7 +88,7 @@ runTest ::
   Settings ->
   Gen a ->
   (a -> IO ()) ->
-  IO (Outcome a)
+  IO (Report a)
 runTest client settings gen body = do
   (testSid, testQ) <- newStream client.connection
   testStream <- mkStream client.connection testSid testQ
@@ -123,21 +123,23 @@ runTest client settings gen body = do
             val <- draw tc gen
             writeIORef drawnRef (Just val)
             body val
-      replayFinalCases testStream client.connection (fromIntegral nInteresting) (fromIntegral nInvalid) capturingAction (readIORef drawnRef) settings.perCaseFinalizer
+      replayFinalCases testStream client.connection (fromIntegral nInteresting) capturingAction (readIORef drawnRef) settings.perCaseFinalizer
 
 interpretResults ::
-  Value -> Word64 -> Word64 -> IO (Outcome a) -> IO (Outcome a)
-interpretResults results nInteresting nInvalid replay
-  | Just msg <- lookupKey "health_check_failure" results >>= asText = pure (UnhealthyInput msg)
-  | Just msg <- lookupKey "error" results >>= asText = pure (Errored (toException (userError (T.unpack msg))))
-  | nInteresting > 0 = replay
-  | nValid == 0 = pure (Rejected "no valid examples found")
-  -- Report the actual count of valid cases the engine ran, not the requested
-  -- target, so 'Stats.valid' means the same thing it does on the native
-  -- backend (which tallies valid cases itself in 'Hegel.Native.Runner').
-  | otherwise = pure (Passed Stats {valid = fromIntegral nValid, invalid = fromIntegral nInvalid})
+  Value -> Word64 -> Word64 -> IO (Result a) -> IO (Report a)
+interpretResults results nInteresting nInvalid replay = report <$> verdict
   where
+    verdict
+      | Just msg <- lookupKey "health_check_failure" results >>= asText = pure (Aborted (UnhealthyInput msg))
+      | Just msg <- lookupKey "error" results >>= asText = pure (Aborted (Errored (toException (userError (T.unpack msg)))))
+      | nInteresting > 0 = replay
+      | nValid == 0 = pure (GaveUp "no valid examples found")
+      | otherwise = pure Ok
+    -- Report the actual count of valid cases the engine ran, not the requested
+    -- target, so 'Stats.valid' means the same thing it does on the native
+    -- backend (which tallies valid cases itself in 'Hegel.Native.Runner').
     nValid = maybe 0 id (lookupKey "valid_test_cases" results >>= asWord64)
+    report r = Report {result = r, stats = Stats {valid = fromIntegral nValid, invalid = fromIntegral nInvalid}}
 
 -- | Run one server-announced test case: execute the per-case action against a
 -- live 'TestCase', classify how it finished, and report the resulting 'Status'
@@ -211,12 +213,16 @@ awaitEvent s = do
     Just other -> throwIO (UnknownEvent other)
   pure (evId, ev)
 
-replayFinalCases :: Stream -> Connection -> Int -> Int -> (TestCase -> IO ()) -> IO (Maybe a) -> IO () -> IO (Outcome a)
-replayFinalCases testStream conn n nInvalid action readDrawn finalizer = go n Nothing
+replayFinalCases :: Stream -> Connection -> Int -> (TestCase -> IO ()) -> IO (Maybe a) -> IO () -> IO (Result a)
+replayFinalCases testStream conn n action readDrawn finalizer = go n Nothing
   where
     go 0 mFail = pure $ case mFail of
-      Just (v, msg) -> Failed {counterexample = v, message = msg, notes = []}
-      Nothing -> Passed Stats {valid = 0, invalid = nInvalid}
+      Just (v, msg) -> Counterexample {value = v, message = msg, notes = [], loc = Nothing}
+      -- The engine reported at least one failure, but no final-replay case
+      -- reproduced it with a drawn value in hand (the draw diverged, or the
+      -- failure was flaky on replay). Surface the mismatch rather than a
+      -- silent pass.
+      Nothing -> Aborted (Errored (toException (userError "failure reported but no counterexample was reproduced by the final replay")))
     go k mFail = do
       (evId, ev) <- awaitEvent testStream
       case ev of
