@@ -64,9 +64,9 @@ data PropertyEnv = PropertyEnv
 -- | A property: test logic interleaved with generator draws against a live
 -- test case.
 --
--- Unlike the simple @'Hegel.runProperty' gen body@ API — where all draws
--- happen up front — a 'PropertyT' may draw ('forAll'), perform effects, and
--- assert in any order. The engine shrinks across the whole interleaving.
+-- Unlike @'Hegel.Property.forEach' gen body@ — where all draws happen up
+-- front — a 'PropertyT' may draw ('forAll'), perform effects, and assert in
+-- any order. The engine shrinks across the whole interleaving.
 --
 -- Failure is exception-based ('Hegel.Assertion.AssertionFailure' from
 -- 'Hegel.Assertion.assert'\/'Hegel.Assertion.failure', or any other

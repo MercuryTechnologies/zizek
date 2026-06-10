@@ -7,17 +7,14 @@
 --
 -- prop_addCommutes :: IO ()
 -- prop_addCommutes =
---   'runProperty_' 'defaultSettings'
---     (Gen.int & Gen.build)
---     (\\x -> 'assert' (x + 0 == x) "identity")
+--   'prop' (Gen.int & Gen.build) (\\x -> 'assert' (x + 0 == x) "identity")
 -- @
 module Hegel
   ( -- * Running properties
     Gen,
     prop,
-    runProperty,
-    runPropertyWith,
-    runProperty_,
+    forEach,
+    forEachWith,
 
     -- * Settings and reports
     module Hegel.Settings,
@@ -34,22 +31,12 @@ import Hegel.Assertion
 import Hegel.Database
 import Hegel.Gen.Internal (Gen)
 import Hegel.Phase
+import Hegel.Property (check_, forEach, forEachWith)
 import Hegel.Report
-import Hegel.Runner (runProperty, runPropertyWith)
 import Hegel.Settings
 
--- | Run a property and throw on anything other than success
--- (via 'throwOnFailure').
-runProperty_ ::
-  (Show a) =>
-  Settings ->
-  Gen a ->
-  (a -> IO ()) ->
-  IO ()
-runProperty_ settings gen body = throwOnFailure =<< runProperty settings gen body
-
--- | 'runProperty_' with 'defaultSettings': the shortest spelling for use
--- inside a test framework's @it@\/@testCase@, where the framework owns the
+-- | 'check_' with 'defaultSettings' and 'forEach': the shortest spelling for
+-- use inside a test framework's @it@\/@testCase@, where the framework owns the
 -- label and reports the thrown failure.
 prop :: (Show a) => Gen a -> (a -> IO ()) -> IO ()
-prop = runProperty_ defaultSettings
+prop gen body = check_ defaultSettings (forEach gen body)

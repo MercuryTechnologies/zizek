@@ -29,6 +29,7 @@ import Foreign.C.String (withCString)
 import Hegel.FFI
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Internal (draw)
+import Hegel.Property (forEach)
 import Hegel.Runner qualified as Runner
 import Hegel.Schema qualified as Schema
 import Hegel.Settings (defaultSettings)
@@ -243,17 +244,20 @@ tryDraw tc schema = do
     Left HegelError {code = HEGEL_E_STOP_TEST} -> pure Nothing
     Left err -> throwIO err
 
--- | Async teardown tests. These go through 'Runner.runProperty' rather than
--- the raw FFI because the fix ('withAsyncBound' in 'Hegel.Runner.check')
--- lives there.
+-- | Async teardown tests. These go through 'Runner.check' rather than the
+-- raw FFI because the fix ('withAsyncBound' in 'Hegel.Runner.check') lives
+-- there.
 asyncTeardownSpec :: Spec
 asyncTeardownSpec = describe "async teardown" $ do
   it "cancels the bound worker when the check caller is interrupted" $ do
     started <- newEmptyMVar
     cleanedUp <- newIORef False
     withAsync
-      ( Runner.runProperty defaultSettings (Gen.bool & Gen.build) \_ ->
-          putMVar started () >> threadDelay 5_000_000 `finally` writeIORef cleanedUp True
+      ( Runner.check
+          defaultSettings
+          ( forEach (Gen.bool & Gen.build) \_ ->
+              putMVar started () >> threadDelay 5_000_000 `finally` writeIORef cleanedUp True
+          )
       )
       \a -> takeMVar started >> cancel a
     readIORef cleanedUp `shouldReturn` True

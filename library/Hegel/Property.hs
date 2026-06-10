@@ -1,8 +1,8 @@
 -- | A property monad: test logic interleaved with generator draws.
 --
--- Where @'Hegel.runProperty' gen body@ separates generation from the test
--- body, a 'Property' may draw ('forAll'), perform 'IO', and assert in any
--- order — the engine shrinks across the whole interleaving:
+-- Where @'forEach' gen body@ separates generation from the test body, a
+-- 'Property' may draw ('forAll'), perform 'IO', and assert in any order —
+-- the engine shrinks across the whole interleaving:
 --
 -- @
 -- import Data.Function ((&))
@@ -38,6 +38,8 @@ module Hegel.Property
     check_,
 
     -- * Draws
+    forEach,
+    forEachWith,
     forAll,
     forAllWith,
     forAllSilent,
@@ -59,7 +61,10 @@ module Hegel.Property
   )
 where
 
+import Control.Monad.IO.Class (liftIO)
+import Data.Text (Text)
 import Hegel.Assertion (assert, failure, (/==), (===))
+import Hegel.Gen.Internal (Gen)
 import Hegel.Property.Internal
   ( Property,
     PropertyT,
@@ -81,3 +86,12 @@ import Hegel.Settings (Settings)
 -- (via 'throwOnFailure').
 check_ :: Settings -> Property () -> IO ()
 check_ settings prop = throwOnFailure =<< check settings prop
+
+-- | Draw a value and run a test body against it, rendering drawn values via
+-- their 'Show' instance.
+forEach :: (Show a) => Gen a -> (a -> IO ()) -> Property ()
+forEach gen body = forAll gen >>= liftIO . body
+
+-- | 'forEach' with an explicit renderer, for values without a useful 'Show'.
+forEachWith :: (a -> Text) -> Gen a -> (a -> IO ()) -> Property ()
+forEachWith render gen body = forAllWith render gen >>= liftIO . body

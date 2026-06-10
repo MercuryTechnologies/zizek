@@ -274,7 +274,7 @@ annToAnsi = \case
 
 -- * Exceptions
 
--- | Counterexample wrapped for throwing from 'Hegel.runProperty_' and
+-- | Counterexample wrapped for throwing from 'Hegel.prop' and
 -- 'Hegel.Property.check_'. Carries the failure message, its source location,
 -- the journal describing the failing case, and the diff (if any).
 data PropertyFailed = PropertyFailed

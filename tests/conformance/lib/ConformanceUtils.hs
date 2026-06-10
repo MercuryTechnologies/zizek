@@ -22,6 +22,7 @@ import Data.Char (isUpper, toLower)
 import Data.Set qualified as Set
 import Hegel (Gen)
 import Hegel.Assertion (originOf)
+import Hegel.Property (forEach)
 import Hegel.Report (Abort (..), Report (..), Result (..))
 import Hegel.Runner qualified as Native
 import Hegel.Settings (Settings (..), defaultSettings)
@@ -115,7 +116,7 @@ runConformanceProperty gen body = run `finally` pure ()
   where
     run = do
       n <- getTestCases
-      report <- Native.runProperty (defaultSettings {testCases = n}) gen body
+      report <- Native.check (defaultSettings {testCases = n}) (forEach gen body)
       case report.result of
         Ok -> exitSuccess
         GaveUp msg -> do
@@ -154,10 +155,9 @@ runConformancePropertyPaired gen toMetric =
             unless wrote writeEmptyMetrics
             writeIORef wroteRef False
       report <-
-        Native.runProperty
+        Native.check
           (defaultSettings {testCases = n, perCaseFinalizer = finalizer})
-          gen
-          body
+          (forEach gen body)
       case report.result of
         Ok -> exitSuccess
         GaveUp msg -> do
@@ -195,7 +195,7 @@ runConformancePropertyExpectFailures gen body = run `finally` pure ()
             body x `catch` \(e :: SomeException) -> do
               modifyIORef' seen (Set.insert (originOf e))
               throwIO e
-      report <- Native.runProperty settings gen body'
+      report <- Native.check settings (forEach gen body')
       distinct <- Set.size <$> readIORef seen
       writeNativeRunMetrics distinct
       case report.result of

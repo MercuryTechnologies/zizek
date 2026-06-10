@@ -1,14 +1,11 @@
 -- | Native @libhegel@ property runner.
 module Hegel.Runner
-  ( runProperty,
-    runPropertyWith,
-    check,
+  ( check,
   )
 where
 
 import Control.Concurrent.Async (wait, withAsyncBound)
 import Control.Exception (SomeException, fromException, toException)
-import Control.Monad.IO.Class (liftIO)
 import Data.Bits ((.|.))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
@@ -25,38 +22,13 @@ import Foreign.C.Types (CBool (..))
 import Hegel.Assertion (originOf)
 import Hegel.Database (Database (..))
 import Hegel.FFI
-import Hegel.Gen.Internal (Gen)
 import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Phase (Phase (..))
-import Hegel.Property.Internal (Property, failureDetails, forAllWith, observeProperty, propertyAction)
-import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted, renderValue)
+import Hegel.Property.Internal (Property, failureDetails, observeProperty, propertyAction)
+import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
 import Hegel.Settings (Settings (..))
 import Hegel.TestCase (AssumeRejected (..), Status (..), TestCase, TestStopped (..), markComplete, mkTestCase)
 import UnliftIO.Exception (Handler (..), catches, finally)
-
--- | Run a generator-plus-body property: 'runPropertyWith' rendering drawn
--- values via 'renderValue'.
-runProperty ::
-  forall a.
-  (Show a) =>
-  Settings ->
-  Gen a ->
-  (a -> IO ()) ->
-  IO Report
-runProperty = runPropertyWith renderValue
-
--- | 'runProperty' with an explicit renderer, for values without a 'Show'
--- instance (or with an unhelpful one): sugar for 'check' over
--- @'forAllWith' render gen '>>=' 'liftIO' . body@.
-runPropertyWith ::
-  forall a.
-  (a -> Text) ->
-  Settings ->
-  Gen a ->
-  (a -> IO ()) ->
-  IO Report
-runPropertyWith render settings gen body =
-  check settings (forAllWith render gen >>= liftIO . body)
 
 -- | Run a 'Property' using the native @libhegel@ backend.
 --
@@ -262,7 +234,7 @@ driveLoop settings action run = loop 0 0
 --
 -- The handlers only classify; 'markComplete' runs once, outside the 'catches'
 -- scope, so an engine error raised while reporting (a 'HegelError') propagates
--- to 'runProperty''s outer handler instead of being misread as a test failure.
+-- to 'check''s outer handler instead of being misread as a test failure.
 runCase ::
   Settings ->
   (TestCase -> IO ()) ->
