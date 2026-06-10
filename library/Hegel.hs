@@ -14,6 +14,7 @@
 module Hegel
   ( -- * Running properties
     Gen,
+    prop,
     runProperty,
     runPropertyWith,
     runProperty_,
@@ -44,3 +45,9 @@ runProperty_ ::
   (a -> IO ()) ->
   IO ()
 runProperty_ settings gen body = throwOnFailure =<< runProperty settings gen body
+
+-- | 'runProperty_' with 'defaultSettings': the shortest spelling for use
+-- inside a test framework's @it@\/@testCase@, where the framework owns the
+-- label and reports the thrown failure.
+prop :: (Show a) => Gen a -> (a -> IO ()) -> IO ()
+prop = runProperty_ defaultSettings

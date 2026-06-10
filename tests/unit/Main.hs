@@ -2,6 +2,7 @@ module Main (main) where
 
 import BasicProperties qualified
 import GeneratorSchemas qualified
+import Integrations qualified
 import PipelinedRequests qualified
 import PropertyChecks qualified
 import ReportRendering qualified
@@ -16,8 +17,10 @@ import UnsupportedCapabilities qualified
 main :: IO ()
 main = do
   rendering <- testSpec "report rendering" ReportRendering.spec
+  integrations <- testSpec "framework integrations" Integrations.spec
   trees <- traverse (\(name, runner, checker) -> buildBackendTree name runner checker) backends
-  defaultMain (testGroup "zizek:unit" (rendering : trees))
+  defaultMain
+    (testGroup "zizek:unit" (rendering : integrations : Integrations.tastyTree : trees))
 
 buildBackendTree :: String -> Runner -> Checker -> IO TestTree
 buildBackendTree name runner checker = do

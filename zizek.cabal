@@ -55,11 +55,13 @@ common library
     containers ^>=0.7,
     digest ^>=0.0,
     hashable ^>=1.4 || ^>=1.5,
+    hspec-core ^>=2.11,
     network-uri ^>=2.6,
     pretty-show ^>=1.10,
     prettyprinter ^>=1.7,
     stm ^>=2.5,
     stm-containers ^>=1.2,
+    tasty ^>=1.5,
     text ^>=2.1,
     transformers ^>=0.6,
     typed-process ^>=0.2,
@@ -99,6 +101,7 @@ library
     Hegel.Gen.Uri
     Hegel.Gen.Uuid
     Hegel.HealthCheck
+    Hegel.Hspec
     Hegel.Native.FFI
     Hegel.Native.Runner
     Hegel.Native.Settings
@@ -119,6 +122,7 @@ library
     Hegel.Server.Session.Internal
     Hegel.Server.TestCase
     Hegel.Settings
+    Hegel.Tasty
     Hegel.TestCase
 
   if os(osx)
@@ -294,6 +298,7 @@ test-suite unit
   other-modules:
     BasicProperties
     GeneratorSchemas
+    Integrations
     PipelinedRequests
     PropertyChecks
     ReportRendering
@@ -305,7 +310,6 @@ test-suite unit
 
   build-depends:
     hspec ^>=2.11,
-    tasty ^>=1.5,
     tasty-hspec ^>=1.2,
     zizek,
 
@@ -321,6 +325,5 @@ test-suite native
 
   build-depends:
     hspec ^>=2.11,
-    tasty ^>=1.5,
     tasty-hspec ^>=1.2,
     zizek,
