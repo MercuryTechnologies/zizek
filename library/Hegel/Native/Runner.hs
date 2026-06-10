@@ -1,41 +1,63 @@
 -- | Native @libhegel@ property runner.
 module Hegel.Native.Runner
   ( runProperty,
+    runPropertyWith,
+    check,
   )
 where
 
 import Control.Concurrent (runInBoundThread)
-import Control.Exception (SomeException, toException)
+import Control.Exception (SomeException, fromException, toException)
+import Control.Monad.IO.Class (liftIO)
 import Data.ByteString (ByteString)
 import Data.Functor (($>))
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Foreign (Ptr, nullPtr)
 import Hegel.Assertion (originOf)
-import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
+import Hegel.Gen.Internal (AssumeRejected (..), Gen)
 import Hegel.Native.FFI
 import Hegel.Native.Settings (applySettings)
 import Hegel.Native.TestCase (mkReplayTestCase, mkTestCase)
+import Hegel.Property.Internal (Property, failureDetails, forAllWith, observeProperty, propertyAction)
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
 import Hegel.Settings (Settings (..))
 import Hegel.TestCase (Status (..), TestCase, TestStopped (..), markComplete)
-import UnliftIO.Exception (Handler (..), catches, finally, tryAny)
+import UnliftIO.Exception (Handler (..), catches, finally)
 
--- | Run a property using the native @libhegel@ backend.
---
--- The engine's run result is the authority for the verdict: a genuine failure
--- carries a reproduction blob, a health-check abort does not. The per-case
--- loop only drives generation and tallies valid\/invalid cases; the
--- counterexample /value/ is reconstructed afterwards by replaying the blob,
--- since only the Haskell side can rebuild the typed value from the engine's
--- choice sequence.
+-- | Run a generator-plus-body property: 'runPropertyWith' rendering drawn
+-- values via 'show'.
 runProperty ::
   forall a.
+  (Show a) =>
   Settings ->
   Gen a ->
   (a -> IO ()) ->
-  IO (Report a)
-runProperty settings gen body =
+  IO Report
+runProperty = runPropertyWith (T.pack . show)
+
+-- | 'runProperty' with an explicit renderer, for values without a 'Show'
+-- instance (or with an unhelpful one): sugar for 'check' over
+-- @'forAllWith' render gen '>>=' 'liftIO' . body@.
+runPropertyWith ::
+  forall a.
+  (a -> Text) ->
+  Settings ->
+  Gen a ->
+  (a -> IO ()) ->
+  IO Report
+runPropertyWith render settings gen body =
+  check settings (forAllWith render gen >>= liftIO . body)
+
+-- | Run a 'Property' using the native @libhegel@ backend.
+--
+-- The engine's run result is the authority for the verdict: a failure with
+-- a reproduction blob is replayed through the property to describe the
+-- counterexample ('reconstructProperty'); one without is a health-check
+-- abort; otherwise the tally decides between 'GaveUp' and 'Ok'.
+check :: Settings -> Property () -> IO Report
+check settings prop =
   runInBoundThread go
     `catches` [ Handler \(e :: HegelStartupError) -> pure (aborted (Errored (toException e))),
                 -- A libhegel call outside the per-case try (e.g. markComplete)
@@ -47,13 +69,20 @@ runProperty settings gen body =
     go = withSettings \s -> do
       applySettings settings s
       (nValid, nInvalid, mFailure) <- withRun s \run -> do
-        (nv, ni) <- driveLoop settings (\tc -> draw tc gen >>= body) run
+        (nv, ni) <- driveLoop settings (propertyAction prop) run
         -- The failure record is borrowed from the run handle and only valid
         -- until hegel_run_free (called by withRun on bracket exit), so read
         -- and copy it out before returning from the lambda.
         f <- readPrimaryFailure run
         pure (nv, ni, f)
-      deriveReport s gen nValid nInvalid mFailure
+      result <- case mFailure of
+        Just f
+          | Just blob <- f.reproductionBlob -> reconstructProperty prop s blob (failureMessage f)
+          | otherwise -> pure (Aborted (UnhealthyInput (failureMessage f)))
+        Nothing
+          | nValid == 0 -> pure (GaveUp "no valid examples found")
+          | otherwise -> pure Ok
+      pure Report {result, stats = Stats {valid = nValid, invalid = nInvalid}}
 
 -- * Failures
 
@@ -88,29 +117,7 @@ readPrimaryFailure run = do
           blob <- failureReproductionBlob f
           pure (Just Failure {origin = org, diagnostic = diag, reproductionBlob = blob})
 
--- * Report
-
--- | Derive the 'Report' from the engine's run result. A failure carrying a
--- reproduction blob is replayed to rebuild the typed counterexample; a failure
--- without one is a health-check abort. With no failure, the per-case tally
--- decides between 'GaveUp' (nothing valid) and 'Ok'. The tallies are reported
--- in every case.
-deriveReport ::
-  Ptr HegelSettings ->
-  Gen a ->
-  Int ->
-  Int ->
-  Maybe Failure ->
-  IO (Report a)
-deriveReport s gen nValid nInvalid mFailure = do
-  result <- case mFailure of
-    Just f
-      | Just blob <- f.reproductionBlob -> reconstruct s gen blob (failureMessage f)
-      | otherwise -> pure (Aborted (UnhealthyInput (failureMessage f)))
-    Nothing
-      | nValid == 0 -> pure (GaveUp "no valid examples found")
-      | otherwise -> pure Ok
-  pure Report {result, stats = Stats {valid = nValid, invalid = nInvalid}}
+-- * Counterexample reconstruction
 
 -- | Prefer the engine's diagnostic; fall back to the (stable) origin string.
 failureMessage :: Failure -> Text
@@ -118,20 +125,33 @@ failureMessage f
   | T.null f.diagnostic = f.origin
   | otherwise = f.diagnostic
 
--- | Replay a reproduction blob to rebuild the typed counterexample.
+-- | Replay a reproduction blob through the property to harvest its journal.
 --
 -- The replay handle is caller-owned and standalone, so 'mkReplayTestCase'
 -- gives it a no-op 'markComplete' (calling @hegel_mark_complete@ on it would
--- abort the process). If the blob no longer matches the generators the draw
--- throws, which we surface as 'Errored' since there is no value to report.
-reconstruct :: Ptr HegelSettings -> Gen a -> ByteString -> Text -> IO (Result a)
-reconstruct s gen blob msg =
+-- abort the process).
+--
+-- The failure is expected to recur; its notes become the counterexample
+-- description, and its exception supplies the message and source location
+-- (via 'failureDetails'). A replay that passes, discards, or runs out of
+-- choices did not reproduce the engine's failure — surface the mismatch
+-- rather than fabricating a report from a non-failing run.
+reconstructProperty :: Property () -> Ptr HegelSettings -> ByteString -> Text -> IO Result
+reconstructProperty prop s blob msg =
   withTestCaseFromBlob s blob \tcPtr -> do
-    let tc = mkReplayTestCase tcPtr
-    eVal <- tryAny (draw tc gen)
-    pure $ case eVal of
-      Right val -> Counterexample {value = val, message = msg, notes = [], loc = Nothing}
-      Left e -> Aborted (Errored e)
+    (eRes, notes) <- observeProperty (mkReplayTestCase tcPtr) prop
+    pure case eRes of
+      Left e
+        | isDivergence e -> diverged
+        | otherwise ->
+            let (message, loc) = failureDetails msg e
+             in Counterexample {message, notes, loc}
+      Right () -> diverged
+  where
+    diverged =
+      Aborted (Errored (toException (userError "failure reported but the property did not reproduce it on replay")))
+    isDivergence e =
+      isJust (fromException @AssumeRejected e) || isJust (fromException @TestStopped e)
 
 -- * Per-case loop
 

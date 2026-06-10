@@ -16,7 +16,7 @@ newtype Params = Params {branches :: [Branch]}
   deriving stock (Generic)
 
 data Metrics = Metrics {value :: Int64, branch :: Int}
-  deriving stock (Generic)
+  deriving stock (Generic, Show)
 
 instance FromJSON Branch where
   parseJSON = genericParseJSON aesonOpts

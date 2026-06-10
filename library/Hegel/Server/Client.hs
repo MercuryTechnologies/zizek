@@ -5,7 +5,7 @@ module Hegel.Server.Client
     newClient,
 
     -- * Running tests
-    runTest,
+    checkTest,
   )
 where
 
@@ -15,15 +15,16 @@ import CBOR.Value (Value (..))
 import Control.Exception (SomeException, toException)
 import Data.ByteString.Char8 qualified as BS8
 import Data.Foldable (for_)
-import Data.Functor (($>))
+import Data.Functor (($>), (<&>))
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Word (Word32, Word64)
 import Hegel.Assertion (originOf)
-import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
+import Hegel.Gen.Internal (AssumeRejected (..))
 import Hegel.HealthCheck qualified as HealthCheck
 import Hegel.Phase qualified as Phase
+import Hegel.Property.Internal (Property, failureDetails, observeProperty, propertyAction)
 import Hegel.Protocol.Cbor
   ( asBool,
     asText,
@@ -83,16 +84,48 @@ newClient conn = do
     then throwIO (VersionMismatch (T.pack ver) (T.pack (showVer supportedProtocolLo)) (T.pack (showVer supportedProtocolHi)))
     else pure Client {connection = conn, control = ctrl, version = parsed}
 
-runTest ::
+-- | Run a 'Property' against a @hegel@ server.
+--
+-- The counterexample is described by the notes journaled while the
+-- final-replay case re-executes the property; the exception that reproduced
+-- the failure supplies the message and source location (via
+-- 'failureDetails').
+checkTest :: Client -> Settings -> Property () -> IO Report
+checkTest client settings prop = do
+  capRef <- newIORef Nothing
+  let capturing tc = do
+        writeIORef capRef Nothing
+        (eRes, notes) <- observeProperty tc prop
+        case eRes of
+          Right () -> pure ()
+          Left e -> do
+            writeIORef capRef (Just (e, notes))
+            -- Rethrow so 'runCase' classifies and reports the case normally.
+            throwIO e
+      readCapture =
+        readIORef capRef
+          <&> fmap \(e, notes) msg ->
+            let (message, loc) = failureDetails msg e
+             in Counterexample {message, notes, loc}
+  runTestWith client settings (propertyAction prop) capturing readCapture
+
+-- | Shared @run_test@ scaffold: issue the command, drive the event loop with
+-- the per-case action, then replay final cases with the capturing action.
+runTestWith ::
   Client ->
   Settings ->
-  Gen a ->
-  (a -> IO ()) ->
-  IO (Report a)
-runTest client settings gen body = do
+  -- | Per-case action for ordinary cases.
+  (TestCase -> IO ()) ->
+  -- | Per-case action for final-replay cases; must record its counterexample
+  -- payload where the reader below can find it.
+  (TestCase -> IO ()) ->
+  -- | Read the payload captured by the final-replay action, as a function of
+  -- the failure origin reported for that case.
+  IO (Maybe (Text -> Result)) ->
+  IO Report
+runTestWith client settings action finalAction readCapture = do
   (testSid, testQ) <- newStream client.connection
   testStream <- mkStream client.connection testSid testQ
-  let action tc = draw tc gen >>= body
   let runTestMsg =
         buildMap
           [ "command" .= ("run_test" :: Text),
@@ -112,21 +145,11 @@ runTest client settings gen body = do
   flip finally (closeStream testStream) do
     (results, nInteresting, nInvalid) <-
       runEventLoop testStream client.connection action settings.perCaseFinalizer
-    interpretResults results nInteresting nInvalid do
-      -- Counterexample capture, scoped to the replay phase (the only reader).
-      -- The capturing action resets the ref at case start so a failure during
-      -- the draw itself can never pair a stale value from an earlier final
-      -- case with a new failure.
-      drawnRef <- newIORef Nothing
-      let capturingAction tc = do
-            writeIORef drawnRef Nothing
-            val <- draw tc gen
-            writeIORef drawnRef (Just val)
-            body val
-      replayFinalCases testStream client.connection (fromIntegral nInteresting) capturingAction (readIORef drawnRef) settings.perCaseFinalizer
+    interpretResults results nInteresting nInvalid $
+      replayFinalCases testStream client.connection (fromIntegral nInteresting) finalAction readCapture settings.perCaseFinalizer
 
 interpretResults ::
-  Value -> Word64 -> Word64 -> IO (Result a) -> IO (Report a)
+  Value -> Word64 -> Word64 -> IO Result -> IO Report
 interpretResults results nInteresting nInvalid replay = report <$> verdict
   where
     verdict
@@ -150,7 +173,7 @@ interpretResults results nInteresting nInvalid replay = report <$> verdict
 -- discard ('AssumeRejected') raised at any point marks the case 'Invalid'.
 -- The handlers only classify; 'markComplete' runs once, outside the 'catches'
 -- scope, so a protocol error raised while reporting propagates to
--- 'runTest''s caller instead of being misread as a test failure.
+-- 'runTestWith''s caller instead of being misread as a test failure.
 runCase :: Connection -> Word32 -> (TestCase -> IO ()) -> IO () -> IO (Maybe Text)
 runCase conn sid action finalizer = run `finally` finalizer
   where
@@ -213,13 +236,13 @@ awaitEvent s = do
     Just other -> throwIO (UnknownEvent other)
   pure (evId, ev)
 
-replayFinalCases :: Stream -> Connection -> Int -> (TestCase -> IO ()) -> IO (Maybe a) -> IO () -> IO (Result a)
-replayFinalCases testStream conn n action readDrawn finalizer = go n Nothing
+replayFinalCases :: Stream -> Connection -> Int -> (TestCase -> IO ()) -> IO (Maybe (Text -> Result)) -> IO () -> IO Result
+replayFinalCases testStream conn n action readCapture finalizer = go n Nothing
   where
     go 0 mFail = pure $ case mFail of
-      Just (v, msg) -> Counterexample {value = v, message = msg, notes = [], loc = Nothing}
+      Just r -> r
       -- The engine reported at least one failure, but no final-replay case
-      -- reproduced it with a drawn value in hand (the draw diverged, or the
+      -- reproduced it with a captured payload (the case diverged, or the
       -- failure was flaky on replay). Surface the mismatch rather than a
       -- silent pass.
       Nothing -> Aborted (Errored (toException (userError "failure reported but no counterexample was reproduced by the final replay")))
@@ -231,11 +254,11 @@ replayFinalCases testStream conn n action readDrawn finalizer = go n Nothing
           runCase conn sid action finalizer >>= \case
             Nothing -> go (k - 1) mFail
             Just msg ->
-              -- 'readDrawn' yields the value the action captured before the
-              -- failure; a failure during the draw itself captures nothing,
+              -- 'readCapture' yields the payload the action captured before
+              -- the failure; a failure during generation captures nothing,
               -- in which case keep any counterexample from an earlier case.
-              readDrawn >>= \case
-                Just v -> go (k - 1) (Just (v, msg))
+              readCapture >>= \case
+                Just mk -> go (k - 1) (Just (mk msg))
                 Nothing -> go (k - 1) mFail
         TestCaseEvent _ False -> throwIO (ProtocolStateViolation "expected is_final=true")
         TestDoneEvent _ -> throwIO (ProtocolStateViolation "unexpected test_done during replay")

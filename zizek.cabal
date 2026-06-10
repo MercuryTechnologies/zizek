@@ -59,6 +59,7 @@ common library
     stm ^>=2.5,
     stm-containers ^>=1.2,
     text ^>=2.1,
+    transformers ^>=0.6,
     typed-process ^>=0.2,
     unliftio ^>=0.2,
     unordered-containers ^>=0.2,
@@ -101,6 +102,8 @@ library
     Hegel.Native.Settings
     Hegel.Native.TestCase
     Hegel.Phase
+    Hegel.Property
+    Hegel.Property.Internal
     Hegel.Protocol.Cbor
     Hegel.Report
     Hegel.Schema
@@ -290,6 +293,7 @@ test-suite unit
     BasicProperties
     GeneratorSchemas
     PipelinedRequests
+    PropertyChecks
     SessionRecovery
     StandardGenerators
     TestBackends

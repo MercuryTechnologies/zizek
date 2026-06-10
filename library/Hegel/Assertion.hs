@@ -1,14 +1,20 @@
 -- | Call-stack-aware assertion helpers for property bodies.
+--
+-- 'assert' and 'failure' are polymorphic in any 'MonadIO', so the same
+-- functions work in a plain @IO@ property body and inside
+-- 'Hegel.Property.PropertyT'.
 module Hegel.Assertion
   ( AssertionFailure (..),
     assert,
     failure,
     originOf,
+    callSite,
   )
 where
 
 import Control.Exception (Exception (displayException), SomeException (SomeException), fromException, throwIO)
 import Control.Monad (unless)
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Typeable (typeOf)
@@ -35,15 +41,21 @@ instance Exception AssertionFailure where
   displayException f = T.unpack f.message <> "\n" <> prettyCallStack f.callStack
 
 -- | Fail the current property with a message, capturing the call site.
-failure :: (HasCallStack) => Text -> IO a
+failure :: (HasCallStack, MonadIO m) => Text -> m a
 failure msg =
   withFrozenCallStack $
-    throwIO AssertionFailure {message = msg, callStack = Stack.callStack}
+    liftIO (throwIO AssertionFailure {message = msg, callStack = Stack.callStack})
 
 -- | Assert a condition; on 'False', fail with the given message and the
 -- captured call site.
-assert :: (HasCallStack) => Bool -> Text -> IO ()
+assert :: (HasCallStack, MonadIO m) => Bool -> Text -> m ()
 assert cond msg = unless cond (withFrozenCallStack (failure msg))
+
+-- | The innermost call site recorded in a 'CallStack', if any.
+callSite :: CallStack -> Maybe SrcLoc
+callSite cs = case getCallStack cs of
+  (_, sl) : _ -> Just sl
+  [] -> Nothing
 
 -- | Format an exception as @\<ExcTypeName\> at \<file\>:\<line\>@ for use as
 -- the @origin@ field in @mark_complete INTERESTING@.
@@ -64,7 +76,7 @@ originOf exc = case fromException exc of
   where
     typeName (SomeException e) = T.pack (show (typeOf e))
 
-    formatWithStack tn cs = case getCallStack cs of
-      [] -> tn <> " at <unknown>:0"
-      (_, sl) : _ ->
+    formatWithStack tn cs = case callSite cs of
+      Nothing -> tn <> " at <unknown>:0"
+      Just sl ->
         tn <> " at " <> T.pack sl.srcLocFile <> ":" <> T.pack (show sl.srcLocStartLine)

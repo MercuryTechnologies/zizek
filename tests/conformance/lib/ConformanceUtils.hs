@@ -50,10 +50,11 @@ getBackend =
 
 -- | Dispatch to the backend selected by 'getBackend'.
 runSelected ::
+  (Show a) =>
   Settings ->
   Gen a ->
   (a -> IO ()) ->
-  IO (Report a)
+  IO Report
 runSelected settings gen body =
   getBackend >>= \case
     NativeBackend -> Native.runProperty settings gen body
@@ -154,7 +155,7 @@ nonBasic "non_basic" g = g >>= pure
 nonBasic _ g = g
 
 -- | Standard conformance runner: exits non-zero on any non-passing outcome.
-runConformanceProperty :: Gen a -> (a -> IO ()) -> IO ()
+runConformanceProperty :: (Show a) => Gen a -> (a -> IO ()) -> IO ()
 runConformanceProperty gen body = run `finally` closeSelectedSession
   where
     run = do
@@ -186,7 +187,7 @@ runConformanceProperty gen body = run `finally` closeSelectedSession
 -- empty @{}@ line so the client and server metric files stay 1:1.
 runConformancePropertyPaired ::
   forall a m.
-  (ToJSON m) =>
+  (Show a, ToJSON m) =>
   Gen a ->
   (a -> Maybe m) ->
   IO ()
@@ -237,7 +238,7 @@ runConformancePropertyPaired gen toMetric =
 --
 -- Exits zero on 'Passed', 'Failed', or 'Rejected'; only 'Errored' or
 -- 'UnhealthyInput' (binary-level breakage) propagate as a non-zero exit.
-runConformancePropertyExpectFailures :: Gen a -> (a -> IO ()) -> IO ()
+runConformancePropertyExpectFailures :: (Show a) => Gen a -> (a -> IO ()) -> IO ()
 runConformancePropertyExpectFailures gen body = run `finally` closeSelectedSession
   where
     run = do

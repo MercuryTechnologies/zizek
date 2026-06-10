@@ -33,28 +33,25 @@ data Stats = Stats
   deriving stock (Show)
 
 -- | What happened when a property was run, plus run statistics.
---
--- The @cex@ parameter is the type of the reported counterexample: the
--- generator's value type for 'Hegel.runProperty', or @()@ for entry points
--- whose draws are described by 'notes' instead of a single typed value.
-data Report cex = Report
-  { result :: Result cex,
+data Report = Report
+  { result :: Result,
     -- | Tallies for the run. Zero when the run aborted before any test case
     -- could run.
     stats :: Stats
   }
-  deriving stock (Show, Functor)
+  deriving stock (Show)
 
 -- | The verdict of a property run.
-data Result cex
+data Result
   = -- | Every attempted test case passed.
     Ok
-  | -- | A counterexample was found.
+  | -- | A counterexample was found, described by its journal: every drawn
+    -- value and annotation recorded while re-executing the minimal failing
+    -- case.
     Counterexample
-      { -- | The typed counterexample.
-        value :: cex,
-        -- | The failure message (the engine's diagnostic, or its stable
-        -- origin string when no diagnostic exists).
+      { -- | The failure message: the reproducing assertion's message when
+        -- available, otherwise the engine's diagnostic or stable origin
+        -- string.
         message :: Text,
         -- | Journal entries describing the failing case.
         notes :: [Note],
@@ -65,7 +62,7 @@ data Result cex
     GaveUp Text
   | -- | The run stopped before reaching a verdict.
     Aborted Abort
-  deriving stock (Show, Functor)
+  deriving stock (Show)
 
 -- | Why a run stopped without reaching a verdict.
 data Abort
@@ -76,7 +73,7 @@ data Abort
   deriving stock (Show)
 
 -- | A report for a run that stopped before any test case could run.
-aborted :: Abort -> Report cex
+aborted :: Abort -> Report
 aborted a = Report {result = Aborted a, stats = Stats {valid = 0, invalid = 0}}
 
 -- | The kind of a journaled 'Note'.
@@ -98,17 +95,10 @@ data Note = Note
   }
   deriving stock (Show)
 
--- | Counterexample wrapped for throwing from 'Hegel.runProperty_'.
---
--- The counterexample is rendered to 'Text' at throw time: the only thing a
--- catcher could ever do with the erased value is render it, so carrying the
--- rendering keeps the type first-order and lets entry points choose their
--- own renderer (e.g. 'show', or a custom function).
+-- | Counterexample wrapped for throwing from 'Hegel.runProperty_'. Carries
+-- the failure message and the journal describing the failing case.
 data PropertyFailed = PropertyFailed
-  { -- | The rendered counterexample.
-    counterexample :: Text,
-    -- | The failure message (the engine's diagnostic, or its stable origin
-    -- string when no diagnostic exists).
+  { -- | The failure message.
     message :: Text,
     -- | Journal entries describing the failing case.
     notes :: [Note]
@@ -117,8 +107,6 @@ data PropertyFailed = PropertyFailed
 
 instance Exception PropertyFailed where
   displayException f =
-    "property failed with counterexample "
-      <> T.unpack f.counterexample
-      <> ": "
+    "property failed: "
       <> T.unpack f.message
       <> concatMap (\n -> "\n  " <> T.unpack n.text) f.notes

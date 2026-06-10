@@ -158,7 +158,7 @@ genMachinerySpec = describe "Gen machinery" $ do
                   -- Budget exhausted for this shrink probe; mark overrun.
                   Left TestStopped -> TC.markComplete tc Overrun
                   Right n ->
-                    if n == (42 :: Int)
+                    if n >= (42 :: Int)
                       then withCString "smoke:0" $ \p -> do
                         rc <- hegel_mark_complete tcPtr HEGEL_STATUS_INTERESTING p
                         case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError rc

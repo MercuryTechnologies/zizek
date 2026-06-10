@@ -3,24 +3,26 @@ module Main (main) where
 import BasicProperties qualified
 import GeneratorSchemas qualified
 import PipelinedRequests qualified
+import PropertyChecks qualified
 import SessionRecovery qualified
 import StandardGenerators qualified
 import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.Hspec (testSpec)
 import TestBackends (backends)
-import TestRunner (Runner)
+import TestRunner (Checker, Runner)
 import UnsupportedCapabilities qualified
 
 main :: IO ()
 main = do
-  trees <- traverse (uncurry buildBackendTree) backends
+  trees <- traverse (\(name, runner, checker) -> buildBackendTree name runner checker) backends
   defaultMain (testGroup "zizek:unit" trees)
 
-buildBackendTree :: String -> Runner -> IO TestTree
-buildBackendTree name runner = do
+buildBackendTree :: String -> Runner -> Checker -> IO TestTree
+buildBackendTree name runner checker = do
   basics <- testSpec "basic properties" (BasicProperties.spec runner)
   schemas <- testSpec "generator schemas" (GeneratorSchemas.spec runner)
   standards <- testSpec "standard generators" (StandardGenerators.spec runner)
+  properties <- testSpec "property monad" (PropertyChecks.spec checker)
 
   serverOnly <-
     if name == "server"
@@ -31,4 +33,4 @@ buildBackendTree name runner = do
         pure [recovery, pipelined, unsupported]
       else pure []
 
-  pure $ testGroup name ([basics, schemas, standards] <> serverOnly)
+  pure $ testGroup name ([basics, schemas, standards, properties] <> serverOnly)
