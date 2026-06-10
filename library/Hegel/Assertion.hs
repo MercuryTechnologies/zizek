@@ -13,6 +13,7 @@ where
 import Control.Exception (Exception (displayException), SomeException (SomeException), fromException, throwIO)
 import Control.Monad (unless)
 import Control.Monad.IO.Class (MonadIO, liftIO)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Typeable (typeOf)
@@ -25,25 +26,40 @@ import GHC.Stack
     withFrozenCallStack,
   )
 import GHC.Stack qualified as Stack
+import Hegel.Diff (Diff, diffLines, diffShown, renderDiff)
 import Hegel.Report (renderValue)
 
--- | Raised by 'assert' and 'failure'. Carries a user-supplied message and a
--- captured 'CallStack' so the runner can extract a stable @file:line@ origin
--- for failure deduplication on the server.
+-- | Raised by 'assert' and 'failure'. Carries a user-supplied message, a
+-- captured 'CallStack', and an optional structural diff (set by '(===)').
 data AssertionFailure = AssertionFailure
   { message :: !Text,
-    callStack :: !CallStack
+    callStack :: !CallStack,
+    -- | Structural or line-level diff produced by '(===)', if applicable.
+    diff :: !(Maybe Diff)
   }
   deriving stock (Show)
 
 instance Exception AssertionFailure where
-  displayException f = T.unpack f.message <> "\n" <> prettyCallStack f.callStack
+  displayException f =
+    T.unpack $
+      f.message
+        <> maybe "" (\d -> "\n" <> renderDiff d) f.diff
+        <> "\n"
+        <> T.pack (prettyCallStack f.callStack)
 
--- | Fail the current property with a message, capturing the call site.
+-- | Fail the current property with a message, capturing the call site. Sets
+-- 'diff' to 'Nothing'; use '(===)' when a diff is desired.
 failure :: (HasCallStack, MonadIO m) => Text -> m a
 failure msg =
   withFrozenCallStack $
-    liftIO (throwIO AssertionFailure {message = msg, callStack = Stack.callStack})
+    liftIO
+      ( throwIO
+          AssertionFailure
+            { message = msg,
+              callStack = Stack.callStack,
+              diff = Nothing
+            }
+      )
 
 -- | Assert a condition; on 'False', fail with the given message and the
 -- captured call site.
@@ -52,14 +68,27 @@ assert cond msg = unless cond (withFrozenCallStack (failure msg))
 
 infix 4 ===, /==
 
--- | Assert two values are equal; on failure, the message carries a
--- line-level diff of the pretty-printed values.
+-- | Assert two values are equal; on failure, 'diff' carries a structural diff
+-- when both rendered values parse as value ASTs, and a line-level diff
+-- otherwise.
 (===) :: (HasCallStack, MonadIO m, Eq a, Show a) => a -> a -> m ()
 x === y
   | x == y = pure ()
   | otherwise =
       withFrozenCallStack $
-        failure (T.intercalate "\n" ("=== failed" : diffLines (renderValue x) (renderValue y)))
+        liftIO
+          ( throwIO
+              AssertionFailure
+                { message = "=== failed",
+                  callStack = Stack.callStack,
+                  diff =
+                    Just
+                      ( fromMaybe
+                          (diffLines (renderValue x) (renderValue y))
+                          (diffShown (renderValue x) (renderValue y))
+                      )
+                }
+          )
 
 -- | Assert two values differ.
 (/==) :: (HasCallStack, MonadIO m, Eq a, Show a) => a -> a -> m ()
@@ -68,27 +97,6 @@ x /== y
   | otherwise =
       withFrozenCallStack $
         failure (T.intercalate "\n" ["/== failed, values are equal", renderValue x])
-
--- | A line-oriented diff of two pretty-printed values: lines common to the
--- leading and trailing ends render with a plain margin, the differing middle
--- with @-@\/@+@ markers.
-diffLines :: Text -> Text -> [Text]
-diffLines lhs rhs =
-  fmap ("  " <>) prefix
-    <> fmap ("- " <>) lhsMid
-    <> fmap ("+ " <>) rhsMid
-    <> fmap ("  " <>) suffix
-  where
-    ls = T.lines lhs
-    rs = T.lines rhs
-    prefix = commonPrefix ls rs
-    ls' = drop (length prefix) ls
-    rs' = drop (length prefix) rs
-    suffix = reverse (commonPrefix (reverse ls') (reverse rs'))
-    lhsMid = take (length ls' - length suffix) ls'
-    rhsMid = take (length rs' - length suffix) rs'
-    commonPrefix (a : as) (b : bs) | a == b = a : commonPrefix as bs
-    commonPrefix _ _ = []
 
 -- | The innermost call site recorded in a 'CallStack', if any.
 callSite :: CallStack -> Maybe SrcLoc
@@ -113,8 +121,10 @@ originOf exc = case fromException exc of
   Just AssertionFailure {callStack = cs} -> formatWithStack (typeName exc) cs
   Nothing -> typeName exc <> " at <unknown>:0"
   where
+    typeName :: SomeException -> Text
     typeName (SomeException e) = T.pack (show (typeOf e))
 
+    formatWithStack :: Text -> CallStack -> Text
     formatWithStack tn cs = case callSite cs of
       Nothing -> tn <> " at <unknown>:0"
       Just sl ->

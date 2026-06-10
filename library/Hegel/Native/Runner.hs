@@ -160,8 +160,8 @@ reconstructProperty prop s blob msg =
       Left e
         | isDivergence e -> diverged
         | otherwise ->
-            let (message, loc) = failureDetails msg e
-             in Counterexample {message, notes, loc}
+            let (message, loc, diff) = failureDetails msg e
+             in Counterexample {message, notes, loc, diff}
       Right () -> diverged
   where
     diverged =

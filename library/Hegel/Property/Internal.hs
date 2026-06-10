@@ -41,6 +41,7 @@ import Data.Sequence qualified as Seq
 import Data.Text (Text)
 import GHC.Stack (HasCallStack, SrcLoc, callStack, withFrozenCallStack)
 import Hegel.Assertion (AssertionFailure (..), callSite)
+import Hegel.Diff (Diff)
 import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
 import Hegel.Report (Note (..), NoteKind (..), renderValue)
 import Hegel.TestCase (TestCase)
@@ -166,9 +167,9 @@ observeProperty tc prop = do
   pure (eRes, notes)
 
 -- | Failure presentation details from the exception that reproduced a
--- failure: prefer 'AssertionFailure''s message and call site over the
+-- failure: prefer 'AssertionFailure''s message, call site, and diff over the
 -- engine's stable origin string, which is a dedup key rather than prose.
-failureDetails :: Text -> SomeException -> (Text, Maybe SrcLoc)
+failureDetails :: Text -> SomeException -> (Text, Maybe SrcLoc, Maybe Diff)
 failureDetails engineMsg e = case fromException e of
-  Just (af :: AssertionFailure) -> (af.message, callSite af.callStack)
-  Nothing -> (engineMsg, Nothing)
+  Just (af :: AssertionFailure) -> (af.message, callSite af.callStack, af.diff)
+  Nothing -> (engineMsg, Nothing, Nothing)

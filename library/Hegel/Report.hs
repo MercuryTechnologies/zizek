@@ -14,7 +14,10 @@ module Hegel.Report
 
     -- * Rendering
     renderReport,
+    renderReportAnsi,
+    renderReportRich,
     renderFailure,
+    renderFailureAnsi,
     renderValue,
 
     -- * Exceptions
@@ -22,13 +25,17 @@ module Hegel.Report
   )
 where
 
-import Control.Exception (Exception (displayException), SomeException, throwIO)
+import Control.Exception (Exception (displayException), IOException, SomeException, throwIO)
+import Control.Exception qualified as Ex
 import Data.List (mapAccumL, partition)
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Stack (SrcLoc (..))
+import Hegel.Diff (Diff, LineDiff (..))
 import Prettyprinter (Doc, (<+>))
 import Prettyprinter qualified as PP
+import Prettyprinter.Render.Terminal (AnsiStyle)
+import Prettyprinter.Render.Terminal qualified as PP.Terminal
 import Prettyprinter.Render.Text qualified as PP.Text
 import Text.Show.Pretty qualified as Pretty
 
@@ -67,7 +74,9 @@ data Result
         -- | Journal entries describing the failing case.
         notes :: [Note],
         -- | Source location of the failing assertion, when known.
-        loc :: Maybe SrcLoc
+        loc :: Maybe SrcLoc,
+        -- | Structural or line-level diff, when the failure came from '(===)'.
+        diff :: Maybe Diff
       }
   | -- | No valid examples were generated.
     GaveUp Text
@@ -92,7 +101,8 @@ aborted a = Report {result = Aborted a, stats = Stats {valid = 0, invalid = 0}}
 throwOnFailure :: Report -> IO ()
 throwOnFailure report = case report.result of
   Ok -> pure ()
-  Counterexample {message, notes, loc} -> throwIO PropertyFailed {message, notes, loc}
+  Counterexample {message, notes, loc, diff} ->
+    throwIO PropertyFailed {message, notes, loc, diff}
   GaveUp msg -> fail ("Property rejected all inputs: " <> show msg)
   Aborted (Errored exc) -> throwIO exc
   Aborted (UnhealthyInput msg) -> fail ("Health check failed: " <> show msg)
@@ -118,22 +128,71 @@ data Note = Note
 
 -- * Rendering
 
--- | Semantic annotations on report fragments. The plain-text renderers strip
--- them; a future ANSI renderer maps them to colours.
+-- | Semantic annotations on report fragments. The plain-text renderer strips
+-- them; the ANSI renderer maps them to colours.
 data Ann
   = MessageAnn
   | LocAnn
   | DrawnAnn
   | NoteAnn
+  | DiffSame
+  | DiffRemoved
+  | DiffAdded
 
--- | Render a report for human consumption.
+-- | Render a report as plain text.
 renderReport :: Report -> Text
 renderReport = docToText . reportDoc
 
--- | Render the failure section alone (headline message, location, journal);
--- 'PropertyFailed' and 'renderReport' share this layout.
-renderFailure :: Text -> [Note] -> Maybe SrcLoc -> Text
-renderFailure message notes loc = docToText (failureDoc message notes loc)
+-- | Render a report with ANSI colour codes (suitable for TTY output).
+-- Diff lines are red\/green; the failure message is bold; location is dim.
+renderReportAnsi :: Report -> Text
+renderReportAnsi = docToAnsi . reportDoc
+
+-- | Render a report as plain text, splicing in the source line above each
+-- 'Drawn' note whose location is known. Reads source files at render time;
+-- degrades gracefully to 'renderReport' when files are unavailable.
+renderReportRich :: Report -> IO Text
+renderReportRich report = case report.result of
+  Counterexample {message, notes, loc, diff} -> do
+    richNotes <- mapM enrichNote notes
+    pure $
+      docToText $
+        PP.vsep
+          [ "failed after" <+> statsDoc report.stats,
+            failureDoc message richNotes loc diff
+          ]
+  _ -> pure (renderReport report)
+  where
+    enrichNote :: Note -> IO Note
+    enrichNote n@Note {kind = Drawn, loc = Just sl} =
+      readSourceLine sl.srcLocFile sl.srcLocStartLine
+        >>= \msrc -> pure case msrc of
+          Nothing -> n
+          Just src -> n {text = T.pack src <> "\n" <> n.text}
+    enrichNote n = pure n
+
+-- | Read a single line (1-based) from a source file, returning 'Nothing' on
+-- any 'IOException' or out-of-range line number.
+readSourceLine :: FilePath -> Int -> IO (Maybe String)
+readSourceLine path lineNo =
+  ( do
+      ls <- lines <$> readFile path
+      let idx = lineNo - 1
+      pure
+        if idx >= 0 && idx < length ls
+          then Just (ls !! idx)
+          else Nothing
+  )
+    `Ex.catch` \(_ :: IOException) -> pure Nothing
+
+-- | Render the failure section alone (headline message, diff, location,
+-- journal). 'PropertyFailed' and 'renderReport' share this layout.
+renderFailure :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Text
+renderFailure message notes loc diff = docToText (failureDoc message notes loc diff)
+
+-- | 'renderFailure' with ANSI colour codes.
+renderFailureAnsi :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Text
+renderFailureAnsi message notes loc diff = docToAnsi (failureDoc message notes loc diff)
 
 -- | Render a value via its 'Show' instance, pretty-printed multi-line when
 -- the output parses as a value AST, the raw 'show' string otherwise. The
@@ -149,19 +208,23 @@ reportDoc report = case report.result of
   GaveUp msg -> "gave up after" <+> statsDoc report.stats <> ":" <+> PP.pretty msg
   Aborted (Errored e) -> "aborted:" <+> PP.pretty (displayException e)
   Aborted (UnhealthyInput msg) -> "aborted: health check failed:" <+> PP.pretty msg
-  Counterexample {message, notes, loc} ->
+  Counterexample {message, notes, loc, diff} ->
     PP.vsep
       [ "failed after" <+> statsDoc report.stats,
-        failureDoc message notes loc
+        failureDoc message notes loc diff
       ]
 
--- | Headline message, then (indented) the source location and the journal in
--- order, footnotes last.
-failureDoc :: Text -> [Note] -> Maybe SrcLoc -> Doc Ann
-failureDoc message notes loc =
+-- | Headline message, then (indented) the diff (if any), the source
+-- location, and the journal in order, footnotes last.
+failureDoc :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Doc Ann
+failureDoc message notes loc diff =
   PP.vsep (PP.annotate MessageAnn (PP.pretty message) : fmap (PP.indent 2) details)
   where
-    details = locLine <> snd (mapAccumL noteDoc 1 (inline <> footers))
+    details :: [Doc Ann]
+    details = diffLines <> locLine <> snd (mapAccumL noteDoc 1 (inline <> footers))
+    diffLines :: [Doc Ann]
+    diffLines = maybe [] (\d -> [diffDoc d]) diff
+    locLine :: [Doc Ann]
     locLine = maybe [] (\l -> [PP.annotate LocAnn ("at" <+> locDoc l)]) loc
     (footers, inline) = partition (\n -> n.kind == Footnote) notes
     noteDoc :: Int -> Note -> (Int, Doc Ann)
@@ -172,6 +235,14 @@ failureDoc message notes loc =
         )
       Annotation -> (i, PP.annotate NoteAnn (PP.pretty n.text))
       Footnote -> (i, PP.annotate NoteAnn (PP.pretty n.text))
+
+diffDoc :: Diff -> Doc Ann
+diffDoc = PP.vsep . fmap lineDiffDoc
+  where
+    lineDiffDoc :: LineDiff -> Doc Ann
+    lineDiffDoc (LineSame t) = PP.annotate DiffSame ("  " <> PP.pretty t)
+    lineDiffDoc (LineRemoved t) = PP.annotate DiffRemoved ("- " <> PP.pretty t)
+    lineDiffDoc (LineAdded t) = PP.annotate DiffAdded ("+ " <> PP.pretty t)
 
 statsDoc :: Stats -> Doc Ann
 statsDoc stats
@@ -185,21 +256,39 @@ locDoc sl = PP.pretty sl.srcLocFile <> ":" <> PP.pretty sl.srcLocStartLine
 docToText :: Doc Ann -> Text
 docToText = PP.Text.renderStrict . PP.layoutPretty PP.defaultLayoutOptions
 
+docToAnsi :: Doc Ann -> Text
+docToAnsi =
+  PP.Terminal.renderStrict
+    . PP.layoutPretty PP.defaultLayoutOptions
+    . PP.reAnnotate annToAnsi
+
+annToAnsi :: Ann -> AnsiStyle
+annToAnsi = \case
+  MessageAnn -> PP.Terminal.bold
+  LocAnn -> PP.Terminal.colorDull PP.Terminal.White
+  DrawnAnn -> PP.Terminal.color PP.Terminal.Cyan
+  NoteAnn -> mempty
+  DiffSame -> mempty
+  DiffRemoved -> PP.Terminal.color PP.Terminal.Red
+  DiffAdded -> PP.Terminal.color PP.Terminal.Green
+
 -- * Exceptions
 
 -- | Counterexample wrapped for throwing from 'Hegel.runProperty_' and
 -- 'Hegel.Property.check_'. Carries the failure message, its source location,
--- and the journal describing the failing case.
+-- the journal describing the failing case, and the diff (if any).
 data PropertyFailed = PropertyFailed
   { -- | The failure message.
     message :: Text,
     -- | Journal entries describing the failing case.
     notes :: [Note],
     -- | Source location of the failing assertion, when known.
-    loc :: Maybe SrcLoc
+    loc :: Maybe SrcLoc,
+    -- | Structural or line-level diff, when the failure came from '(===)'.
+    diff :: Maybe Diff
   }
   deriving stock (Show)
 
 instance Exception PropertyFailed where
   displayException f =
-    T.unpack (renderFailure ("property failed: " <> f.message) f.notes f.loc)
+    T.unpack (renderFailure ("property failed: " <> f.message) f.notes f.loc f.diff)

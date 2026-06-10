@@ -10,6 +10,7 @@ license: MPL-2.0
 license-file: LICENSE
 tested-with: ghc ^>=9.10 && ^>=9.12
 build-type: Simple
+extra-source-files: licenses/hedgehog.LICENSE
 
 common all
   default-language: GHC2021
@@ -59,6 +60,7 @@ common library
     network-uri ^>=2.6,
     pretty-show ^>=1.10,
     prettyprinter ^>=1.7,
+    prettyprinter-ansi-terminal ^>=1.1,
     stm ^>=2.5,
     stm-containers ^>=1.2,
     tasty ^>=1.5,
@@ -81,6 +83,7 @@ library
     Hegel.Assertion
     Hegel.Collection
     Hegel.Database
+    Hegel.Diff
     Hegel.Gen
     Hegel.Gen.Binary
     Hegel.Gen.Bool

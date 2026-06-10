@@ -110,8 +110,8 @@ checkTest client settings prop = do
       readCapture =
         readIORef capRef
           <&> fmap \(e, notes) msg ->
-            let (message, loc) = failureDetails msg e
-             in Counterexample {message, notes, loc}
+            let (message, loc, diff) = failureDetails msg e
+             in Counterexample {message, notes, loc, diff}
   runTestWith client settings (propertyAction prop) capturing readCapture
 
 -- | Shared @run_test@ scaffold: issue the command, drive the event loop with

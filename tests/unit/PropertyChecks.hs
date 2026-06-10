@@ -9,6 +9,7 @@ import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Hegel (Gen)
+import Hegel.Diff (LineDiff (..))
 import Hegel.Gen qualified as Gen
 import Hegel.Property
   ( annotate,
@@ -22,7 +23,7 @@ import Hegel.Property
     hoist,
     (===),
   )
-import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), Stats (..))
+import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), Stats (..), renderReport)
 import Hegel.Settings (defaultSettings)
 import Test.Hspec
 import TestRunner (Checker, checkWith)
@@ -102,13 +103,21 @@ spec checker = do
           other -> expectationFailure ("expected two notes, got: " <> show other)
       other -> expectationFailure ("expected a counterexample, got: " <> show other)
 
-  it "carries (===) diffs into the counterexample message" $ do
+  it "carries (===) diffs into the counterexample diff field" $ do
     report <- checkWith checker defaultSettings do
       x <- forAll (intR (0, 100))
       x === x + 1
     case report.result of
-      Counterexample {message} ->
-        T.lines message `shouldBe` ["=== failed", "- 0", "+ 1"]
+      Counterexample {message, diff} -> do
+        message `shouldBe` "=== failed"
+        -- Structural diff: two integers are one-liners so they diff as
+        -- a removed/added pair, not a structural field diff.
+        diff `shouldBe` Just [LineRemoved "0", LineAdded "1"]
+        -- The rendered report carries the diff lines with -/+ prefixes.
+        T.lines (renderReport report)
+          `shouldSatisfy` any ("  - 0" ==)
+        T.lines (renderReport report)
+          `shouldSatisfy` any ("  + 1" ==)
       other -> expectationFailure ("expected a counterexample, got: " <> show other)
 
   it "hoists application monads and lifts base actions" $ do
