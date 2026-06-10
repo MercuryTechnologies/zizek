@@ -21,6 +21,7 @@ module Hegel
 
     -- * Settings and reports
     module Hegel.Settings,
+    module Hegel.Database,
     module Hegel.Report,
     module Hegel.Phase,
 
@@ -30,6 +31,7 @@ module Hegel
 where
 
 import Hegel.Assertion
+import Hegel.Database
 import Hegel.Gen.Internal (Gen)
 import Hegel.Native.Runner (runProperty, runPropertyWith)
 import Hegel.Phase

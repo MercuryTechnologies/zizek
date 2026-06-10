@@ -5,10 +5,14 @@ module Hegel.Native.Settings
 where
 
 import Data.Bits ((.|.))
+import Data.ByteString qualified as BS
+import Data.Foldable (for_)
+import Data.Text.Encoding (encodeUtf8)
 import Data.Word (Word32)
 import Foreign (Ptr)
 import Foreign.C.String (withCString)
 import Foreign.C.Types (CBool (..))
+import Hegel.Database (Database (..))
 import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Native.FFI
 import Hegel.Phase (Phase (..))
@@ -22,15 +26,18 @@ applySettings s ptr = do
   case s.seed of
     Just seed -> hegel_settings_seed ptr seed (CBool 1)
     Nothing -> hegel_settings_seed ptr 0 (CBool 0)
-  -- NOTE: derandomize derives the seed from a hash of the database key, but we
-  -- disable the database below and never set a database key, so as configured
-  -- it has no effect; once the database is implemented this can be enabled
-  -- properly.
   hegel_settings_derandomize ptr (boolC s.derandomize)
   hegel_settings_report_multiple_failures ptr (boolC s.reportMultipleFailures)
   hegel_settings_phases ptr (phasesBitmask s.phases)
   hegel_settings_suppress_health_check ptr (hcBitmask s.suppressHealthCheck)
-  withCString "" (hegel_settings_database ptr)
+  -- "" disables the store; skipping the call leaves the engine default
+  -- (.hegel/ under the cwd).
+  case s.database of
+    DatabaseDefault -> pure ()
+    DatabaseDisabled -> withCString "" (hegel_settings_database ptr)
+    DatabaseDirectory p -> withCString p (hegel_settings_database ptr)
+  for_ s.databaseKey \key ->
+    BS.useAsCString (encodeUtf8 key) (hegel_settings_database_key ptr)
 
 boolC :: Bool -> CBool
 boolC b = CBool (if b then 1 else 0)

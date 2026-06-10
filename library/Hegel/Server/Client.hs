@@ -19,8 +19,10 @@ import Data.Functor (($>), (<&>))
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding (encodeUtf8)
 import Data.Word (Word32, Word64)
 import Hegel.Assertion (originOf)
+import Hegel.Database (Database (..))
 import Hegel.Gen.Internal (AssumeRejected (..))
 import Hegel.HealthCheck qualified as HealthCheck
 import Hegel.Phase qualified as Phase
@@ -31,7 +33,10 @@ import Hegel.Protocol.Cbor
     asWord32,
     asWord64,
     buildMap,
+    bytesVal,
     lookupKey,
+    nullVal,
+    textVal,
     (.=),
   )
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..))
@@ -126,18 +131,25 @@ runTestWith ::
 runTestWith client settings action finalAction readCapture = do
   (testSid, testQ) <- newStream client.connection
   testStream <- mkStream client.connection testSid testQ
-  let runTestMsg =
-        buildMap
+  let -- The server distinguishes an absent @database@ field (use the engine
+      -- default store) from an explicit null (disable persistence).
+      databaseField = case settings.database of
+        DatabaseDefault -> []
+        DatabaseDisabled -> [("database", nullVal)]
+        DatabaseDirectory p -> [("database", textVal (T.pack p))]
+      runTestMsg =
+        buildMap $
           [ "command" .= ("run_test" :: Text),
             "test_cases" .= settings.testCases,
             "seed" .= settings.seed,
             "stream_id" .= testSid,
-            "database_key" .= (),
+            ("database_key", maybe nullVal (bytesVal . encodeUtf8) settings.databaseKey),
             "derandomize" .= settings.derandomize,
             "report_multiple_failures" .= settings.reportMultipleFailures,
             "suppress_health_check" .= fmap HealthCheck.toWire settings.suppressHealthCheck,
             "phases" .= fmap Phase.toWire settings.phases
           ]
+            <> databaseField
   result <- requestCbor client.control runTestMsg
   case result of
     Bool True -> pure ()

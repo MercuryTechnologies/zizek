@@ -80,6 +80,7 @@ library
     Hegel
     Hegel.Assertion
     Hegel.Collection
+    Hegel.Database
     Hegel.Gen
     Hegel.Gen.Binary
     Hegel.Gen.Bool
@@ -297,6 +298,7 @@ test-suite unit
   -- cabal-gild: discover tests/unit --exclude=tests/unit/Main.hs
   other-modules:
     BasicProperties
+    DatabaseReplay
     GeneratorSchemas
     Integrations
     PipelinedRequests

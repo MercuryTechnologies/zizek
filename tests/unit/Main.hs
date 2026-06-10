@@ -1,6 +1,7 @@
 module Main (main) where
 
 import BasicProperties qualified
+import DatabaseReplay qualified
 import GeneratorSchemas qualified
 import Integrations qualified
 import PipelinedRequests qualified
@@ -28,6 +29,7 @@ buildBackendTree name runner checker = do
   schemas <- testSpec "generator schemas" (GeneratorSchemas.spec runner)
   standards <- testSpec "standard generators" (StandardGenerators.spec runner)
   properties <- testSpec "property monad" (PropertyChecks.spec checker)
+  replay <- testSpec "database replay" (DatabaseReplay.spec name checker)
 
   serverOnly <-
     if name == "server"
@@ -38,4 +40,4 @@ buildBackendTree name runner checker = do
         pure [recovery, pipelined, unsupported]
       else pure []
 
-  pure $ testGroup name ([basics, schemas, standards, properties] <> serverOnly)
+  pure $ testGroup name ([basics, schemas, standards, properties, replay] <> serverOnly)

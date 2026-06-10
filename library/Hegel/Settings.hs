@@ -5,7 +5,9 @@ module Hegel.Settings
   )
 where
 
+import Data.Text (Text)
 import Data.Word (Word64)
+import Hegel.Database (Database (..))
 import Hegel.HealthCheck (HealthCheck)
 import Hegel.Phase (Phase (..))
 
@@ -15,9 +17,16 @@ data Settings = Settings
     testCases :: !Int,
     -- | RNG seed. 'Nothing' picks a fresh seed each run.
     seed :: !(Maybe Word64),
-    -- | Use a fixed, source-derived seed so failures reproduce; ignored when
-    -- 'seed' is set.
+    -- | Derive the seed from a hash of 'databaseKey' so runs are
+    -- deterministic without an explicit seed.
+    --
+    -- Ignored when 'seed' is set; only meaningful when 'databaseKey' is set.
     derandomize :: !Bool,
+    -- | Where failing examples are persisted for replay.
+    database :: !Database,
+    -- | Stable per-test identity inside the 'database'; replay only works
+    -- when the same key is supplied on every run.
+    databaseKey :: !(Maybe Text),
     -- | Phases the engine should execute, in order.
     phases :: ![Phase],
     -- | When 'True', the engine collects every distinct failure instead of
@@ -38,6 +47,10 @@ instance Show Settings where
         . shows s.seed
         . showString ", derandomize = "
         . shows s.derandomize
+        . showString ", database = "
+        . shows s.database
+        . showString ", databaseKey = "
+        . shows s.databaseKey
         . showString ", phases = "
         . shows s.phases
         . showString ", reportMultipleFailures = "
@@ -47,7 +60,7 @@ instance Show Settings where
         . showString ", perCaseFinalizer = <<function>>}"
 
 -- | Defaults for a property run: 100 test cases, a fresh seed each run,
--- all phases enabled, and no per-case finalizer.
+-- all phases enabled, persistence disabled, and no per-case finalizer.
 --
 -- > defaultSettings { testCases = 1000 }
 defaultSettings :: Settings
@@ -56,6 +69,8 @@ defaultSettings =
     { testCases = 100,
       seed = Nothing,
       derandomize = False,
+      database = DatabaseDisabled,
+      databaseKey = Nothing,
       phases = [Explicit, Reuse, Generate, Target, Shrink],
       reportMultipleFailures = False,
       suppressHealthCheck = [],

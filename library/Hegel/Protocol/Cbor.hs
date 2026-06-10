@@ -12,6 +12,7 @@ module Hegel.Protocol.Cbor
 
     -- * Constructors
     textVal,
+    bytesVal,
     intVal,
     floatVal,
     doubleVal,
@@ -31,6 +32,7 @@ where
 import CBOR.Class (ToCBOR (..))
 import CBOR.Value (Value (..))
 import Control.Exception (Exception)
+import Data.ByteString qualified as BS
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8')
 import Data.Vector qualified as V
@@ -87,6 +89,9 @@ infixr 8 .=?
 
 textVal :: Text -> Value
 textVal = TextString
+
+bytesVal :: BS.ByteString -> Value
+bytesVal = ByteString
 
 intVal :: (Integral a) => a -> Value
 intVal n
