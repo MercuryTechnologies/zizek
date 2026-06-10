@@ -83,9 +83,11 @@ instance Exception UnsupportedCapability
 data Status
   = -- | The case completed successfully.
     Valid
-  | -- | The case was deliberately discarded.
+  | -- | The case was deliberately discarded (an assume\/filter rejection).
+    -- Runners tally these as invalid cases, distinct from 'Overrun'.
     Invalid
-  | -- | The case ran out of entropy mid-generation.
+  | -- | The case ran out of entropy mid-generation. Not counted as a
+    -- rejection; it is a budget-exhaustion signal (e.g. a shrink probe).
     Overrun
   | -- | The case failed; the payload is the origin string used for
     -- deduplication.

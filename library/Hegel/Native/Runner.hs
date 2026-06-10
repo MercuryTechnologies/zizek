@@ -18,7 +18,7 @@ import Hegel.Native.Settings (applySettings)
 import Hegel.Native.TestCase (mkReplayTestCase, mkTestCase)
 import Hegel.Outcome (Outcome (..), Stats (..))
 import Hegel.Settings (Settings (..))
-import Hegel.TestCase (Status (..), TestStopped (..), markComplete)
+import Hegel.TestCase (Status (..), TestCase, TestStopped (..), markComplete)
 import UnliftIO.Exception (Handler (..), catches, finally, tryAny)
 
 -- | Run a property using the native @libhegel@ backend.
@@ -47,7 +47,7 @@ runProperty settings gen body =
     go = withSettings \s -> do
       applySettings settings s
       (nValid, nInvalid, mFailure) <- withRun s \run -> do
-        (nv, ni) <- driveLoop settings gen body run
+        (nv, ni) <- driveLoop settings (\tc -> draw tc gen >>= body) run
         -- The failure record is borrowed from the run handle and only valid
         -- until hegel_run_free (called by withRun on bracket exit), so read
         -- and copy it out before returning from the lambda.
@@ -134,59 +134,57 @@ reconstruct s gen blob msg =
 
 driveLoop ::
   Settings ->
-  Gen a ->
-  (a -> IO ()) ->
+  (TestCase -> IO ()) ->
   Ptr HegelRun ->
   IO (Int, Int)
-driveLoop settings gen body run = loop 0 0
+driveLoop settings action run = loop 0 0
   where
     loop !nValid !nInvalid = do
       tcPtr <- hegel_next_test_case run
       if tcPtr == nullPtr
         then pure (nValid, nInvalid)
         else
-          runCase settings gen body tcPtr >>= \case
-            CaseValid -> loop (nValid + 1) nInvalid
-            CaseInvalid -> loop nValid (nInvalid + 1)
+          runCase settings action tcPtr >>= \case
+            Valid -> loop (nValid + 1) nInvalid
+            -- 'Invalid' is reserved for assume\/filter rejections; it feeds
+            -- 'Stats.invalid'.
+            Invalid -> loop nValid (nInvalid + 1)
             -- A failure (counted via the run result) or an overrun (a
             -- budget-exhausted shrink probe) — neither is a valid example
             -- nor an assume\/filter rejection, so it affects neither tally.
-            CaseInteresting -> loop nValid nInvalid
-            CaseOverrun -> loop nValid nInvalid
+            Interesting _ -> loop nValid nInvalid
+            Overrun -> loop nValid nInvalid
 
--- | Outcome of running one engine-produced test case. 'CaseInvalid' is
--- reserved for assume\/filter rejections (it feeds 'Stats.invalid');
--- 'CaseOverrun' is a separate budget-exhaustion signal that is /not/ counted
--- as invalid.
-data CaseResult = CaseValid | CaseInvalid | CaseInteresting | CaseOverrun
-
+-- | Run one engine-produced test case: execute the per-case action against a
+-- live 'TestCase', classify how it finished, and report that 'Status' to the
+-- engine.
+--
+-- The classification covers the whole action, draw and body alike, so a
+-- discard ('AssumeRejected') or budget stop ('TestStopped') raised at any
+-- point is honoured — this is what lets a property body interleave its own
+-- draws with test logic.
+--
+-- The handlers only classify; 'markComplete' runs once, outside the 'catches'
+-- scope, so an engine error raised while reporting (a 'HegelError') propagates
+-- to 'runProperty''s outer handler instead of being misread as a test failure.
 runCase ::
   Settings ->
-  Gen a ->
-  (a -> IO ()) ->
+  (TestCase -> IO ()) ->
   Ptr HegelTestCase ->
-  IO CaseResult
-runCase settings gen body tcPtr =
+  IO Status
+runCase settings action tcPtr =
   run `finally` settings.perCaseFinalizer
   where
     tc = mkTestCase tcPtr
     run = do
-      eVal <-
-        (Right <$> draw tc gen)
-          `catches` [ Handler \AssumeRejected ->
-                        markComplete tc Invalid $> Left CaseInvalid,
+      status <-
+        (action tc $> Valid)
+          `catches` [ Handler \AssumeRejected -> pure Invalid,
                       -- libhegel owns the choice budget but does not observe
                       -- that we stopped, so report Overrun explicitly to let
                       -- the engine shrink.
-                      Handler \TestStopped ->
-                        markComplete tc Overrun $> Left CaseOverrun,
-                      Handler \(e :: SomeException) ->
-                        markComplete tc (Interesting (originOf e)) $> Left CaseInteresting
+                      Handler \TestStopped -> pure Overrun,
+                      Handler \(e :: SomeException) -> pure (Interesting (originOf e))
                     ]
-      case eVal of
-        Left r -> pure r
-        Right val -> do
-          eRes <- tryAny (body val)
-          case eRes of
-            Right () -> markComplete tc Valid $> CaseValid
-            Left exc -> markComplete tc (Interesting (originOf exc)) $> CaseInteresting
+      markComplete tc status
+      pure status

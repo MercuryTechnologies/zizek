@@ -14,7 +14,9 @@ import CBOR.Encode qualified as CE
 import CBOR.Value (Value (..))
 import Control.Exception (SomeException, toException)
 import Data.ByteString.Char8 qualified as BS8
+import Data.Foldable (for_)
 import Data.Functor (($>))
+import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Word (Word32, Word64)
@@ -45,9 +47,9 @@ import Hegel.Server.Protocol.Stream
   )
 import Hegel.Server.TestCase (mkTestCase)
 import Hegel.Settings (Settings (..))
-import Hegel.TestCase (Status (..), TestStopped (..), UnsupportedCapability, markComplete)
+import Hegel.TestCase (Status (..), TestCase, TestStopped (..), UnsupportedCapability, markComplete)
 import Text.Read (readMaybe)
-import UnliftIO.Exception (Handler (..), catches, finally, throwIO, tryAny)
+import UnliftIO.Exception (Handler (..), catches, finally, throwIO)
 
 encodeAck :: Value -> BS8.ByteString
 encodeAck v = CE.encode (buildMap ["result" .= v])
@@ -90,6 +92,7 @@ runTest ::
 runTest client settings gen body = do
   (testSid, testQ) <- newStream client.connection
   testStream <- mkStream client.connection testSid testQ
+  let action tc = draw tc gen >>= body
   let runTestMsg =
         buildMap
           [ "command" .= ("run_test" :: Text),
@@ -108,9 +111,19 @@ runTest client settings gen body = do
     other -> throwIO (UnexpectedReply "run_test" other)
   flip finally (closeStream testStream) do
     (results, nInteresting, nInvalid) <-
-      runEventLoop testStream client.connection gen body settings.perCaseFinalizer
-    interpretResults results nInteresting nInvalid $
-      replayFinalCases testStream client.connection (fromIntegral nInteresting) (fromIntegral nInvalid) gen body settings.perCaseFinalizer
+      runEventLoop testStream client.connection action settings.perCaseFinalizer
+    interpretResults results nInteresting nInvalid do
+      -- Counterexample capture, scoped to the replay phase (the only reader).
+      -- The capturing action resets the ref at case start so a failure during
+      -- the draw itself can never pair a stale value from an earlier final
+      -- case with a new failure.
+      drawnRef <- newIORef Nothing
+      let capturingAction tc = do
+            writeIORef drawnRef Nothing
+            val <- draw tc gen
+            writeIORef drawnRef (Just val)
+            body val
+      replayFinalCases testStream client.connection (fromIntegral nInteresting) (fromIntegral nInvalid) capturingAction (readIORef drawnRef) settings.perCaseFinalizer
 
 interpretResults ::
   Value -> Word64 -> Word64 -> IO (Outcome a) -> IO (Outcome a)
@@ -126,41 +139,45 @@ interpretResults results nInteresting nInvalid replay
   where
     nValid = maybe 0 id (lookupKey "valid_test_cases" results >>= asWord64)
 
-data CaseResult a = CaseValid | CaseInvalid | CaseInteresting !Text !(Maybe a)
-
-runCase :: forall a. Connection -> Word32 -> Gen a -> (a -> IO ()) -> IO () -> IO (CaseResult a)
-runCase conn sid gen body finalizer = run `finally` finalizer
+-- | Run one server-announced test case: execute the per-case action against a
+-- live 'TestCase', classify how it finished, and report the resulting 'Status'
+-- to the server. Returns the failure origin when the case was marked
+-- interesting, 'Nothing' otherwise — the only distinction any caller consumes.
+--
+-- The classification covers the whole action, draw and body alike, so a
+-- discard ('AssumeRejected') raised at any point marks the case 'Invalid'.
+-- The handlers only classify; 'markComplete' runs once, outside the 'catches'
+-- scope, so a protocol error raised while reporting propagates to
+-- 'runTest''s caller instead of being misread as a test failure.
+runCase :: Connection -> Word32 -> (TestCase -> IO ()) -> IO () -> IO (Maybe Text)
+runCase conn sid action finalizer = run `finally` finalizer
   where
     run = do
       (_, caseQ) <- connectStream conn sid
       caseStream <- mkStream conn sid caseQ
       let tc = mkTestCase caseStream
-      eVal <-
-        (Right <$> draw tc gen)
-          `catches` [ Handler \AssumeRejected -> markComplete tc Invalid $> Left Nothing,
+      mStatus <-
+        (action tc $> Just Valid)
+          `catches` [ Handler \AssumeRejected -> pure (Just Invalid),
                       -- The server tracks the choice budget itself, so a stop
-                      -- needs no acknowledgement; just discard the case.
-                      Handler \TestStopped -> pure (Left Nothing),
+                      -- needs no acknowledgement; just discard the case. (Any
+                      -- stop raised by a protocol request has already closed
+                      -- the case stream via that request's onException.)
+                      Handler \TestStopped -> pure Nothing,
                       -- Not a counterexample: a generator used a primitive this
                       -- backend lacks. Let it propagate to runPropertyOn, which
                       -- maps it to Errored. Must precede the SomeException
                       -- handler, which would otherwise swallow it as a failure.
                       Handler \(e :: UnsupportedCapability) -> throwIO e,
-                      Handler \(e :: SomeException) -> pure (Left (Just e))
+                      Handler \(e :: SomeException) -> pure (Just (Interesting (originOf e)))
                     ]
-      case eVal of
-        Left Nothing -> pure CaseInvalid
-        Left (Just exc) -> do
-          markComplete tc (Interesting (originOf exc))
-          pure (CaseInteresting (originOf exc) Nothing)
-        Right val -> do
-          eRes <- tryAny (body val)
-          case eRes of
-            Right () -> markComplete tc Valid >> pure CaseValid
-            Left exc -> markComplete tc (Interesting (originOf exc)) >> pure (CaseInteresting (originOf exc) (Just val))
+      for_ mStatus (markComplete tc)
+      pure case mStatus of
+        Just (Interesting origin) -> Just origin
+        _ -> Nothing
 
-runEventLoop :: Stream -> Connection -> Gen a -> (a -> IO ()) -> IO () -> IO (Value, Word64, Word64)
-runEventLoop testStream conn gen body finalizer = go
+runEventLoop :: Stream -> Connection -> (TestCase -> IO ()) -> IO () -> IO (Value, Word64, Word64)
+runEventLoop testStream conn action finalizer = go
   where
     go = do
       (evId, ev) <- awaitEvent testStream
@@ -168,7 +185,7 @@ runEventLoop testStream conn gen body finalizer = go
         TestCaseEvent _ True -> throwIO (ProtocolStateViolation "unexpected is_final=true during main loop")
         TestCaseEvent sid False -> do
           writeReply testStream evId (encodeAck Null)
-          _ <- runCase conn sid gen body finalizer
+          _ <- runCase conn sid action finalizer
           go
         TestDoneEvent results -> do
           writeReply testStream evId (encodeAck (Bool True))
@@ -194,8 +211,8 @@ awaitEvent s = do
     Just other -> throwIO (UnknownEvent other)
   pure (evId, ev)
 
-replayFinalCases :: Stream -> Connection -> Int -> Int -> Gen a -> (a -> IO ()) -> IO () -> IO (Outcome a)
-replayFinalCases testStream conn n nInvalid gen body finalizer = go n Nothing
+replayFinalCases :: Stream -> Connection -> Int -> Int -> (TestCase -> IO ()) -> IO (Maybe a) -> IO () -> IO (Outcome a)
+replayFinalCases testStream conn n nInvalid action readDrawn finalizer = go n Nothing
   where
     go 0 mFail = pure $ case mFail of
       Just (v, msg) -> Failed {counterexample = v, message = msg, notes = []}
@@ -205,12 +222,15 @@ replayFinalCases testStream conn n nInvalid gen body finalizer = go n Nothing
       case ev of
         TestCaseEvent sid True -> do
           writeReply testStream evId (encodeAck Null)
-          result <- runCase conn sid gen body finalizer
-          case result of
-            CaseValid -> go (k - 1) mFail
-            CaseInvalid -> go (k - 1) mFail
-            CaseInteresting _ Nothing -> go (k - 1) mFail
-            CaseInteresting msg (Just v) -> go (k - 1) (Just (v, msg))
+          runCase conn sid action finalizer >>= \case
+            Nothing -> go (k - 1) mFail
+            Just msg ->
+              -- 'readDrawn' yields the value the action captured before the
+              -- failure; a failure during the draw itself captures nothing,
+              -- in which case keep any counterexample from an earlier case.
+              readDrawn >>= \case
+                Just v -> go (k - 1) (Just (v, msg))
+                Nothing -> go (k - 1) mFail
         TestCaseEvent _ False -> throwIO (ProtocolStateViolation "expected is_final=true")
         TestDoneEvent _ -> throwIO (ProtocolStateViolation "unexpected test_done during replay")
 
