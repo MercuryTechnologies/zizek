@@ -9,59 +9,58 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Vector qualified as V
+import Hegel (prop)
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), materialize, schemaArity, toBasic)
 import Hegel.Protocol.Cbor (ParseError (..))
 import Hegel.Schema qualified as Schema
-import Hegel.Settings (defaultSettings)
 import Test.Hspec
-import TestRunner (Runner, runWith_)
 
 intR :: (Int, Int) -> Gen Int
 intR (lo, hi) = Gen.integral & Gen.min lo & Gen.max hi & Gen.build
 
-spec :: Runner -> Spec
-spec r = do
+spec :: Spec
+spec = do
   it "pure yields the constant value" $ do
-    runWith_ r defaultSettings (pure (42 :: Int)) (`shouldBe` 42)
+    prop (pure (42 :: Int)) (`shouldBe` 42)
 
   it "ap of two basics generates pairs from different generator types" $ do
-    runWith_ r defaultSettings ((,) <$> (Gen.bool & Gen.build) <*> intR (0, 10)) $ \(_, n) ->
+    prop ((,) <$> (Gen.bool & Gen.build) <*> intR (0, 10)) $ \(_, n) ->
       n `shouldSatisfy` (\x -> x >= 0 && x <= 10)
 
   it "ap (pure f) g uses single-leaf optimisation" $ do
-    runWith_ r defaultSettings (pure (+ 1) <*> intR (0, 10)) $ \n ->
+    prop (pure (+ 1) <*> intR (0, 10)) $ \n ->
       n `shouldSatisfy` (\x -> x >= 1 && x <= 11)
 
   it "ap g (pure a) uses single-leaf optimisation without TUPLE span" $ do
-    runWith_ r defaultSettings (fmap const (Gen.filtered even (intR (0, 20))) <*> pure ()) $ \n -> do
+    prop (fmap const (Gen.filtered even (intR (0, 20))) <*> pure ()) $ \n -> do
       n `shouldSatisfy` even
       n `shouldSatisfy` (\x -> x >= 0 && x <= 20)
 
   it "fmap fuses: fmap f (fmap g x) = fmap (f . g) x" $ do
-    runWith_ r defaultSettings (fmap (+ 1) (fmap (* 2) (intR (0, 10)))) $ \n -> do
+    prop (fmap (+ 1) (fmap (* 2) (intR (0, 10)))) $ \n -> do
       n `shouldSatisfy` (\x -> x >= 1 && x <= 21)
       n `shouldSatisfy` odd
 
   it "oneOf of all-basic generators uses oneOfSchema" $ do
-    runWith_ r defaultSettings (Gen.oneOf [intR (0, 10), intR (20, 30)]) $ \n ->
+    prop (Gen.oneOf [intR (0, 10), intR (20, 30)]) $ \n ->
       n `shouldSatisfy` (\x -> (x >= 0 && x <= 10) || (x >= 20 && x <= 30))
 
   it "nested ap + oneOf produces correct schema nesting" $ do
-    runWith_ r defaultSettings ((,) <$> Gen.oneOf [intR (0, 5), intR (10, 15)] <*> intR (0, 10)) $ \(a, b) -> do
+    prop ((,) <$> Gen.oneOf [intR (0, 5), intR (10, 15)] <*> intR (0, 10)) $ \(a, b) -> do
       a `shouldSatisfy` (\x -> (x >= 0 && x <= 5) || (x >= 10 && x <= 15))
       b `shouldSatisfy` (\x -> x >= 0 && x <= 10)
 
   it "monadic bind falls back to FLAT_MAP span" $ do
-    runWith_ r defaultSettings (intR (0, 5) >>= \lo -> intR (lo, lo + 5)) $ \n ->
+    prop (intR (0, 5) >>= \lo -> intR (lo, lo + 5)) $ \n ->
       n `shouldSatisfy` (\x -> x >= 0 && x <= 10)
 
   it "monadic bind from Bool selects between integer ranges" $ do
-    runWith_ r defaultSettings ((Gen.bool & Gen.build) >>= \b -> intR (if b then (0, 5) else (10, 15))) $ \n ->
+    prop ((Gen.bool & Gen.build) >>= \b -> intR (if b then (0, 5) else (10, 15))) $ \n ->
       n `shouldSatisfy` (\x -> (x >= 0 && x <= 5) || (x >= 10 && x <= 15))
 
   it "filtered discards values that fail the predicate" $ do
-    runWith_ r defaultSettings (Gen.filtered even (intR (0, 20))) $ \n ->
+    prop (Gen.filtered even (intR (0, 20))) $ \n ->
       n `shouldSatisfy` even
 
   it "assume discards test cases that violate the assumption" $ do
@@ -69,7 +68,7 @@ spec r = do
           n <- intR (0, 20)
           Gen.assume (n /= 7)
           pure n
-    runWith_ r defaultSettings g $ \n ->
+    prop g $ \n ->
       n `shouldNotBe` 7
 
   -- Pure structural tests — no runner needed.
@@ -159,18 +158,14 @@ spec r = do
         Nothing -> expectationFailure "expected basic generator for list of basic elements"
 
     it "basic path with size bounds: respects min and max" $ do
-      runWith_
-        r
-        defaultSettings
+      prop
         (Gen.list elemGen & Gen.minSize 1 & Gen.maxSize 5 & Gen.build)
         $ \xs -> do
           length xs `shouldSatisfy` (>= 1)
           length xs `shouldSatisfy` (<= 5)
 
     it "basic path with unique: produces distinct elements" $ do
-      runWith_
-        r
-        defaultSettings
+      prop
         ( Gen.list (Gen.int & Gen.min 0 & Gen.max 1000 & Gen.build)
             & Gen.minSize 3
             & Gen.maxSize 10
@@ -181,9 +176,7 @@ spec r = do
           length xs `shouldBe` length (nub xs)
 
     it "non-basic path: list of filtered elements exercises collection loop" $ do
-      runWith_
-        r
-        defaultSettings
+      prop
         ( Gen.list (Gen.filtered even elemGen)
             & Gen.minSize 1
             & Gen.maxSize 5
@@ -245,9 +238,7 @@ spec r = do
         Nothing -> expectationFailure "expected basic generator"
 
     it "basic path: produces distinct elements" $ do
-      runWith_
-        r
-        defaultSettings
+      prop
         (Gen.set (Gen.int & Gen.min 0 & Gen.max 1000 & Gen.build) & Gen.minSize 3 & Gen.maxSize 10 & Gen.build)
         $ \s ->
           length (nub (Set.toList s)) `shouldBe` length (Set.toList s)

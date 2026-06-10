@@ -1,4 +1,4 @@
--- | Smoke tests for the hspec and tasty integrations (native backend).
+-- | Smoke tests for the hspec and tasty integrations.
 module Integrations (spec, tastyTree) where
 
 import Data.Function ((&))

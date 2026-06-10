@@ -1,11 +1,10 @@
--- | Native-backend test suite.
+-- | Low-level FFI test suite.
 --
--- Exercises the raw @libhegel@ FFI binding end-to-end: driving runs, drawing
--- values (via the boolean schema directly and through the 'Hegel.Gen'
--- machinery), the failure+shrink cycle, and per-case completion semantics.
--- These talk to the FFI directly rather than going through
--- 'Hegel.Runner', so they live here rather than in the
--- backend-parameterized unit suite.
+-- Exercises the raw @libhegel@ C API directly: driving runs with CBOR schema
+-- bytes, calling @hegel_mark_complete@ by hand, the failure+shrink cycle, and
+-- per-case completion semantics. These tests work below 'Hegel.Runner' and
+-- 'Hegel.Property', complementing the library-behaviour tests in the unit
+-- suite.
 --
 -- Every sequence runs in a bound thread so that 'throwOnError' always reads
 -- 'hegel_last_error_message' on the OS thread that made the failing call, and
@@ -41,7 +40,7 @@ import Test.Tasty.Hspec (testSpec)
 import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 
 main :: IO ()
-main = defaultMain =<< testSpec "zizek:native" spec
+main = defaultMain =<< testSpec "zizek:ffi" spec
 
 spec :: Spec
 spec = do
@@ -125,7 +124,7 @@ rawCApiSpec = describe "raw C API" $ do
         passed `shouldSatisfy` (== 0)
 
 -- | Drive runs through the 'Hegel.Gen' machinery: 'mkTestCase', 'draw', and the
--- 'Hegel.TestCase' vtable rather than raw schema bytes.
+-- 'Hegel.TestCase' operations rather than raw schema bytes.
 genMachinerySpec :: Spec
 genMachinerySpec = describe "Gen machinery" $ do
   it "draws values within range" $ runInBoundThread $ do
@@ -182,11 +181,11 @@ completionSpec :: Spec
 completionSpec = describe "completion semantics" $
   -- A run-owned test case may be completed exactly once. A second
   -- 'TC.markComplete' is rejected by libhegel with a non-control-flow error
-  -- code, which the native vtable raises as a 'HegelError'. In
-  -- 'Hegel.Runner' such an error escapes the per-case @catches@ (the
-  -- handlers only classify; 'markComplete' runs outside them) and surfaces as
-  -- an 'Hegel.Report.Errored' abort rather than crashing the run; this pins
-  -- the premise that 'markComplete' genuinely throws.
+  -- code, and 'markComplete' raises a 'HegelError'. In 'Hegel.Runner' such
+  -- an error escapes the per-case @catches@ (the handlers only classify;
+  -- 'markComplete' runs outside them) and surfaces as an
+  -- 'Hegel.Report.Errored' abort rather than crashing the run; this pins the
+  -- premise that 'markComplete' genuinely throws.
   it "raises HegelError when a run-owned case is completed twice" $
     runInBoundThread $ do
       withSettings $ \s -> do

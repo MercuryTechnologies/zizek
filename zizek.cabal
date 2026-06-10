@@ -294,18 +294,16 @@ test-suite unit
     PropertyChecks
     ReportRendering
     StandardGenerators
-    TestBackends
-    TestRunner
 
   build-depends:
     hspec ^>=2.11,
     tasty-hspec ^>=1.2,
     zizek,
 
-test-suite native
+test-suite ffi
   import: library
   type: exitcode-stdio-1.0
-  hs-source-dirs: tests/native
+  hs-source-dirs: tests/ffi
   main-is: Main.hs
   ghc-options:
     -threaded
