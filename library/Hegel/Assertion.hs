@@ -10,9 +10,9 @@ module Hegel.Assertion
   )
 where
 
-import Control.Exception (Exception (displayException), SomeException (SomeException), fromException, throwIO)
+import Control.Exception (Exception (displayException), SomeException (SomeException), fromException)
 import Control.Monad (unless)
-import Control.Monad.IO.Class (MonadIO, liftIO)
+import Control.Monad.IO.Class (MonadIO)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -28,6 +28,7 @@ import GHC.Stack
 import GHC.Stack qualified as Stack
 import Hegel.Diff (Diff, diffLines, diffShown, renderDiff)
 import Hegel.Report (renderValue)
+import UnliftIO.Exception (throwIO)
 
 -- | Raised by 'assert' and 'failure'. Carries a user-supplied message, a
 -- captured 'CallStack', and an optional structural diff (set by '(===)').
@@ -52,14 +53,12 @@ instance Exception AssertionFailure where
 failure :: (HasCallStack, MonadIO m) => Text -> m a
 failure msg =
   withFrozenCallStack $
-    liftIO
-      ( throwIO
-          AssertionFailure
-            { message = msg,
-              callStack = Stack.callStack,
-              diff = Nothing
-            }
-      )
+    throwIO
+      AssertionFailure
+        { message = msg,
+          callStack = Stack.callStack,
+          diff = Nothing
+        }
 
 -- | Assert a condition; on 'False', fail with the given message and the
 -- captured call site.
@@ -76,19 +75,17 @@ x === y
   | x == y = pure ()
   | otherwise =
       withFrozenCallStack $
-        liftIO
-          ( throwIO
-              AssertionFailure
-                { message = "=== failed",
-                  callStack = Stack.callStack,
-                  diff =
-                    Just
-                      ( fromMaybe
-                          (diffLines (renderValue x) (renderValue y))
-                          (diffShown (renderValue x) (renderValue y))
-                      )
-                }
-          )
+        throwIO
+          AssertionFailure
+            { message = "=== failed",
+              callStack = Stack.callStack,
+              diff =
+                Just
+                  ( fromMaybe
+                      (diffLines (renderValue x) (renderValue y))
+                      (diffShown (renderValue x) (renderValue y))
+                  )
+            }
 
 -- | Assert two values differ.
 (/==) :: (HasCallStack, MonadIO m, Eq a, Show a) => a -> a -> m ()

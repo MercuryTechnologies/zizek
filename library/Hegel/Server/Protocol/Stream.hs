@@ -40,7 +40,6 @@ import Control.Concurrent.STM.TBQueue (TBQueue, readTBQueue)
 import Data.Bits (shiftL)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Sequence (Seq)
@@ -51,6 +50,7 @@ import Hegel.Server.Protocol.Connection (Connection, awaitServerExited, sendPack
 import Hegel.Server.Protocol.Error (ConnectionClosedError (..), ProtocolError (..), ServerError (..))
 import Hegel.Server.Protocol.Packet (Packet (..))
 import UnliftIO.Exception (finally, throwIO)
+import UnliftIO.IORef (IORef, newIORef, readIORef, writeIORef)
 
 closeStreamPayload :: ByteString
 closeStreamPayload = BS.singleton 0xFE

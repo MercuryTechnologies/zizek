@@ -2,13 +2,13 @@ module StandardGenerators (spec) where
 
 import Data.ByteString qualified as BS
 import Data.Function ((&))
-import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Text qualified as T
 import Hegel.Gen qualified as Gen
 import Hegel.Settings (Settings (..), defaultSettings)
 import Network.URI (uriScheme)
 import Test.Hspec
 import TestRunner (Runner, runWith_)
+import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
 
 spec :: Runner -> Spec
 spec r = do

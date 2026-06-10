@@ -23,7 +23,6 @@ import Control.Exception (SomeException, finally, throwIO, try)
 import Data.ByteString (ByteString)
 import Data.Either (isLeft)
 import Data.Function ((&))
-import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Word (Word64)
 import Foreign (Ptr, nullPtr)
 import Foreign.C.String (withCString)
@@ -39,6 +38,7 @@ import Hegel.TestCase qualified as TC
 import Test.Hspec
 import Test.Tasty (defaultMain)
 import Test.Tasty.Hspec (testSpec)
+import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 
 main :: IO ()
 main = defaultMain =<< testSpec "zizek:native" spec

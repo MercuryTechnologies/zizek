@@ -19,7 +19,6 @@ import Data.Aeson (FromJSON, Options (..), ToJSON, defaultOptions, eitherDecodeS
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BL
 import Data.Char (isUpper, toLower)
-import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Set qualified as Set
 import Hegel (Gen)
 import Hegel.Assertion (originOf)
@@ -33,6 +32,7 @@ import System.Exit (ExitCode (..), die, exitSuccess, exitWith)
 import System.IO (Handle, IOMode (..), hFlush, openFile)
 import System.IO.Unsafe (unsafePerformIO)
 import Text.Read (readMaybe)
+import UnliftIO.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 
 -- | Which backend the conformance binary should use.
 -- Controlled by the @HEGEL_BACKEND@ environment variable:

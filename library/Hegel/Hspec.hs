@@ -19,7 +19,6 @@ module Hegel.Hspec
   )
 where
 
-import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -41,6 +40,7 @@ import Hegel.Settings (defaultSettings)
 import System.Environment (lookupEnv)
 import System.IO (hIsTerminalDevice, stderr)
 import Test.Hspec.Core.Spec qualified as Hspec
+import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 
 -- | Pin an ambiguously-typed property block to @'PropertyT' IO ()@. This is
 -- 'id'; it exists purely so type inference succeeds in a bare @do@ block

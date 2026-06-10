@@ -52,7 +52,6 @@ The trim only fires when the server actually overshoots the declared
 maximum, which is rare.
 -}
 
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Text (Text)
 import Hegel.TestCase
   ( TestCase,
@@ -60,6 +59,7 @@ import Hegel.TestCase
     collectionReject,
     newCollection,
   )
+import UnliftIO.IORef (IORef, newIORef, readIORef, writeIORef)
 
 -- | Opaque handle to a backend-managed collection.
 data Collection = Collection

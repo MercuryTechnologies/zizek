@@ -16,7 +16,6 @@ import Control.Exception (SomeException, toException)
 import Data.ByteString.Char8 qualified as BS8
 import Data.Foldable (for_)
 import Data.Functor (($>), (<&>))
-import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
@@ -56,6 +55,7 @@ import Hegel.Settings (Settings (..))
 import Hegel.TestCase (Status (..), TestCase, TestStopped (..), UnsupportedCapability, markComplete)
 import Text.Read (readMaybe)
 import UnliftIO.Exception (Handler (..), catches, finally, throwIO)
+import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 
 encodeAck :: Value -> BS8.ByteString
 encodeAck v = CE.encode (buildMap ["result" .= v])

@@ -1,11 +1,9 @@
 -- | Smoke tests for the property monad ('check') on both backends.
 module PropertyChecks (spec) where
 
-import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ask, runReaderT)
 import Data.Function ((&))
-import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Hegel (Gen)
@@ -27,6 +25,7 @@ import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), Stats (
 import Hegel.Settings (defaultSettings)
 import Test.Hspec
 import TestRunner (Checker, checkWith)
+import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 
 intR :: (Int, Int) -> Gen Int
 intR (lo, hi) = Gen.integral & Gen.min lo & Gen.max hi & Gen.build
@@ -74,7 +73,7 @@ spec checker = do
     report <- checkWith checker defaultSettings do
       x <- forAll (intR (0, 1000))
       y <- forAll (intR (0, x))
-      liftIO (writeIORef capture (x, y))
+      writeIORef capture (x, y)
       assert (x + y < 100) "sum stays under threshold"
     case report.result of
       Counterexample {notes} -> do

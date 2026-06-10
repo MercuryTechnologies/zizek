@@ -30,12 +30,11 @@ module Hegel.Property.Internal
   )
 where
 
-import Control.Exception (SomeException, fromException, throwIO)
+import Control.Exception (SomeException, fromException)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Class (MonadTrans (..))
 import Control.Monad.Trans.Reader (ReaderT (..), ask)
 import Data.Foldable (toList)
-import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Sequence ((|>))
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
@@ -46,7 +45,8 @@ import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
 import Hegel.Report (Note (..), NoteKind (..), renderValue)
 import Hegel.TestCase (TestCase)
 import UnliftIO (MonadUnliftIO)
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (throwIO, tryAny)
+import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
 
 -- | The per-test-case environment a property runs against: the live test
 -- case (the engine's oracle for draws) and a journaling sink for 'Note's
@@ -139,7 +139,7 @@ assume cond = if cond then pure () else discard
 
 -- | Discard the current test case unconditionally.
 discard :: (MonadIO m) => m a
-discard = liftIO (throwIO AssumeRejected)
+discard = throwIO AssumeRejected
 
 -- * Runner hooks
 
