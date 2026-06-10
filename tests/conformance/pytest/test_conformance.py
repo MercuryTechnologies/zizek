@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from typing import Any
 
@@ -27,24 +26,19 @@ from hegel.conformance import (
 )
 
 from local_tests import (
+    CodecRestrictedTextConformance,
     FrequencyConformance,
-    NativeTextConformance,
     RegexFeatureConformance,
 )
 
 BIN_DIR = Path(__file__).parent / "bin"
-
-# Which backend the Haskell binaries are using.  The justfile sets this
-# explicitly; when absent (e.g. ad-hoc runs) the binaries default to native.
-_BACKEND = os.environ.get("HEGEL_BACKEND", "native")
-_NATIVE = _BACKEND == "native"
 
 INT32_MIN = -(2**31)
 INT32_MAX = 2**31 - 1
 INT64_MIN = -(2**63)
 INT64_MAX = 2**63 - 1
 
-# Tests that cannot pass under the native backend and are skipped there.
+# Tests tracked as WIP and skipped until libhegel widens its support.
 #
 # TextConformance: the conformance harness samples codec names from ALL_CODECS
 #   (all Python codec aliases recognised by `codecs`). libhegel only accepts
@@ -53,33 +47,33 @@ INT64_MAX = 2**63 - 1
 #   Since conformance.py is an external wheel we cannot narrow the codec
 #   strategy there.  TODO: re-enable once libhegel widens its codec vocabulary
 #   (hegeldev/hegel-rust).
-_NATIVE_SKIP: frozenset[str] = frozenset({"TextConformance"})
+_WIP_SKIP: frozenset[str] = frozenset({"TextConformance"})
 
 _TESTS: list[ConformanceTest] = [
-    BooleanConformance(BIN_DIR / "test-booleans", skip_server_metrics=_NATIVE),
-    BinaryConformance(BIN_DIR / "test-binary", skip_server_metrics=_NATIVE),
-    FloatConformance(BIN_DIR / "test-floats", skip_server_metrics=_NATIVE),
-    IntegerConformance(BIN_DIR / "test-integers", min_value=INT64_MIN, max_value=INT64_MAX, skip_server_metrics=_NATIVE),
-    IntegerConformance(BIN_DIR / "test-integers-narrow", min_value=INT32_MIN, max_value=INT32_MAX, skip_server_metrics=_NATIVE),
-    ListConformance(BIN_DIR / "test-list", skip_unique=True, skip_server_metrics=_NATIVE),
-    ListConformance(BIN_DIR / "test-set", skip_unique=False, skip_server_metrics=_NATIVE),
+    BooleanConformance(BIN_DIR / "test-booleans", skip_server_metrics=True),
+    BinaryConformance(BIN_DIR / "test-binary", skip_server_metrics=True),
+    FloatConformance(BIN_DIR / "test-floats", skip_server_metrics=True),
+    IntegerConformance(BIN_DIR / "test-integers", min_value=INT64_MIN, max_value=INT64_MAX, skip_server_metrics=True),
+    IntegerConformance(BIN_DIR / "test-integers-narrow", min_value=INT32_MIN, max_value=INT32_MAX, skip_server_metrics=True),
+    ListConformance(BIN_DIR / "test-list", skip_unique=True, skip_server_metrics=True),
+    ListConformance(BIN_DIR / "test-set", skip_unique=False, skip_server_metrics=True),
     DictConformance(
         BIN_DIR / "test-map",
         min_key=INT64_MIN,
         max_key=INT64_MAX,
         min_value=INT64_MIN,
         max_value=INT64_MAX,
-        skip_server_metrics=True,  # always: map doesn't use server metrics
+        skip_server_metrics=True,
     ),
-    OriginDeduplicationConformance(BIN_DIR / "test-origin-deduplication", skip_server_metrics=_NATIVE),
-    SampledFromConformance(BIN_DIR / "test-sampled-from", skip_server_metrics=_NATIVE),
-    OneOfConformance(BIN_DIR / "test-one-of", skip_server_metrics=_NATIVE),
-    TextConformance(BIN_DIR / "test-text", no_surrogates=True, skip_server_metrics=_NATIVE),
-    NativeTextConformance(BIN_DIR / "test-text", no_surrogates=True, skip_server_metrics=_NATIVE),
-    StopTestOnCollectionMoreConformance(BIN_DIR / "test-list", skip_server_metrics=True),  # always
-    StopTestOnNewCollectionConformance(BIN_DIR / "test-list", skip_server_metrics=True),  # always
-    FrequencyConformance(BIN_DIR / "test-frequency", skip_server_metrics=_NATIVE),
-    RegexFeatureConformance(BIN_DIR / "test-regex", skip_server_metrics=_NATIVE),
+    OriginDeduplicationConformance(BIN_DIR / "test-origin-deduplication", skip_server_metrics=True),
+    SampledFromConformance(BIN_DIR / "test-sampled-from", skip_server_metrics=True),
+    OneOfConformance(BIN_DIR / "test-one-of", skip_server_metrics=True),
+    TextConformance(BIN_DIR / "test-text", no_surrogates=True, skip_server_metrics=True),
+    CodecRestrictedTextConformance(BIN_DIR / "test-text", no_surrogates=True, skip_server_metrics=True),
+    StopTestOnCollectionMoreConformance(BIN_DIR / "test-list", skip_server_metrics=True),
+    StopTestOnNewCollectionConformance(BIN_DIR / "test-list", skip_server_metrics=True),
+    FrequencyConformance(BIN_DIR / "test-frequency", skip_server_metrics=True),
+    RegexFeatureConformance(BIN_DIR / "test-regex", skip_server_metrics=True),
 ]
 
 _SKIP_TESTS: list[type[ConformanceTest]] = [
@@ -99,10 +93,10 @@ def _cases() -> list[pytest.param]:
     for t in _TESTS:
         cls_name = type(t).__name__
         prefix = f"{cls_name}-{t.binary.name}" if counts[cls_name] > 1 else cls_name
-        native_skip = _NATIVE and cls_name in _NATIVE_SKIP
+        skip = cls_name in _WIP_SKIP
         marks = (
-            [pytest.mark.skip(reason="native backend: libhegel limitation; tracked as WIP")]
-            if native_skip
+            [pytest.mark.skip(reason="libhegel limitation; tracked as WIP")]
+            if skip
             else []
         )
         for mode in t.modes or [None]:

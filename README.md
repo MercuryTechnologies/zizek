@@ -335,9 +335,9 @@ $ just repl              # start a GHCi session with this library in-scope
 
 ### What's up with the name?
 
-Slavoj Žižek is a contemporary philosopher described as "Hegelo-Lacanian", and whose work deals largely with the implications of how our lives are driven by the unconscious fictions that we perceive as ideology.
+Slavoj Žižek is a contemporary philosopher described as "Hegelo-Lacanian", and whose work deals largely with the implications of how so much of human behavior is rooted in 'ideology'.
 
-Haskell programmers are stereotypically driven by an almost ideological obsession with correctness, which often finds itself at odds with the tools that are associated with more "pragmatically" minded languages like Python.
+Haskell programmers are often characterized as having an excessive (one might say _ideological_) fixation with correctness, which often finds itself at odds with the tools that are associated with more pragmatically-minded folk.
 
 So it seems appropriate that `zizek` is the mechanism by which we interface with `hegel`.
 
@@ -351,7 +351,7 @@ So it seems appropriate that `zizek` is the mechanism by which we interface with
 
 [Antithesis](https://antithesis.com/) for producing [`hegel-core`](https://github.com/hegeldev/hegel-core), [`hegel-rust`](https://github.com/hegeldev/hegel-rust), and the other Hegel libraries that were used as references during the development of `zizek`.
 
-[`hedgehog`](https://hackage.haskell.org/package/hedgehog), for acting as a fantastic reference API for ergonomically constructing generators.
+[`hedgehog`](https://hackage.haskell.org/package/hedgehog), for acting as a fantastic reference API property-based testing in Haskell.
 
 [`QuickCheck`](https://hackage.haskell.org/package/QuickCheck), for being the first property-based testing library I ever used and making it difficult to imagine building software without something like it.
 

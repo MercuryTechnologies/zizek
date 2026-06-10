@@ -41,8 +41,6 @@ clean:
 repl:
   cabal repl zizek
 
-# --- Stubs: implement when the underlying tooling lands. ---
-
 # Run hlint over the library + tests (add hlint to flake.nix:devShells first).
 lint:
   @echo "lint: not yet implemented — add hlint to flake.nix devShell and wire up here"
@@ -71,6 +69,8 @@ _conformance-build:
 # Run the Python conformance harness using the native backend.
 check-conformance: _conformance-build
   @pytest tests/conformance/pytest/ -n auto
+
+# --- Stubs: implement when the underlying tooling lands. ---
 
 # Build with coverage and produce a report (add hpc-codecov to flake.nix first).
 check-coverage:

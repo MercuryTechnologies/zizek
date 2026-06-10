@@ -7,14 +7,12 @@ module ConformanceUtils
     runConformanceProperty,
     runConformancePropertyExpectFailures,
     runConformancePropertyPaired,
-    writeEmptyMetrics,
     writeMetrics,
   )
 where
 
 import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
 import Control.Exception (SomeException, catch, finally, throwIO)
-import Control.Monad (unless)
 import Data.Aeson (FromJSON, Options (..), ToJSON, defaultOptions, eitherDecodeStrict', encode, object, (.=))
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BL
@@ -24,14 +22,14 @@ import Hegel (Gen)
 import Hegel.Assertion (originOf)
 import Hegel.Property (forEach)
 import Hegel.Report (Abort (..), Report (..), Result (..))
-import Hegel.Runner qualified as Native
+import Hegel.Runner qualified as Runner
 import Hegel.Settings (Settings (..), defaultSettings)
 import System.Environment (getArgs, getProgName, lookupEnv)
 import System.Exit (ExitCode (..), die, exitSuccess, exitWith)
 import System.IO (Handle, IOMode (..), hFlush, openFile)
 import System.IO.Unsafe (unsafePerformIO)
 import Text.Read (readMaybe)
-import UnliftIO.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
 
 _metricsHandle :: MVar (Maybe Handle)
 _metricsHandle = unsafePerformIO (newMVar Nothing)
@@ -94,11 +92,6 @@ writeMetrics v = do
       BL.hPut h (encode v <> "\n")
       hFlush h
 
--- | No-op: previously appended an empty JSON object for server metric pairing.
--- Retained for call-site compatibility; the native backend has no such pairing step.
-writeEmptyMetrics :: IO ()
-writeEmptyMetrics = pure ()
-
 -- | Force the generator into the compositional (non-basic) fallback path by
 -- wrapping it with a trivial monadic bind when @mode == "non_basic"@.
 --
@@ -116,7 +109,7 @@ runConformanceProperty gen body = run `finally` pure ()
   where
     run = do
       n <- getTestCases
-      report <- Native.check (defaultSettings {testCases = n}) (forEach gen body)
+      report <- Runner.check (defaultSettings {testCases = n}) (forEach gen body)
       case report.result of
         Ok -> exitSuccess
         GaveUp msg -> do
@@ -132,9 +125,8 @@ runConformanceProperty gen body = run `finally` pure ()
           putStrLn ("conformance health check failed: " <> show msg)
           exitWith (ExitFailure 1)
 
--- | Conformance runner that guarantees a client metric line per test case,
--- even when the generator rejects. The body returns @Just m@ to emit @m@ as
--- the case's metric, or @Nothing@ to skip.
+-- | Conformance runner whose body returns @Just m@ to emit @m@ as the case's
+-- metric, or @Nothing@ to skip.
 runConformancePropertyPaired ::
   forall a m.
   (Show a, ToJSON m) =>
@@ -146,17 +138,12 @@ runConformancePropertyPaired gen toMetric =
   where
     run = do
       n <- getTestCases
-      wroteRef <- newIORef False
       let body v = case toMetric v of
-            Just m -> writeMetrics m *> writeIORef wroteRef True
+            Just m -> writeMetrics m
             Nothing -> pure ()
-          finalizer = do
-            wrote <- readIORef wroteRef
-            unless wrote writeEmptyMetrics
-            writeIORef wroteRef False
       report <-
-        Native.check
-          (defaultSettings {testCases = n, perCaseFinalizer = finalizer})
+        Runner.check
+          (defaultSettings {testCases = n})
           (forEach gen body)
       case report.result of
         Ok -> exitSuccess
@@ -195,9 +182,9 @@ runConformancePropertyExpectFailures gen body = run `finally` pure ()
             body x `catch` \(e :: SomeException) -> do
               modifyIORef' seen (Set.insert (originOf e))
               throwIO e
-      report <- Native.check settings (forEach gen body')
+      report <- Runner.check settings (forEach gen body')
       distinct <- Set.size <$> readIORef seen
-      writeNativeRunMetrics distinct
+      writeInterestingCount distinct
       case report.result of
         Ok -> exitSuccess
         Counterexample {} -> exitSuccess
@@ -211,8 +198,8 @@ runConformancePropertyExpectFailures gen body = run `finally` pure ()
 
 -- | Write @{\"interesting_test_cases\": N}@ to @CONFORMANCE_SERVER_RUN_METRICS_FILE@.
 -- No-op when the env var is absent.
-writeNativeRunMetrics :: Int -> IO ()
-writeNativeRunMetrics n =
+writeInterestingCount :: Int -> IO ()
+writeInterestingCount n =
   lookupEnv "CONFORMANCE_SERVER_RUN_METRICS_FILE" >>= \case
     Nothing -> pure ()
     Just path -> do

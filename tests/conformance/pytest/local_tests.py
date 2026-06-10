@@ -73,7 +73,7 @@ class FrequencyConformance(ConformanceTest):
 
     The params strategy draws strictly-decreasing, unique weights so every
     adjacent pair has a well-defined expected rank — equal-weight ties would
-    be resolved by index position under the native engine, not by weight.
+    be resolved by index position under libhegel, not by weight.
     """
 
     default_test_cases = 300
@@ -226,26 +226,23 @@ class RegexFeatureConformance(ConformanceTest):
             )
 
 
-class NativeTextConformance(TextConformance):
+class CodecRestrictedTextConformance(TextConformance):
     """TextConformance restricted to the codec values libhegel recognises.
 
     The upstream ``TextConformance`` samples ``codec`` from ``ALL_CODECS``
-    (~100+ Python codec aliases). libhegel's native schema interpreter only
-    accepts ``"ascii"``, ``"latin-1"``/``"iso-8859-1"``, and ``"utf-8"``
-    (mapped to codepoint ranges [0,127], [0,255], and [0,0x10FFFF]
-    respectively); anything else returns ``HEGEL_E_INVALID_ARG``, causing
-    every test case to be rejected with "no valid examples found".
+    (~100+ Python codec aliases). libhegel's schema interpreter only accepts
+    ``"ascii"``, ``"latin-1"``/``"iso-8859-1"``, and ``"utf-8"`` (mapped to
+    codepoint ranges [0,127], [0,255], and [0,0x10FFFF] respectively); anything
+    else returns ``HEGEL_E_INVALID_ARG``, causing every test case to be
+    rejected with "no valid examples found".
 
     This subclass covers the same parameter space for size bounds, codepoint
     ranges, Unicode category filters, and include/exclude characters — just
     with the codec choice narrowed to ``["ascii", "latin-1", "utf-8"]``.  The
     inherited ``validate()`` method is unchanged, so the same per-codepoint
-    assertions apply.
-
-    Runs under both backends.  Under the server backend it exercises a useful
-    subset of the text parameter space on top of the (skipped-under-native)
-    upstream ``TextConformance``.  Surrogates are always excluded since
-    Haskell ``Text`` cannot represent them.
+    assertions apply.  It exercises a useful codec subset on top of the
+    WIP-skipped upstream ``TextConformance``.  Surrogates are always excluded
+    since Haskell ``Text`` cannot represent them.
     """
 
     def params_strategy(self) -> st.SearchStrategy[dict[str, Any]]:
