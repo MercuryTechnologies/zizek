@@ -144,14 +144,14 @@ When a later draw needs to look at an earlier one, each must be sequenced as par
 The `Hegel.Property` monad is the natural home for this: a property interleaves draws (`forAll`), effects, and assertions, and the engine shrinks across the whole interleaving. Each `forAll` is its own request, so a later draw can constrain itself with an earlier value, and `annotate` attaches context that shows up in the failure report:
 
 ```haskell
+import Data.Default.Class (def)
 import Data.Function ((&))
 import Hegel.Gen qualified as Gen
 import Hegel.Property (annotate, assert, check_, forAll)
-import Hegel.Settings (defaultSettings)
 
 prop_intervalOrdered :: IO ()
 prop_intervalOrdered =
-  check_ defaultSettings do
+  check_ def do
     lo <- forAll (Gen.int & Gen.min 0 & Gen.max 100  & Gen.build)
     hi <- forAll (Gen.int & Gen.min lo & Gen.max 100 & Gen.build)
     annotate "interval should be ordered"

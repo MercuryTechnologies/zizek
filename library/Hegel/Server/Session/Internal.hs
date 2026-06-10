@@ -18,6 +18,7 @@ module Hegel.Server.Session.Internal
 where
 
 import Control.Concurrent.Async (Async, async, cancel, link, waitCatch)
+import Data.Default.Class (Default (..))
 import Data.Foldable (for_)
 import Data.Function ((&))
 import Hegel.Server.Client (Client (..), newClient)
@@ -41,6 +42,10 @@ defaultSessionConfig =
       arguments = ["--verbosity", "normal"],
       environment = Nothing
     }
+
+-- | Alias for 'defaultSessionConfig'.
+instance Default SessionConfig where
+  def = defaultSessionConfig
 
 data LiveSession = LiveSession
   { client :: !Client,

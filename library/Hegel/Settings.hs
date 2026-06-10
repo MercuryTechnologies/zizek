@@ -5,6 +5,7 @@ module Hegel.Settings
   )
 where
 
+import Data.Default.Class (Default (..))
 import Data.Text (Text)
 import Data.Word (Word64)
 import Hegel.Database (Database (..))
@@ -76,3 +77,7 @@ defaultSettings =
       suppressHealthCheck = [],
       perCaseFinalizer = pure ()
     }
+
+-- | Alias for 'defaultSettings'.
+instance Default Settings where
+  def = defaultSettings

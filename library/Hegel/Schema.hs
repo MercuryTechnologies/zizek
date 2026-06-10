@@ -47,6 +47,7 @@ where
 
 import CBOR.Class (ToCBOR (..))
 import CBOR.Value (Value (..))
+import Data.Default.Class (Default (..))
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import Hegel.Protocol.Cbor (buildMap, (.=), (.=?))
@@ -177,6 +178,10 @@ defaultCharacterFields =
       includeCharacters = Nothing,
       excludeCharacters = Nothing
     }
+
+-- | Alias for 'defaultCharacterFields'.
+instance Default CharacterFields where
+  def = defaultCharacterFields
 
 -- Shared helper: emit the character-filtering entries for a CBOR map.
 charFieldEntries :: CharacterFields -> [(Text, Value)]

@@ -54,6 +54,7 @@ common library
     base ^>=4.20 || ^>=4.21 || ^>=4.22,
     bytestring ^>=0.12,
     containers ^>=0.7,
+    data-default-class ^>=0.2,
     digest ^>=0.0,
     hashable ^>=1.4 || ^>=1.5,
     hspec-core ^>=2.11,
