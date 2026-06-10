@@ -1,12 +1,11 @@
--- | Per-test-case vtable and native constructor.
+-- | Per-test-case handle and native operations.
 --
--- Defines the 'TestCase' record through which generators communicate with the
--- native @libhegel@ backend, plus the 'mkTestCase' and 'mkReplayTestCase'
--- constructors that wrap a C test-case pointer in that record.
+-- Defines 'TestCase' — a thin wrapper around a @hegel_test_case_t*@ pointer —
+-- and the operations through which generators communicate with the native
+-- @libhegel@ backend.
 module Hegel.TestCase
   ( -- * Construction
     mkTestCase,
-    mkReplayTestCase,
 
     -- * Test case
     TestCase (..),
@@ -30,9 +29,6 @@ module Hegel.TestCase
     Status (..),
     markComplete,
 
-    -- * Capabilities
-    UnsupportedCapability (..),
-
     -- * Exceptions
     AssumeRejected (..),
   )
@@ -54,36 +50,31 @@ import UnliftIO.Exception (catch, throwIO)
 
 -- * Construction
 
--- | Wrap a run-owned @hegel_test_case_t*@ pointer in the 'TestCase' vtable.
+-- | Wrap a run-owned @hegel_test_case_t*@ pointer.
 --
 -- The pointer is borrowed from the run handle and remains valid only for the
 -- duration of the current test case (until 'markComplete' is called and the
 -- runner fetches the next case via 'hegel_next_test_case').
 mkTestCase :: Ptr HegelTestCase -> TestCase
-mkTestCase tc =
-  TestCase
-    { generate = nativeGenerate tc,
-      newCollection = nativeNewCollection tc,
-      collectionMore = nativeCollectionMore tc,
-      collectionReject = nativeCollectionReject tc,
-      startSpan = nativeStartSpan tc,
-      stopSpan = nativeStopSpan tc,
-      markComplete = nativeMarkComplete tc
-    }
+mkTestCase = TestCase
 
--- | Like 'mkTestCase', but for a caller-owned replay handle obtained from
--- 'Hegel.FFI.withTestCaseFromBlob'.
+-- * Test case
+
+-- | A thin wrapper around a @hegel_test_case_t*@ pointer. Generators and
+-- collections call the free functions below, passing 'TestCase' as the first
+-- argument, rather than touching the pointer directly.
+newtype TestCase = TestCase {ptr :: Ptr HegelTestCase}
+
+-- * Generation
+
+-- | Ask the engine for a value matching the CBOR schema.
 --
--- Its 'markComplete' is a no-op: @hegel_mark_complete@ panics on a standalone
--- (from-blob) handle, and 'draw' may invoke 'markComplete' internally (e.g. an
--- exhausted 'Hegel.Gen.filtered').
-mkReplayTestCase :: Ptr HegelTestCase -> TestCase
-mkReplayTestCase tc = (mkTestCase tc) {markComplete = \_ -> pure ()}
-
-nativeGenerate :: Ptr HegelTestCase -> Value -> IO Value
-nativeGenerate tc schema = do
+-- Throws 'TestStopped' when the choice budget is exhausted, or 'AssumeRejected'
+-- when the engine signals that the current case should be discarded.
+generate :: TestCase -> Value -> IO Value
+generate tc schema = do
   resultBytes <-
-    FFI.generate tc (CE.encode schema)
+    FFI.generate tc.ptr (CE.encode schema)
       `catch` \e@(HegelError {code}) -> case code of
         HEGEL_E_STOP_TEST -> throwIO TestStopped
         HEGEL_E_ASSUME -> throwIO AssumeRejected
@@ -102,81 +93,76 @@ handleReturnCode HEGEL_E_STOP_TEST = throwIO TestStopped
 handleReturnCode HEGEL_E_ASSUME = throwIO AssumeRejected
 handleReturnCode rc = throwOnError rc
 
-nativeNewCollection :: Ptr HegelTestCase -> Int -> Maybe Int -> IO Int
-nativeNewCollection tc minSz maxSz =
+-- * Collections
+
+-- | Begin a variable-length collection; returns its integer ID.
+-- Throws 'TestStopped' on exhaustion.
+newCollection :: TestCase -> Int -> Maybe Int -> IO Int
+newCollection tc minSz maxSz =
   alloca \outId -> do
-    hegel_new_collection tc (fromIntegral minSz) (maybe maxBound fromIntegral maxSz) outId
+    hegel_new_collection tc.ptr (fromIntegral minSz) (maybe maxBound fromIntegral maxSz) outId
       >>= handleReturnCode
     fromIntegral <$> (peek outId :: IO Int64)
 
-nativeCollectionMore :: Ptr HegelTestCase -> Int -> IO Bool
-nativeCollectionMore tc cid =
+-- | Ask whether the engine wants another element.
+-- Throws 'TestStopped' on exhaustion.
+collectionMore :: TestCase -> Int -> IO Bool
+collectionMore tc cid =
   alloca \outMore -> do
-    hegel_collection_more tc (fromIntegral cid) outMore >>= handleReturnCode
+    hegel_collection_more tc.ptr (fromIntegral cid) outMore >>= handleReturnCode
     (/= 0) . (\(CBool b) -> b) <$> peek outMore
 
-nativeCollectionReject :: Ptr HegelTestCase -> Int -> Maybe Text -> IO ()
-nativeCollectionReject tc cid mWhy =
+-- | Notify the engine that the last element was rejected.
+-- Throws 'TestStopped' if the engine gives up.
+collectionReject :: TestCase -> Int -> Maybe Text -> IO ()
+collectionReject tc cid mWhy =
   case mWhy of
-    Nothing -> hegel_collection_reject tc (fromIntegral cid) nullPtr >>= handleReturnCode
+    Nothing -> hegel_collection_reject tc.ptr (fromIntegral cid) nullPtr >>= handleReturnCode
     Just why -> withCString (T.unpack why) \p ->
-      hegel_collection_reject tc (fromIntegral cid) p >>= handleReturnCode
+      hegel_collection_reject tc.ptr (fromIntegral cid) p >>= handleReturnCode
 
-nativeStartSpan :: Ptr HegelTestCase -> Label -> IO ()
+-- * Spans
+
+-- | Open a labeled span.
+startSpan :: TestCase -> Label -> IO ()
 -- The span label's wire identifier is the single source of truth in
 -- 'labelValue' (1–15, matching @HEGEL_LABEL_*@); reuse it rather than
 -- maintaining a parallel @Label -> Word64@ mapping that could drift.
-nativeStartSpan tc label = hegel_start_span tc (fromIntegral (labelValue label)) >>= throwOnError
+startSpan tc label = hegel_start_span tc.ptr (fromIntegral (labelValue label)) >>= throwOnError
 
-nativeStopSpan :: Ptr HegelTestCase -> Bool -> IO ()
-nativeStopSpan tc isDiscard =
-  hegel_stop_span tc (CBool (if isDiscard then 1 else 0)) >>= throwOnError
+-- | Close the most-recently-opened span.
+-- Pass 'True' to mark it discarded.
+stopSpan :: TestCase -> Bool -> IO ()
+stopSpan tc isDiscard =
+  hegel_stop_span tc.ptr (CBool (if isDiscard then 1 else 0)) >>= throwOnError
 
--- | Swallow HEGEL_E_STOP_TEST for all statuses — the engine may return it as
+-- * Completion
+
+-- | Report the final outcome for this test case.
+--
+-- Swallows 'HEGEL_E_STOP_TEST' for all statuses — the engine may return it as
 -- a normal "continue" signal at any point during the run (not only after
 -- INTERESTING).
-nativeMarkComplete :: Ptr HegelTestCase -> Status -> IO ()
-nativeMarkComplete tc status = do
+--
+-- Only called from the live run path ('Hegel.Runner.runCase'). The replay path
+-- ('Hegel.Runner.reconstructProperty' → 'Hegel.Property.Internal.observeProperty')
+-- only draws and journals; it never marks completion, so from-blob handles are
+-- safe to pass through 'mkTestCase'.
+markComplete :: TestCase -> Status -> IO ()
+markComplete tc status = do
   rc <- case status of
-    Valid -> hegel_mark_complete tc HEGEL_STATUS_VALID nullPtr
-    Invalid -> hegel_mark_complete tc HEGEL_STATUS_INVALID nullPtr
-    Overrun -> hegel_mark_complete tc HEGEL_STATUS_OVERRUN nullPtr
+    Valid -> hegel_mark_complete tc.ptr HEGEL_STATUS_VALID nullPtr
+    Invalid -> hegel_mark_complete tc.ptr HEGEL_STATUS_INVALID nullPtr
+    Overrun -> hegel_mark_complete tc.ptr HEGEL_STATUS_OVERRUN nullPtr
     Interesting origin ->
       withCString (T.unpack origin) \p ->
-        hegel_mark_complete tc HEGEL_STATUS_INTERESTING p
+        hegel_mark_complete tc.ptr HEGEL_STATUS_INTERESTING p
   case rc of
     HEGEL_OK -> pure ()
     HEGEL_E_STOP_TEST -> pure ()
     _ -> throwOnError rc
 
--- * Vtable
-
--- | A per-test-case vtable. Each field is a closure over the native
--- @libhegel@ backend. The 'Gen.*' tree and 'Hegel.Collection' call through
--- these fields via the free-function shims below.
---
--- Construct via 'mkTestCase' (run-owned) or 'mkReplayTestCase' (replay).
-data TestCase = TestCase
-  { -- | Ask the engine for a value matching the CBOR schema; throws
-    -- 'TestStopped' when the choice budget is exhausted.
-    generate :: Value -> IO Value,
-    -- | Begin a variable-length collection; returns its integer ID.
-    -- Throws 'TestStopped' on exhaustion.
-    newCollection :: Int -> Maybe Int -> IO Int,
-    -- | Ask whether the engine wants another element.
-    -- Throws 'TestStopped' on exhaustion.
-    collectionMore :: Int -> IO Bool,
-    -- | Notify the engine that the last element was rejected.
-    -- Throws 'TestStopped' if the engine gives up.
-    collectionReject :: Int -> Maybe Text -> IO (),
-    -- | Open a labeled span.
-    startSpan :: Label -> IO (),
-    -- | Close the most-recently-opened span.
-    -- Pass 'True' to mark it discarded.
-    stopSpan :: Bool -> IO (),
-    -- | Report the final outcome for this test case.
-    markComplete :: Status -> IO ()
-  }
+-- * Exceptions
 
 -- | Thrown when the engine signals that the current test case should be
 -- abandoned (choice budget exhausted). The runner treats this as a discard.
@@ -193,12 +179,7 @@ data AssumeRejected = AssumeRejected
 
 instance Exception AssumeRejected
 
--- | Thrown when a generator uses a per-case primitive the active backend does
--- not implement (e.g. pools on a backend whose protocol lacks them).
-newtype UnsupportedCapability = UnsupportedCapability Text
-  deriving stock (Show)
-
-instance Exception UnsupportedCapability
+-- * Status
 
 -- | Final outcome of a test case, sent via 'markComplete'.
 data Status
@@ -213,6 +194,8 @@ data Status
   | -- | The case failed; the payload is the origin string used for
     -- deduplication.
     Interesting Text
+
+-- * Spans
 
 -- | Span labels used to group related draws so the engine can shrink them
 -- as a unit. Numeric values match @libhegel@'s constants.
@@ -252,38 +235,3 @@ labelValue LabelFilter = 12
 labelValue LabelMapped = 13
 labelValue LabelSampledFrom = 14
 labelValue LabelEnumVariant = 15
-
--- * Free-function shims
-
--- Call sites in 'Hegel.Gen.Internal', 'Hegel.Collection', and the collection
--- generators use these as ordinary functions — e.g. @generate tc schema@.
--- Each shim simply delegates to the vtable field, so none of those modules
--- need to change.
-
--- | Shim for 'TestCase.generate'.
-generate :: TestCase -> Value -> IO Value
-generate tc = tc.generate
-
--- | Shim for 'TestCase.newCollection'.
-newCollection :: TestCase -> Int -> Maybe Int -> IO Int
-newCollection tc = tc.newCollection
-
--- | Shim for 'TestCase.collectionMore'.
-collectionMore :: TestCase -> Int -> IO Bool
-collectionMore tc = tc.collectionMore
-
--- | Shim for 'TestCase.collectionReject'.
-collectionReject :: TestCase -> Int -> Maybe Text -> IO ()
-collectionReject tc = tc.collectionReject
-
--- | Shim for 'TestCase.startSpan'.
-startSpan :: TestCase -> Label -> IO ()
-startSpan tc = tc.startSpan
-
--- | Shim for 'TestCase.stopSpan'.
-stopSpan :: TestCase -> Bool -> IO ()
-stopSpan tc = tc.stopSpan
-
--- | Shim for 'TestCase.markComplete'.
-markComplete :: TestCase -> Status -> IO ()
-markComplete tc = tc.markComplete

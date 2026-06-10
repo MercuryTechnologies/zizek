@@ -31,7 +31,7 @@ import Hegel.Phase (Phase (..))
 import Hegel.Property.Internal (Property, failureDetails, forAllWith, observeProperty, propertyAction)
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted, renderValue)
 import Hegel.Settings (Settings (..))
-import Hegel.TestCase (AssumeRejected (..), Status (..), TestCase, TestStopped (..), markComplete, mkReplayTestCase, mkTestCase)
+import Hegel.TestCase (AssumeRejected (..), Status (..), TestCase, TestStopped (..), markComplete, mkTestCase)
 import UnliftIO.Exception (Handler (..), catches, finally)
 
 -- | Run a generator-plus-body property: 'runPropertyWith' rendering drawn
@@ -199,9 +199,10 @@ failureMessage f
 
 -- | Replay a reproduction blob through the property to harvest its journal.
 --
--- The replay handle is caller-owned and standalone, so 'mkReplayTestCase'
--- gives it a no-op 'markComplete' (calling @hegel_mark_complete@ on it would
--- abort the process).
+-- The replay handle is caller-owned and freed by 'withTestCaseFromBlob' on
+-- exit. 'observeProperty' only draws and journals — it never calls
+-- 'markComplete' — so 'mkTestCase' is safe here; @hegel_mark_complete@ is
+-- never invoked on the from-blob handle.
 --
 -- The failure is expected to recur; its notes become the counterexample
 -- description, and its exception supplies the message and source location
@@ -211,7 +212,7 @@ failureMessage f
 reconstructProperty :: Property () -> Ptr HegelSettings -> ByteString -> Text -> IO Result
 reconstructProperty prop s blob msg =
   withTestCaseFromBlob s blob \tcPtr -> do
-    (eRes, notes) <- observeProperty (mkReplayTestCase tcPtr) prop
+    (eRes, notes) <- observeProperty (mkTestCase tcPtr) prop
     pure case eRes of
       Left e
         | isDivergence e -> diverged
