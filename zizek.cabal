@@ -82,6 +82,7 @@ library
     Hegel.Collection
     Hegel.Database
     Hegel.Diff
+    Hegel.FFI
     Hegel.Gen
     Hegel.Gen.Binary
     Hegel.Gen.Bool
@@ -104,15 +105,12 @@ library
     Hegel.Gen.Uuid
     Hegel.HealthCheck
     Hegel.Hspec
-    Hegel.Native.FFI
-    Hegel.Native.Runner
-    Hegel.Native.Settings
-    Hegel.Native.TestCase
     Hegel.Phase
     Hegel.Property
     Hegel.Property.Internal
     Hegel.Protocol.Cbor
     Hegel.Report
+    Hegel.Runner
     Hegel.Schema
     Hegel.Settings
     Hegel.Tasty

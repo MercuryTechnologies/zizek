@@ -24,7 +24,6 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Stack (SrcLoc (..))
 import Hegel.Diff (Diff)
-import Hegel.Native.Runner (check)
 import Hegel.Property.Internal (PropertyT)
 import Hegel.Report
   ( Abort (..),
@@ -36,6 +35,7 @@ import Hegel.Report
     renderReport,
     renderReportAnsi,
   )
+import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import System.Environment (lookupEnv)
 import System.IO (hIsTerminalDevice, stderr)

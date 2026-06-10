@@ -22,8 +22,8 @@ import Data.Char (isUpper, toLower)
 import Data.Set qualified as Set
 import Hegel (Gen)
 import Hegel.Assertion (originOf)
-import Hegel.Native.Runner qualified as Native
 import Hegel.Report (Abort (..), Report (..), Result (..))
+import Hegel.Runner qualified as Native
 import Hegel.Settings (Settings (..), defaultSettings)
 import System.Environment (getArgs, getProgName, lookupEnv)
 import System.Exit (ExitCode (..), die, exitSuccess, exitWith)

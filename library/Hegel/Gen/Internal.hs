@@ -45,7 +45,8 @@ import GHC.Stack (HasCallStack)
 import Hegel.Protocol.Cbor (ParseError (..))
 import Hegel.Schema qualified as Schema
 import Hegel.TestCase
-  ( Label (..),
+  ( AssumeRejected (..),
+    Label (..),
     TestCase (..),
     generate,
     startSpan,
@@ -490,14 +491,8 @@ either :: Gen a -> Gen b -> Gen (Either a b)
 either ga gb = oneOf [Left <$> ga, Right <$> gb]
 
 -- $exceptions
+-- 'AssumeRejected' is re-exported from 'Hegel.TestCase'.
 -- Used for control flow within the runner, not for surfacing test failures.
-
--- | Thrown when a test case is deliberately discarded, either via 'assume' or
--- 'discard', or by an exhausted 'filtered'\/'mapMaybe' retry budget.
-data AssumeRejected = AssumeRejected
-  deriving stock (Show)
-
-instance Exception AssumeRejected
 
 -- | Thrown when @hegel@ returns a value that cannot be parsed according
 -- to the schema that was sent.

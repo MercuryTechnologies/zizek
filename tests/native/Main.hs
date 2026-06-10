@@ -4,7 +4,7 @@
 -- values (via the boolean schema directly and through the 'Hegel.Gen'
 -- machinery), the failure+shrink cycle, and per-case completion semantics.
 -- These talk to the FFI directly rather than going through
--- 'Hegel.Native.Runner', so they live here rather than in the
+-- 'Hegel.Runner', so they live here rather than in the
 -- backend-parameterized unit suite.
 --
 -- Every sequence runs in a bound thread so that 'throwOnError' always reads
@@ -26,14 +26,13 @@ import Data.Function ((&))
 import Data.Word (Word64)
 import Foreign (Ptr, nullPtr)
 import Foreign.C.String (withCString)
+import Hegel.FFI
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Internal (draw)
-import Hegel.Native.FFI
-import Hegel.Native.Runner qualified as Runner
-import Hegel.Native.TestCase (mkTestCase)
+import Hegel.Runner qualified as Runner
 import Hegel.Schema qualified as Schema
 import Hegel.Settings (defaultSettings)
-import Hegel.TestCase (Status (..), TestStopped (..))
+import Hegel.TestCase (Status (..), TestStopped (..), mkTestCase)
 import Hegel.TestCase qualified as TC
 import Test.Hspec
 import Test.Tasty (defaultMain)
@@ -183,7 +182,7 @@ completionSpec = describe "completion semantics" $
   -- A run-owned test case may be completed exactly once. A second
   -- 'TC.markComplete' is rejected by libhegel with a non-control-flow error
   -- code, which the native vtable raises as a 'HegelError'. In
-  -- 'Hegel.Native.Runner' such an error escapes the per-case @catches@ (the
+  -- 'Hegel.Runner' such an error escapes the per-case @catches@ (the
   -- handlers only classify; 'markComplete' runs outside them) and surfaces as
   -- an 'Hegel.Report.Errored' abort rather than crashing the run; this pins
   -- the premise that 'markComplete' genuinely throws.
@@ -245,7 +244,7 @@ tryDraw tc schema = do
     Left err -> throwIO err
 
 -- | Async teardown tests. These go through 'Runner.runProperty' rather than
--- the raw FFI because the fix ('withAsyncBound' in 'Hegel.Native.Runner.check')
+-- the raw FFI because the fix ('withAsyncBound' in 'Hegel.Runner.check')
 -- lives there.
 asyncTeardownSpec :: Spec
 asyncTeardownSpec = describe "async teardown" $ do

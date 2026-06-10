@@ -60,7 +60,6 @@ module Hegel.Property
 where
 
 import Hegel.Assertion (assert, failure, (/==), (===))
-import Hegel.Native.Runner (check)
 import Hegel.Property.Internal
   ( Property,
     PropertyT,
@@ -75,6 +74,7 @@ import Hegel.Property.Internal
     hoist,
   )
 import Hegel.Report (throwOnFailure)
+import Hegel.Runner (check)
 import Hegel.Settings (Settings)
 
 -- | Run a property and throw on anything other than success

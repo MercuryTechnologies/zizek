@@ -33,9 +33,9 @@ where
 import Hegel.Assertion
 import Hegel.Database
 import Hegel.Gen.Internal (Gen)
-import Hegel.Native.Runner (runProperty, runPropertyWith)
 import Hegel.Phase
 import Hegel.Report
+import Hegel.Runner (runProperty, runPropertyWith)
 import Hegel.Settings
 
 -- | Run a property and throw on anything other than success

@@ -15,9 +15,9 @@ where
 
 import Data.Maybe (isJust)
 import Data.Text qualified as T
-import Hegel.Native.Runner (check)
 import Hegel.Property.Internal (Property)
 import Hegel.Report (Report (..), Result (..), renderReport, renderReportAnsi)
+import Hegel.Runner (check)
 import Hegel.Settings (Settings, defaultSettings)
 import System.Environment (lookupEnv)
 import System.IO (hIsTerminalDevice, stderr)
