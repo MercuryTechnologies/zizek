@@ -20,6 +20,7 @@ import Hegel.Property
     forAllSilent,
     forAllWith,
     hoist,
+    (===),
   )
 import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), Stats (..))
 import Hegel.Settings (defaultSettings)
@@ -99,6 +100,15 @@ spec checker = do
             foot.kind `shouldBe` Footnote
             foot.text `shouldBe` "from the footer"
           other -> expectationFailure ("expected two notes, got: " <> show other)
+      other -> expectationFailure ("expected a counterexample, got: " <> show other)
+
+  it "carries (===) diffs into the counterexample message" $ do
+    report <- checkWith checker defaultSettings do
+      x <- forAll (intR (0, 100))
+      x === x + 1
+    case report.result of
+      Counterexample {message} ->
+        T.lines message `shouldBe` ["=== failed", "- 0", "+ 1"]
       other -> expectationFailure ("expected a counterexample, got: " <> show other)
 
   it "hoists application monads and lifts base actions" $ do

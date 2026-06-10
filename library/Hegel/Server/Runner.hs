@@ -13,10 +13,9 @@ where
 import Control.Exception (toException)
 import Control.Monad.IO.Class (liftIO)
 import Data.Text (Text)
-import Data.Text qualified as T
 import Hegel.Gen.Internal (Gen)
 import Hegel.Property.Internal (Property, forAllWith)
-import Hegel.Report (Abort (..), Report, aborted)
+import Hegel.Report (Abort (..), Report, aborted, renderValue)
 import Hegel.Server.Client (checkTest)
 import Hegel.Server.Protocol.Error (ConnectionClosedError (..), ProtocolError (..))
 import Hegel.Server.Session (Session, invalidateSession)
@@ -56,7 +55,7 @@ runPropertyOn ::
   Gen a ->
   (a -> IO ()) ->
   IO Report
-runPropertyOn ses = runPropertyOnWith ses (T.pack . show)
+runPropertyOn ses = runPropertyOnWith ses renderValue
 
 -- | 'runPropertyWith' against an explicit 'Session': sugar for 'checkOn'
 -- over @'forAllWith' render gen '>>=' 'liftIO' . body@.

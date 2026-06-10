@@ -56,6 +56,8 @@ common library
     digest ^>=0.0,
     hashable ^>=1.4 || ^>=1.5,
     network-uri ^>=2.6,
+    pretty-show ^>=1.10,
+    prettyprinter ^>=1.7,
     stm ^>=2.5,
     stm-containers ^>=1.2,
     text ^>=2.1,
@@ -294,6 +296,7 @@ test-suite unit
     GeneratorSchemas
     PipelinedRequests
     PropertyChecks
+    ReportRendering
     SessionRecovery
     StandardGenerators
     TestBackends

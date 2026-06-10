@@ -15,6 +15,7 @@ module Hegel.Property.Internal
 
     -- * Notes
     annotate,
+    annotateShow,
     footnote,
 
     -- * Discards
@@ -38,11 +39,10 @@ import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Sequence ((|>))
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
-import Data.Text qualified as T
 import GHC.Stack (HasCallStack, SrcLoc, callStack, withFrozenCallStack)
 import Hegel.Assertion (AssertionFailure (..), callSite)
 import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
-import Hegel.Report (Note (..), NoteKind (..))
+import Hegel.Report (Note (..), NoteKind (..), renderValue)
 import Hegel.TestCase (TestCase)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception (tryAny)
@@ -98,9 +98,9 @@ note kind loc text = PropertyT do
   liftIO (env.journal kind loc text)
 
 -- | Draw a value from a generator mid-test. The drawn value is journaled
--- (via 'show') so it appears in the failure report.
+-- (via 'renderValue') so it appears in the failure report.
 forAll :: (HasCallStack, MonadIO m, Show a) => Gen a -> PropertyT m a
-forAll = withFrozenCallStack (forAllWith (T.pack . show))
+forAll = withFrozenCallStack (forAllWith renderValue)
 
 -- | 'forAll' with an explicit renderer, for values without a 'Show'
 -- instance (or with an unhelpful one).
@@ -121,6 +121,10 @@ forAllSilent gen = PropertyT do
 -- recorded.
 annotate :: (HasCallStack, MonadIO m) => Text -> PropertyT m ()
 annotate = note Annotation (callSite callStack)
+
+-- | 'annotate' a value, rendered via 'renderValue'.
+annotateShow :: (HasCallStack, MonadIO m, Show a) => a -> PropertyT m ()
+annotateShow = withFrozenCallStack (annotate . renderValue)
 
 -- | Attach context rendered after the report body.
 footnote :: (MonadIO m) => Text -> PropertyT m ()

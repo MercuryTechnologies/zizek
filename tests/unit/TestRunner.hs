@@ -8,10 +8,9 @@ module TestRunner
   )
 where
 
-import Control.Exception (throwIO)
 import Hegel.Gen.Internal (Gen)
 import Hegel.Property (Property)
-import Hegel.Report (Abort (..), PropertyFailed (..), Report (..), Result (..))
+import Hegel.Report (Report, throwOnFailure)
 import Hegel.Settings (Settings)
 
 -- | A bundled property-run function, parameterised over the backend.
@@ -35,11 +34,4 @@ runWith (Runner rp) = rp
 
 -- | Run a property and throw on anything other than success.
 runWith_ :: (Show a) => Runner -> Settings -> Gen a -> (a -> IO ()) -> IO ()
-runWith_ (Runner rp) settings gen body = do
-  report <- rp settings gen body
-  case report.result of
-    Ok -> pure ()
-    Counterexample {message, notes} -> throwIO PropertyFailed {message, notes}
-    GaveUp msg -> fail ("Property rejected all inputs: " <> show msg)
-    Aborted (Errored exc) -> throwIO exc
-    Aborted (UnhealthyInput msg) -> fail ("Health check failed: " <> show msg)
+runWith_ (Runner rp) settings gen body = throwOnFailure =<< rp settings gen body

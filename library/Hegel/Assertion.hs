@@ -1,12 +1,10 @@
 -- | Call-stack-aware assertion helpers for property bodies.
---
--- 'assert' and 'failure' are polymorphic in any 'MonadIO', so the same
--- functions work in a plain @IO@ property body and inside
--- 'Hegel.Property.PropertyT'.
 module Hegel.Assertion
   ( AssertionFailure (..),
     assert,
     failure,
+    (===),
+    (/==),
     originOf,
     callSite,
   )
@@ -27,6 +25,7 @@ import GHC.Stack
     withFrozenCallStack,
   )
 import GHC.Stack qualified as Stack
+import Hegel.Report (renderValue)
 
 -- | Raised by 'assert' and 'failure'. Carries a user-supplied message and a
 -- captured 'CallStack' so the runner can extract a stable @file:line@ origin
@@ -50,6 +49,46 @@ failure msg =
 -- captured call site.
 assert :: (HasCallStack, MonadIO m) => Bool -> Text -> m ()
 assert cond msg = unless cond (withFrozenCallStack (failure msg))
+
+infix 4 ===, /==
+
+-- | Assert two values are equal; on failure, the message carries a
+-- line-level diff of the pretty-printed values.
+(===) :: (HasCallStack, MonadIO m, Eq a, Show a) => a -> a -> m ()
+x === y
+  | x == y = pure ()
+  | otherwise =
+      withFrozenCallStack $
+        failure (T.intercalate "\n" ("=== failed" : diffLines (renderValue x) (renderValue y)))
+
+-- | Assert two values differ.
+(/==) :: (HasCallStack, MonadIO m, Eq a, Show a) => a -> a -> m ()
+x /== y
+  | x /= y = pure ()
+  | otherwise =
+      withFrozenCallStack $
+        failure (T.intercalate "\n" ["/== failed, values are equal", renderValue x])
+
+-- | A line-oriented diff of two pretty-printed values: lines common to the
+-- leading and trailing ends render with a plain margin, the differing middle
+-- with @-@\/@+@ markers.
+diffLines :: Text -> Text -> [Text]
+diffLines lhs rhs =
+  fmap ("  " <>) prefix
+    <> fmap ("- " <>) lhsMid
+    <> fmap ("+ " <>) rhsMid
+    <> fmap ("  " <>) suffix
+  where
+    ls = T.lines lhs
+    rs = T.lines rhs
+    prefix = commonPrefix ls rs
+    ls' = drop (length prefix) ls
+    rs' = drop (length prefix) rs
+    suffix = reverse (commonPrefix (reverse ls') (reverse rs'))
+    lhsMid = take (length ls' - length suffix) ls'
+    rhsMid = take (length rs' - length suffix) rs'
+    commonPrefix (a : as) (b : bs) | a == b = a : commonPrefix as bs
+    commonPrefix _ _ = []
 
 -- | The innermost call site recorded in a 'CallStack', if any.
 callSite :: CallStack -> Maybe SrcLoc

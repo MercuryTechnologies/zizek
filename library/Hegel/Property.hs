@@ -36,6 +36,7 @@ module Hegel.Property
 
     -- * Running properties
     check,
+    check_,
 
     -- * Draws
     forAll,
@@ -44,6 +45,7 @@ module Hegel.Property
 
     -- * Notes
     annotate,
+    annotateShow,
     footnote,
 
     -- * Discards
@@ -53,15 +55,18 @@ module Hegel.Property
     -- * Assertions
     assert,
     failure,
+    (===),
+    (/==),
   )
 where
 
-import Hegel.Assertion (assert, failure)
+import Hegel.Assertion (assert, failure, (/==), (===))
 import Hegel.Native.Runner (check)
 import Hegel.Property.Internal
   ( Property,
     PropertyT,
     annotate,
+    annotateShow,
     assume,
     discard,
     footnote,
@@ -70,3 +75,10 @@ import Hegel.Property.Internal
     forAllWith,
     hoist,
   )
+import Hegel.Report (throwOnFailure)
+import Hegel.Settings (Settings)
+
+-- | Run a property and throw on anything other than success
+-- (via 'throwOnFailure').
+check_ :: Settings -> Property () -> IO ()
+check_ settings prop = throwOnFailure =<< check settings prop

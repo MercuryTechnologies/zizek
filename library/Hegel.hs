@@ -28,7 +28,6 @@ module Hegel
   )
 where
 
-import Control.Exception (throwIO)
 import Hegel.Assertion
 import Hegel.Gen.Internal (Gen)
 import Hegel.Native.Runner (runProperty, runPropertyWith)
@@ -36,21 +35,12 @@ import Hegel.Phase
 import Hegel.Report
 import Hegel.Settings
 
--- | Run a property and throw on anything other than success.
---
--- Throws 'PropertyFailed' on a counterexample, re-throws on 'Errored',
--- and 'fail's on 'GaveUp' or health-check failure.
+-- | Run a property and throw on anything other than success
+-- (via 'throwOnFailure').
 runProperty_ ::
   (Show a) =>
   Settings ->
   Gen a ->
   (a -> IO ()) ->
   IO ()
-runProperty_ settings gen body = do
-  report <- runProperty settings gen body
-  case report.result of
-    Ok -> pure ()
-    Counterexample {message, notes} -> throwIO PropertyFailed {message, notes}
-    GaveUp msg -> fail ("Property rejected all inputs: " <> show msg)
-    Aborted (Errored exc) -> throwIO exc
-    Aborted (UnhealthyInput msg) -> fail ("Health check failed: " <> show msg)
+runProperty_ settings gen body = throwOnFailure =<< runProperty settings gen body

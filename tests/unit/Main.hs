@@ -4,6 +4,7 @@ import BasicProperties qualified
 import GeneratorSchemas qualified
 import PipelinedRequests qualified
 import PropertyChecks qualified
+import ReportRendering qualified
 import SessionRecovery qualified
 import StandardGenerators qualified
 import Test.Tasty (TestTree, defaultMain, testGroup)
@@ -14,8 +15,9 @@ import UnsupportedCapabilities qualified
 
 main :: IO ()
 main = do
+  rendering <- testSpec "report rendering" ReportRendering.spec
   trees <- traverse (\(name, runner, checker) -> buildBackendTree name runner checker) backends
-  defaultMain (testGroup "zizek:unit" trees)
+  defaultMain (testGroup "zizek:unit" (rendering : trees))
 
 buildBackendTree :: String -> Runner -> Checker -> IO TestTree
 buildBackendTree name runner checker = do

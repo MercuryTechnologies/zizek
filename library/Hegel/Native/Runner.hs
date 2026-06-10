@@ -21,13 +21,13 @@ import Hegel.Native.FFI
 import Hegel.Native.Settings (applySettings)
 import Hegel.Native.TestCase (mkReplayTestCase, mkTestCase)
 import Hegel.Property.Internal (Property, failureDetails, forAllWith, observeProperty, propertyAction)
-import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
+import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted, renderValue)
 import Hegel.Settings (Settings (..))
 import Hegel.TestCase (Status (..), TestCase, TestStopped (..), markComplete)
 import UnliftIO.Exception (Handler (..), catches, finally)
 
 -- | Run a generator-plus-body property: 'runPropertyWith' rendering drawn
--- values via 'show'.
+-- values via 'renderValue'.
 runProperty ::
   forall a.
   (Show a) =>
@@ -35,7 +35,7 @@ runProperty ::
   Gen a ->
   (a -> IO ()) ->
   IO Report
-runProperty = runPropertyWith (T.pack . show)
+runProperty = runPropertyWith renderValue
 
 -- | 'runProperty' with an explicit renderer, for values without a 'Show'
 -- instance (or with an unhelpful one): sugar for 'check' over
