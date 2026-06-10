@@ -32,6 +32,7 @@ Should we ever produce an Antithesis SDK for Haskell[^2], tests written with `zi
   - [Dependent Generators](#dependent-generators)
   - [Collection Generators](#collection-generators)
   - [Recursive Generators](#recursive-generators)
+  - [Integrations](#integrations)
 - [Generators](#generators)
 - [Development](#development)
 - [Frequently Asked Questions](#frequently-asked-questions)
@@ -91,9 +92,6 @@ source-repository-package
 
 ## Usage
 
-> [!TIP]
-> `zizek` is in active development and lacks adapters for common testing libraries like `tasty` or `hspec`; please see the test suite for usage examples.
-
 `zizek` tries to wrap the underlying `hegel` machinery in a higher-level API for constructing and exercising complex generators.
 
 ### Simple Generators
@@ -101,16 +99,16 @@ source-repository-package
 For example, consider the following property that generates machine integers in the range `[0,1000]` and then validates trivial property that `n + 1 > n` for all of these values:
 
 ```haskell
-import Control.Monad (unless)
 import Data.Function ((&))
-import Hegel (defaultSettings, runProperty_)
+import Hegel (prop)
 import Hegel.Gen qualified as Gen
+import Hegel.Property (assert)
 
 prop_successor :: IO ()
 prop_successor = do
   let ints = Gen.int & Gen.min 0 & Gen.max 1000 & Gen.build
-  runProperty_ defaultSettings ints $ \n ->
-    unless (n + 1 > n) (error "successor should be greater")
+  prop ints $ \n ->
+    assert (n + 1 > n) "successor should be greater"
 ```
 
 ### Independent Generators
@@ -120,10 +118,10 @@ When the draws in a `do` block don't reference each other, and `ApplicativeDo` h
 ```haskell
 {-# LANGUAGE ApplicativeDo #-}
 
-import Control.Monad (unless)
 import Data.Function ((&))
-import Hegel (Gen, defaultSettings, runProperty_)
+import Hegel (Gen, prop)
 import Hegel.Gen qualified as Gen
+import Hegel.Property (assert)
 
 boolAndInt :: Gen (Bool, Int)
 boolAndInt = do
@@ -132,8 +130,8 @@ boolAndInt = do
   pure (b, n)
 
 prop_pair :: IO ()
-prop_pair = runProperty_ defaultSettings boolAndInt $ \(_, n) ->
-  unless (n >= 0 && n <= 100) (error "second component out of range")
+prop_pair = prop boolAndInt $ \(_, n) ->
+  assert (n >= 0 && n <= 100) "second component out of range"
 ```
 
 > [!NOTE]
@@ -143,39 +141,47 @@ prop_pair = runProperty_ defaultSettings boolAndInt $ \(_, n) ->
 
 When a later draw needs to look at an earlier one, each must be sequenced as part of its own request. This lets us establish dependent relationships between generated values.
 
-For example, `Gen.assume` lets you state preconditions inline; if the condition fails, the test case is discarded rather than counted as a failure:
+The `Hegel.Property` monad is the natural home for this: a property interleaves draws (`forAll`), effects, and assertions, and the engine shrinks across the whole interleaving. Each `forAll` is its own request, so a later draw can constrain itself with an earlier value, and `annotate` attaches context that shows up in the failure report:
 
 ```haskell
-import Control.Monad (unless)
 import Data.Function ((&))
-import Hegel (Gen, defaultSettings, runProperty_)
 import Hegel.Gen qualified as Gen
+import Hegel.Property (annotate, assert, check_, forAll)
+import Hegel.Settings (defaultSettings)
 
+prop_intervalOrdered :: IO ()
+prop_intervalOrdered =
+  check_ defaultSettings do
+    lo <- forAll (Gen.int & Gen.min 0 & Gen.max 100  & Gen.build)
+    hi <- forAll (Gen.int & Gen.min lo & Gen.max 100 & Gen.build)
+    annotate "interval should be ordered"
+    assert (lo <= hi) "interval invariant broken"
+```
+
+Alternatively, when the dependency is a precondition rather than a constraint you can express directly, `Gen.assume` states it inline; if the condition fails, the test case is discarded rather than counted as a failure:
+
+```haskell
 interval :: Gen (Int, Int)
 interval = do
   lo <- Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
   hi <- Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
   Gen.assume (lo < hi)
   pure (lo, hi)
-
-prop_intervalOrdered :: IO ()
-prop_intervalOrdered = runProperty_ defaultSettings interval $ \(lo, hi) ->
-  unless (lo < hi) (error "interval invariant broken")
 ```
 
 > [!TIP]
-> Unlike `Gen.filtered`, `Gen.assume` does not retry; discarded cases accumulate in `Stats.invalid` and if the predicate rejects too often, `runProperty` reports a `Rejected` outcome.
+> Unlike `Gen.filtered`, `Gen.assume` does not retry; discarded cases accumulate in `Stats.invalid` and if the predicate rejects too often, the runner reports a `GaveUp` outcome.
 
 ### Collection Generators
 
 `zizek` also supports generation of collections types, each of which accept an element generator and expose additional parameters for shaping the collection: `minSize`/`maxSize` set bounds and, for lists, `Gen.unique` accepts a predicate function to discriminate based on equality.
 
 ```haskell
-import Control.Monad (unless)
 import Data.Function ((&))
 import Data.List (nub)
-import Hegel (Gen, defaultSettings, runProperty_)
+import Hegel (Gen, prop)
 import Hegel.Gen qualified as Gen
+import Hegel.Property (assert)
 
 uniqueInts :: Gen [Int]
 uniqueInts =
@@ -188,8 +194,8 @@ uniqueInts =
       & Gen.build
 
 prop_uniqueInts :: IO ()
-prop_uniqueInts = runProperty_ defaultSettings uniqueInts $ \xs ->
-  unless (length xs == length (nub xs)) (error "list had duplicates")
+prop_uniqueInts = prop uniqueInts $ \xs ->
+  assert (length xs == length (nub xs)) "list had duplicates"
 ```
 
 ### Recursive Generators
@@ -197,10 +203,10 @@ prop_uniqueInts = runProperty_ defaultSettings uniqueInts $ \xs ->
 Self-referential generators must wrap each recursive edge in `Gen.defer`; failing to do so will very likely result in `<<loop>>` exceptions when the generator is constructed.
 
 ```haskell
-import Control.Monad (unless)
 import Data.Function ((&))
-import Hegel (Gen, defaultSettings, runProperty_)
+import Hegel (Gen, prop)
 import Hegel.Gen qualified as Gen
+import Hegel.Property (assert)
 
 data Tree = Leaf Int | Branch Tree Tree
   deriving stock Show
@@ -212,8 +218,8 @@ tree = Gen.oneOf [leaf, branch]
     branch = Branch <$> Gen.defer tree <*> Gen.defer tree
 
 prop_tree :: IO ()
-prop_tree = runProperty_ defaultSettings tree $ \t ->
-  unless (leaves t == branches t + 1) (error "leaf/branch count invariant broken")
+prop_tree = prop tree $ \t ->
+  assert (leaves t == branches t + 1) "leaf/branch count invariant broken"
   where
     leaves (Leaf _)     = 1
     leaves (Branch l r) = leaves l + leaves r
@@ -223,6 +229,42 @@ prop_tree = runProperty_ defaultSettings tree $ \t ->
 
 > [!NOTE]
 > `Gen.defer` always falls back to interactive generation; each recursive step is a separate round-trip to the `hegel` server.
+
+### Integrations
+
+`zizek` ships adapters for the common test runners, so a `Property` can be a leaf in an existing suite.
+
+With `tasty`, `Hegel.Tasty.testProperty` turns a property into a `TestTree` (use `testPropertyWith` for custom `Settings`):
+
+```haskell
+import Data.Function ((&))
+import Hegel.Gen qualified as Gen
+import Hegel.Property (forAll, (===))
+import Hegel.Tasty (testProperty)
+import Test.Tasty (TestTree)
+
+test_reverseInvolutive :: TestTree
+test_reverseInvolutive =
+  testProperty "reverse is involutive" do
+    xs <- forAll (Gen.list (Gen.int & Gen.build) & Gen.build)
+    reverse (reverse xs) === xs
+```
+
+With `hspec`, a `PropertyT IO ()` is itself an `Example`, so a property can be the body of an `it` directly:
+
+```haskell
+import Data.Function ((&))
+import Hegel.Gen qualified as Gen
+import Hegel.Hspec (hegel)
+import Hegel.Property (forAll, (===))
+import Test.Hspec
+
+spec :: Spec
+spec = describe "reverse" $
+  it "is involutive" $ hegel do
+    xs <- forAll (Gen.list (Gen.int & Gen.build) & Gen.build)
+    reverse (reverse xs) === xs
+```
 
 ## Generators
 
@@ -271,7 +313,7 @@ Common development actions can performed with the `just` command runner, for exa
 $ just check             # CI checks: check-format + build + test
 $ just build             # compile the library & test suite
 $ just test              # run the unit test suite
-$ just test suite=<name> # run a specific test suite
+$ just test <name>       # run a specific test suite
 $ just check-conformance # build the conformance binaries and run the pytest harness
 $ just format            # run all formatters
 $ just check-format      # verify formatting without modifying files
@@ -286,13 +328,8 @@ $ just repl              # start a GHCi session with this library in-scope
 `zizek` passes `hegel-core`'s conformance tests, but some work remains outstanding:
 
 * deprecation & removal of the subprocess backend in favor of the native backend
-* a convenient utility for integrating `Gen` into interactive test cases
-  * e.g. `hedgehog`'s `PropertyT`, which lets users build property-based tests into `IO` test cases more easily
-* support for Hypothesis' test database, which makes replaying failed tests faster and more convenient
-* off-the-shelf integrations with `tasty` and `hspec`
-* misc. UX improvements
-  * pretty-printing for failed property assertions, a la `hedgehog`
-  * more convenient utilities for expressing properties than just `runProperty`/`runProperty_`
+* automatic, stable `databaseKey` derivation; replay currently requires supplying the same key by hand on every run
+* an API to seed the `Explicit` phase with hand-written examples
 * stateful/state-machine testing
 * Hackage publication
 

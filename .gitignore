@@ -18,6 +18,11 @@ cabal/*
 # local claude settings
 .claude/settings.local.json
 
+# engine working directories (constants/unicode caches + example database),
+# created at the cwd by libhegel (.hegel) and hegel-core (.hypothesis)
+.hegel/
+.hypothesis/
+
 # conformance test binaries (built by just check-conformance)
 tests/conformance/pytest/bin/*
 !tests/conformance/pytest/bin/.gitkeep
