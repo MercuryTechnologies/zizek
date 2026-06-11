@@ -42,7 +42,7 @@ import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import GHC.Stack (HasCallStack)
-import Hegel.Protocol.Cbor (ParseError (..))
+import Hegel.Cbor (ParseError (..))
 import Hegel.Schema qualified as Schema
 import Hegel.TestCase
   ( AssumeRejected (..),

@@ -23,9 +23,9 @@ where
 import CBOR.Value (Value (..))
 import Data.Maybe (isJust)
 import GHC.Float (double2Float, float2Double)
+import Hegel.Cbor (ParseError (..))
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Protocol.Cbor (ParseError (..))
 import Hegel.Schema (FloatSchema (..))
 
 data FloatBuilder a = FloatBuilder

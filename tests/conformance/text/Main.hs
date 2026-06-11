@@ -7,8 +7,8 @@ import Data.Aeson qualified as Aeson
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Generics (Generic)
+import Hegel.Cbor (ParseError, hegelText)
 import Hegel.Gen.Internal (basic)
-import Hegel.Protocol.Cbor (ParseError, hegelText)
 import Hegel.Schema (CharacterFields (..), TextSchema (..))
 
 data Params = Params

@@ -1,6 +1,6 @@
 -- | Constructors and accessors for working with CBOR 'Value's at the wire
 -- layer.
-module Hegel.Protocol.Cbor
+module Hegel.Cbor
   ( -- * Errors
     ParseError (..),
 

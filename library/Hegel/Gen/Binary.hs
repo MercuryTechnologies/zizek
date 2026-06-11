@@ -11,9 +11,9 @@ where
 
 import CBOR.Value (Value (..))
 import Data.ByteString (ByteString)
+import Hegel.Cbor (ParseError (..))
 import Hegel.Gen.Builder (Build (..), HasSize (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Protocol.Cbor (ParseError (..))
 import Hegel.Schema qualified as Schema
 
 data BinaryBuilder = BinaryBuilder

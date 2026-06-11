@@ -10,9 +10,9 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hegel (prop)
+import Hegel.Cbor (ParseError (..))
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), materialize, schemaArity, toBasic)
-import Hegel.Protocol.Cbor (ParseError (..))
 import Hegel.Schema qualified as Schema
 import Test.Hspec
 

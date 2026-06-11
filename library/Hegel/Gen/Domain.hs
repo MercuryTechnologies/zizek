@@ -18,9 +18,9 @@ module Hegel.Gen.Domain
 where
 
 import Data.Text (Text)
+import Hegel.Cbor (hegelText)
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Protocol.Cbor (hegelText)
 import Hegel.Schema (DomainSchema (maxLength))
 import Hegel.Schema qualified as Schema
 

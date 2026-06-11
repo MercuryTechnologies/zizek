@@ -8,9 +8,9 @@ module Hegel.Gen.Bool
 where
 
 import CBOR.Value (Value (..))
+import Hegel.Cbor (ParseError (..))
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Protocol.Cbor (ParseError (..))
 import Hegel.Schema qualified as Schema
 
 data BoolBuilder = BoolBuilder

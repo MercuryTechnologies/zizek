@@ -31,9 +31,9 @@ import CBOR.Value (Value (..))
 import Data.List (nub)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Hegel.Cbor (ParseError (..), hegelText)
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Protocol.Cbor (ParseError (..), hegelText)
 import Hegel.Schema (CharacterFields (..), TextSchema (..), defaultCharacterFields)
 
 -- | Builder for a single Unicode character. Character constraints are

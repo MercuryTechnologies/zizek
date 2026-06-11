@@ -79,6 +79,7 @@ library
   exposed-modules:
     Hegel
     Hegel.Assertion
+    Hegel.Cbor
     Hegel.Collection
     Hegel.Database
     Hegel.Diff
@@ -108,7 +109,6 @@ library
     Hegel.Phase
     Hegel.Property
     Hegel.Property.Internal
-    Hegel.Protocol.Cbor
     Hegel.Report
     Hegel.Runner
     Hegel.Schema

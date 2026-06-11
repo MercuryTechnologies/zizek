@@ -14,10 +14,10 @@ import CBOR.Value (Value (..))
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Data.Vector qualified as V
+import Hegel.Cbor (ParseError (..))
 import Hegel.Collection qualified as Collection
 import Hegel.Gen.Builder (Build (..), HasSize (..))
 import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), basic, draw, materialize, toBasic)
-import Hegel.Protocol.Cbor (ParseError (..))
 import Hegel.Schema qualified as Schema
 import Hegel.TestCase (Label (..), startSpan, stopSpan)
 

@@ -50,7 +50,7 @@ import CBOR.Value (Value (..))
 import Data.Default.Class (Default (..))
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
-import Hegel.Protocol.Cbor (buildMap, (.=), (.=?))
+import Hegel.Cbor (buildMap, (.=), (.=?))
 import Prelude hiding (map)
 
 -- | Boolean schema.

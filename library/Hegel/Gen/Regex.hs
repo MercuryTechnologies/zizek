@@ -19,10 +19,10 @@ where
 
 import CBOR.Value (Value (..))
 import Data.Text (Text)
+import Hegel.Cbor (ParseError (..), hegelText)
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Char (CharBuilder, toCharacterFields)
 import Hegel.Gen.Internal (basic)
-import Hegel.Protocol.Cbor (ParseError (..), hegelText)
 import Hegel.Schema qualified as Schema
 
 -- | Builder for a regex-constrained 'Text' generator.

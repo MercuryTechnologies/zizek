@@ -19,9 +19,9 @@ where
 
 import CBOR.Value (Value)
 import Data.UUID (UUID, fromText)
+import Hegel.Cbor (ParseError (..), hegelText)
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Protocol.Cbor (ParseError (..), hegelText)
 import Hegel.Schema (UuidSchema (version))
 import Hegel.Schema qualified as Schema
 

@@ -13,9 +13,9 @@ where
 
 import CBOR.Value (Value (..))
 import Data.Text (Text)
+import Hegel.Cbor (ParseError (..), hegelText)
 import Hegel.Gen.Builder (Build (..), HasSize (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Protocol.Cbor (ParseError (..), hegelText)
 import Hegel.Schema (TextSchema (maxSize))
 import Hegel.Schema qualified as Schema
 
