@@ -10,7 +10,7 @@
 -- return of a @safe@ FFI call (and 'hegel_next_test_case' must be @safe@
 -- because it blocks).
 --
--- Therefore, __all__ libhegel call sequences must run under
+-- Therefore, __all__ @libhegel@ call sequences must run under
 -- 'Control.Concurrent.Async.withAsyncBound' (or 'Control.Concurrent.forkOS') so
 -- that 'throwOnError' reads the error string on the same OS thread that set it.
 module Hegel.FFI

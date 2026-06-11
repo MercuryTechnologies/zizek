@@ -1,4 +1,4 @@
--- | 'Data.HashSet.HashSet' generator (elements always unique).
+-- | 'Data.HashSet.HashSet' generator.
 --
 -- > Gen.hashSet (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
 -- >   & Gen.minSize 1

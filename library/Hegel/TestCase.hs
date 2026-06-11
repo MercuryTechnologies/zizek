@@ -96,6 +96,7 @@ handleReturnCode rc = throwOnError rc
 -- * Collections
 
 -- | Begin a variable-length collection; returns its integer ID.
+--
 -- Throws 'TestStopped' on exhaustion.
 newCollection :: TestCase -> Int -> Maybe Int -> IO Int
 newCollection tc minSz maxSz =
@@ -105,6 +106,7 @@ newCollection tc minSz maxSz =
     fromIntegral <$> (peek outId :: IO Int64)
 
 -- | Ask whether the engine wants another element.
+--
 -- Throws 'TestStopped' on exhaustion.
 collectionMore :: TestCase -> Int -> IO Bool
 collectionMore tc cid =
@@ -113,6 +115,7 @@ collectionMore tc cid =
     (/= 0) . (\(CBool b) -> b) <$> peek outMore
 
 -- | Notify the engine that the last element was rejected.
+--
 -- Throws 'TestStopped' if the engine gives up.
 collectionReject :: TestCase -> Int -> Maybe Text -> IO ()
 collectionReject tc cid mWhy =
@@ -144,10 +147,11 @@ stopSpan tc isDiscard =
 -- a normal "continue" signal at any point during the run (not only after
 -- INTERESTING).
 --
--- Only called from the live run path ('Hegel.Runner.runCase'). The replay path
--- ('Hegel.Runner.reconstructProperty' → 'Hegel.Property.Internal.observeProperty')
--- only draws and journals; it never marks completion, so from-blob handles are
--- safe to pass through 'mkTestCase'.
+-- Only called from the live run path ('Hegel.Runner.runTestCase').
+--
+-- The replay path ('Hegel.Runner.reconstructProperty') only draws and journals;
+-- it never marks completion, so from-blob handles are safe to pass through
+-- 'mkTestCase'.
 markComplete :: TestCase -> Status -> IO ()
 markComplete tc status = do
   rc <- case status of

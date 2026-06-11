@@ -30,8 +30,9 @@ import Hegel.Diff (Diff, diffLines, diffShown, renderDiff)
 import Hegel.Report (renderValue)
 import UnliftIO.Exception (throwIO)
 
--- | Raised by 'assert' and 'failure'. Carries a user-supplied message, a
--- captured 'CallStack', and an optional structural diff (set by '(===)').
+-- | Raised by 'assert' and 'failure'.
+--
+-- Carries a user-supplied message, a captured 'CallStack', and an optional 'Diff'.
 data AssertionFailure = AssertionFailure
   { message :: !Text,
     callStack :: !CallStack,
@@ -48,8 +49,9 @@ instance Exception AssertionFailure where
         <> "\n"
         <> T.pack (prettyCallStack f.callStack)
 
--- | Fail the current property with a message, capturing the call site. Sets
--- 'diff' to 'Nothing'; use '(===)' when a diff is desired.
+-- | Fail the current property with a message, capturing the call site.
+--
+-- Sets 'diff' to 'Nothing'; use '(===)' or '(/==)' to capture a 'Diff'.
 failure :: (HasCallStack, MonadIO m) => Text -> m a
 failure msg =
   withFrozenCallStack $
@@ -67,9 +69,9 @@ assert cond msg = unless cond (withFrozenCallStack (failure msg))
 
 infix 4 ===, /==
 
--- | Assert two values are equal; on failure, 'diff' carries a structural diff
--- when both rendered values parse as value ASTs, and a line-level diff
--- otherwise.
+-- | Assert two values are equal; on failure, generate a 'Diff' that can be
+-- used to generate a structural diff (when both rendered values can be parsed
+-- as valid Haskell) or a line-level diff otherwise.
 (===) :: (HasCallStack, MonadIO m, Eq a, Show a) => a -> a -> m ()
 x === y
   | x == y = pure ()
@@ -104,15 +106,15 @@ callSite cs = case getCallStack cs of
 -- | Format an exception as @\<ExcTypeName\> at \<file\>:\<line\>@ for use as
 -- the @origin@ field in @mark_complete INTERESTING@.
 --
--- The server uses @origin@ as a deduplication key, so this string must NOT
+-- @libhegel@ uses @origin@ as a deduplication key, so this string must NOT
 -- contain the error message (which typically embeds the failing generated
--- value) or the full stack trace. Mirrors the contract enforced by
--- @OriginDeduplicationConformance@ in @hegel-core@.
+-- value) or the full stack trace.
 --
 -- For 'AssertionFailure', the @file:line@ comes from the innermost
--- 'CallStack' frame. For all other exceptions we don't have a Haskell
--- traceback, so we emit @\<unknown\>:0@ — dedup remains correct by exception
--- type.
+-- 'CallStack' frame.
+--
+-- For all other exceptions we don't have a Haskell traceback, so we emit
+-- @\<unknown\>:0@ and rely on the exception type for deduplication.
 originOf :: SomeException -> Text
 originOf exc = case fromException exc of
   Just AssertionFailure {callStack = cs} -> formatWithStack (typeName exc) cs

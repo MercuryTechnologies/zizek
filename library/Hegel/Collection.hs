@@ -1,10 +1,5 @@
--- | Backend-managed collection handle for variable-length compositional generation.
---
--- Build a 'Collection' with 'new', then iterate with 'more' and optionally
--- reject elements with 'reject'. The collection handle is a thin wrapper
--- around the three wire commands in 'Hegel.TestCase'; it does not know about
--- element types, uniqueness predicates, or retry budgets — those live at the
--- call site.
+-- | Build a 'Collection' with 'new', then iterate with 'more' and optionally
+-- reject elements with 'reject'.
 --
 -- Usage:
 --
@@ -33,7 +28,7 @@ where
 'reject' only makes forward progress when the underlying collection was
 created in /variable-size/ mode, i.e. when max_size > min_size.
 
-The server-side `many` primitive (mirrored from Hypothesis) has two paths:
+The `many` primitive has two paths:
 
   * Variable size: `more` draws a continue/stop bit via the data stream
     (advancing the cursor) and `reject` decrements the count.
@@ -48,8 +43,8 @@ and regenerates the same value — an infinite duplicate loop.
 Callers that need to reject duplicates (sets, unique lists, maps with
 key-uniqueness) must therefore force variable-size mode by bumping max_size
 to at least min_size + 1 and trimming any overshoot from the final result.
-The trim only fires when the server actually overshoots the declared
-maximum, which is rare.
+
+The trim only fires when @libhegel@ actually overshoots the declared maximum.
 -}
 
 import Data.Text (Text)
@@ -71,18 +66,19 @@ data Collection = Collection
     finished :: !(IORef Bool)
   }
 
--- | Create a new collection handle. Does not contact the server yet; the
--- @new_collection@ wire command is deferred to the first call to 'more'.
+-- | Create a new collection handle.
 new :: TestCase -> Int -> Maybe Int -> IO Collection
 new tc minSz maxSz = do
   h <- newIORef Nothing
   f <- newIORef False
   pure Collection {tc, minSize = minSz, maxSize = maxSz, handle = h, finished = f}
 
--- | Ask the server whether to produce another element. Returns 'False' once
--- the server signals the collection is complete; subsequent calls return
--- 'False' immediately without a round-trip. Throws 'Hegel.TestCase.TestStopped'
--- when the server sends a stop-test signal.
+-- | Ask @libhegel@ whether it can produce another element.
+--
+-- Returns 'False' once the collection is complete; subsequent calls return
+-- 'False' immediately.
+--
+-- Throws 'Hegel.TestCase.TestStopped' when the server sends a stop-test signal.
 more :: Collection -> IO Bool
 more coll = do
   done <- readIORef coll.finished
@@ -97,8 +93,10 @@ more coll = do
           writeIORef coll.finished True
           pure False
 
--- | Tell the server to discard the last element (does not count towards the
--- size budget). No-op if the collection is already finished.
+-- | Tell @libhegel@ to discard the last element, which will not count towards
+-- the size budget.
+--
+-- No-op if the collection is already finished.
 reject :: Collection -> Maybe Text -> IO ()
 reject coll why = do
   done <- readIORef coll.finished

@@ -1,4 +1,4 @@
--- | 'Data.HashMap.Strict.HashMap' generator (keys always unique).
+-- | 'Data.HashMap.Strict.HashMap' generator.
 --
 -- > Gen.hashMap (Gen.text & Gen.build) (Gen.int & Gen.build)
 -- >   & Gen.minSize 1

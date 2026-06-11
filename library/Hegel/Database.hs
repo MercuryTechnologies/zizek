@@ -5,16 +5,14 @@ module Hegel.Database
 where
 
 -- | The example database: a key\/value store of failing choice sequences,
--- replayed by the 'Hegel.Phase.Reuse' phase on subsequent runs. The engine
--- owns the store; the client only names it.
+-- replayed by the 'Hegel.Phase.Reuse' phase on subsequent runs.
 --
 -- A database is only useful together with a stable
--- 'Hegel.Settings.databaseKey' — without one there is nothing to file
--- failures under, which is why 'Hegel.Settings.defaultSettings' disables
--- persistence.
+-- 'Hegel.Settings.databaseKey'; without one there is nothing to file failures
+-- under, which is why 'Hegel.Settings.defaultSettings' disables persistence.
 data Database
   = -- | Use the engine's default store: @.hegel/@ relative to the working
-    -- directory, following Hypothesis's convention.
+    -- directory.
     DatabaseDefault
   | -- | No persistence.
     DatabaseDisabled

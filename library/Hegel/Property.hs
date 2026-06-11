@@ -1,8 +1,7 @@
--- | A property monad: test logic interleaved with generator draws.
+-- | A property monad that interleaves test logic with generator draws.
 --
 -- Where @'forEach' gen body@ separates generation from the test body, a
--- 'Property' may draw ('forAll'), perform 'IO', and assert in any order —
--- the engine shrinks across the whole interleaving:
+-- 'Property' may draw ('forAll'), perform 'IO', and assert in any order.
 --
 -- @
 -- import Data.Function ((&))
@@ -20,13 +19,9 @@
 -- @
 --
 -- Failures are reported through the journal: each 'forAll' value and
--- 'annotate' becomes a 'Hegel.Report.Note' on the
--- 'Hegel.Report.Counterexample', re-collected by replaying the engine's
--- minimal failing case.
---
--- 'check' runs against the native backend. For application
--- monads, run @'PropertyT' App ()@ and collapse with 'hoist' before
--- checking.
+-- 'annotate' call becomes a 'Hegel.Report.Note' on the
+-- 'Hegel.Report.Counterexample', which are collected when the engine's
+-- minimal failing case is replayed.
 module Hegel.Property
   ( -- * Properties
     Property,

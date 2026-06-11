@@ -1,10 +1,11 @@
--- | 'Data.IntMap.Strict.IntMap' generator (keys always unique).
+-- | 'Data.IntMap.Strict.IntMap' generator.
 --
--- > Gen.intMap (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
--- >            (Gen.text & Gen.build)
--- >   & Gen.minSize 1
--- >   & Gen.maxSize 10
--- >   & Gen.build
+-- > let keys = Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
+-- >     vals = Gen.text & Gen.build
+-- >  in Gen.intMap keys vals
+-- >       & Gen.minSize 1
+-- >       & Gen.maxSize 10
+-- >       & Gen.build
 module Hegel.Gen.IntMap
   ( IntMapBuilder,
     intMap,

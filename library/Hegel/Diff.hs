@@ -1,5 +1,4 @@
--- |
--- The structural-diff logic in this module is derived from
+-- | The structural-diff logic in this module is derived from
 -- @Hedgehog.Internal.Show@ in the @hedgehog@ package.
 --
 -- Copyright 2017-2018, Jacob Stanley. All Rights Reserved.
@@ -62,18 +61,22 @@ renderDiff = T.intercalate "\n" . fmap renderLine
 diffValues :: Value -> Value -> Diff
 diffValues x y = toLineDiff (valueDiff x y)
 
--- | Attempt to diff two @show@-rendered strings structurally. Returns
--- 'Nothing' when either string fails to parse as a value AST; the caller
--- should fall back to 'diffLines'.
+-- | Attempt to diff two @show@-rendered strings structurally.
+--
+-- Returns 'Nothing' when either string fails to parse as a value AST; the
+-- caller should fall back to 'diffLines'.
 diffShown :: Text -> Text -> Maybe Diff
 diffShown lhs rhs = do
   x <- parseValue (T.unpack lhs)
   y <- parseValue (T.unpack rhs)
   pure (diffValues x y)
 
--- | Line-level diff of two texts. Common leading\/trailing lines are rendered
--- as context (@  @); the differing middle gets @- @\/@+ @ markers. Always
--- succeeds (used as the 'diffShown' fallback).
+-- | Line-level diff of two texts.
+--
+-- Common leading\/trailing lines are rendered as context (@  @); the differing
+-- middle gets @- @\/@+ @ markers.
+--
+-- Used as the fallback if 'diffShown' returns 'Nothing'.
 diffLines :: Text -> Text -> Diff
 diffLines lhs rhs =
   fmap LineSame prefix

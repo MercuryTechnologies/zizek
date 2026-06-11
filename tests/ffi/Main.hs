@@ -255,10 +255,10 @@ asyncTeardownSpec = describe "async teardown" $ do
       ( Runner.check
           defaultSettings
           ( forEach (Gen.bool & Gen.build) \_ ->
-              putMVar started () >> threadDelay 5_000_000 `finally` writeIORef cleanedUp True
+              putMVar started () *> threadDelay 5_000_000 `finally` writeIORef cleanedUp True
           )
       )
-      \a -> takeMVar started >> cancel a
+      \a -> takeMVar started *> cancel a
     readIORef cleanedUp `shouldReturn` True
 
   -- Bailing out of the test loop with an active, un-completed test case must

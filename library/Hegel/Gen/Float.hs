@@ -1,9 +1,11 @@
 -- | Floating-point generators.
 --
--- By default 'float' and 'double' produce NaN and ±Infinity. Setting a bound
--- via 'Hegel.Gen.Builder.min' or 'Hegel.Gen.Builder.max' implicitly excludes
--- NaN; setting both implicitly excludes Infinity. Use 'disallowNan' and
--- 'disallowInfinity' to exclude them unconditionally.
+-- By default 'float' and 'double' produce NaN and ±Infinity.
+--
+-- Setting a bound via 'Hegel.Gen.Builder.min' or 'Hegel.Gen.Builder.max'
+-- implicitly excludes NaN; setting both implicitly excludes Infinity.
+--
+--  Use 'disallowNan' and 'disallowInfinity' to exclude them unconditionally.
 module Hegel.Gen.Float
   ( -- * Builders
     FloatBuilder,

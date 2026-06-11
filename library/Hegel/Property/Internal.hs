@@ -1,6 +1,3 @@
--- | Internals of the property monad. Most users should import
--- "Hegel.Property" instead; this module additionally exposes the
--- environment and runner hooks that backends build on.
 module Hegel.Property.Internal
   ( -- * Property monad
     PropertyT (..),
@@ -48,14 +45,10 @@ import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception (throwIO, tryAny)
 import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
 
--- | The per-test-case environment a property runs against: the live test
--- case (the engine's oracle for draws) and a journaling sink for 'Note's
--- describing the case.
+-- | The per-test-case environment a property runs against:
 --
--- The sink is lazy in the note text, and ordinary cases run with a no-op
--- sink ('propertyAction'), so rendering drawn values costs nothing on the
--- hot path; notes are only materialised when a failing case is re-executed
--- with a recording sink ('observeProperty').
+-- * the 'TestCase'
+-- * a journal that collects 'Note's
 data PropertyEnv = PropertyEnv
   { testCase :: !TestCase,
     journal :: !(NoteKind -> Maybe SrcLoc -> Text -> IO ())
@@ -64,18 +57,21 @@ data PropertyEnv = PropertyEnv
 -- | A property: test logic interleaved with generator draws against a live
 -- test case.
 --
--- Unlike @'Hegel.Property.forEach' gen body@ — where all draws happen up
--- front — a 'PropertyT' may draw ('forAll'), perform effects, and assert in
--- any order. The engine shrinks across the whole interleaving.
+-- An environment that allows for test logic to be interleaved with values
+-- drawn from a 'TestCase'.
+--
+-- Unlike @'Hegel.Property.forEach' gen body@, where all draws happen up
+-- front, a 'PropertyT' may draw ('forAll'), perform effects, and make
+-- assertions in any order.
 --
 -- Failure is exception-based ('Hegel.Assertion.AssertionFailure' from
 -- 'Hegel.Assertion.assert'\/'Hegel.Assertion.failure', or any other
 -- exception), so assertions work unchanged under any transformer stack
 -- layered on top.
 --
--- __Note__: the engine re-runs the whole property on every shrink attempt
--- and once more to reconstruct the failure report, so effects must tolerate
--- repetition ('Hegel.Settings.perCaseFinalizer' runs after every case).
+-- __NOTE__: The entire body of a 'Property' is re-run on every shrink attempt,
+-- and once more to reconstruct the failure report; effects must tolerate
+-- repetition.
 newtype PropertyT m a = PropertyT (ReaderT PropertyEnv m a)
   deriving newtype (Functor, Applicative, Monad, MonadIO, MonadFail, MonadUnliftIO)
 
@@ -85,21 +81,22 @@ type Property = PropertyT IO
 instance MonadTrans PropertyT where
   lift = PropertyT . lift
 
--- | Run a property in a different base monad, e.g. to collapse an
--- application stack before handing the property to a runner:
+-- | Run a property in a different base monad.
 --
 -- > check settings (hoist (runAppM env) myProp)
 hoist :: (forall x. m x -> n x) -> PropertyT m a -> PropertyT n a
 hoist f (PropertyT (ReaderT g)) = PropertyT (ReaderT (f . g))
 
--- | Send a note to the journaling sink.
+-- | Send a note to the journal.
 note :: (MonadIO m) => NoteKind -> Maybe SrcLoc -> Text -> PropertyT m ()
 note kind loc text = PropertyT do
   env <- ask
   liftIO (env.journal kind loc text)
 
--- | Draw a value from a generator mid-test. The drawn value is journaled
--- (via 'renderValue') so it appears in the failure report.
+-- | Draw a value from a generator mid-test.
+--
+-- The drawn value is rendered to the journal so it can show up in the failure
+-- report.
 forAll :: (HasCallStack, MonadIO m, Show a) => Gen a -> PropertyT m a
 forAll = withFrozenCallStack (forAllWith renderValue)
 
@@ -111,8 +108,9 @@ forAllWith render gen = do
   note Drawn (callSite callStack) (render a)
   pure a
 
--- | Draw a value without journaling it. For bookkeeping draws (e.g. a
--- stateful driver's step budget) that would only add noise to the report.
+-- | Draw a value without journaling it.
+--
+-- For bookkeeping draws that would only add noise to the report.
 forAllSilent :: (MonadIO m) => Gen a -> PropertyT m a
 forAllSilent gen = PropertyT do
   env <- ask
@@ -123,7 +121,7 @@ forAllSilent gen = PropertyT do
 annotate :: (HasCallStack, MonadIO m) => Text -> PropertyT m ()
 annotate = note Annotation (callSite callStack)
 
--- | 'annotate' a value, rendered via 'renderValue'.
+-- | 'annotate' a value via its 'Show' instance.
 annotateShow :: (HasCallStack, MonadIO m, Show a) => a -> PropertyT m ()
 annotateShow = withFrozenCallStack (annotate . renderValue)
 
@@ -131,9 +129,10 @@ annotateShow = withFrozenCallStack (annotate . renderValue)
 footnote :: (MonadIO m) => Text -> PropertyT m ()
 footnote = note Footnote Nothing
 
--- | Discard the current test case when the condition is 'False'. Use this
--- to enforce preconditions discovered mid-test; the case is reported to the
--- engine as invalid rather than failed.
+-- | Discard the current test case when the condition is 'False'.
+--
+-- Use this to enforce preconditions discovered mid-test; the case is reported
+-- to the engine as invalid rather than failed.
 assume :: (MonadIO m) => Bool -> m ()
 assume cond = if cond then pure () else discard
 
@@ -143,21 +142,20 @@ discard = throwIO AssumeRejected
 
 -- * Runner hooks
 
--- | Run a property against an explicit environment.
+-- | Run a property against the given 'PropertyEnv'.
 runPropertyT :: PropertyEnv -> PropertyT m a -> m a
 runPropertyT env (PropertyT r) = runReaderT r env
 
--- | Lower a property to a per-case action for a drive loop. Ordinary cases
--- run with a no-op journaling sink (their notes are never read); failing
--- cases are journaled later via 'observeProperty' on the engine's minimal
--- counterexample.
+-- | Lower a property to a per-case run loop.
+--
+-- Ordinary cases run with a no-op journal; failing cases are journaled later
+-- via 'observeProperty' on the engine's minimal counterexample.
 propertyAction :: Property () -> TestCase -> IO ()
 propertyAction prop tc =
   runPropertyT PropertyEnv {testCase = tc, journal = \_ _ _ -> pure ()} prop
 
 -- | Run a property against a test case with a recording journal, returning
--- how the run ended together with the journal contents. Synchronous
--- exceptions are captured, not rethrown.
+-- how the run ended together with the journal contents.
 observeProperty :: TestCase -> Property () -> IO (Either SomeException (), [Note])
 observeProperty tc prop = do
   j <- newIORef Seq.empty
@@ -166,10 +164,12 @@ observeProperty tc prop = do
   notes <- toList <$> readIORef j
   pure (eRes, notes)
 
--- | Failure presentation details from the exception that reproduced a
--- failure: prefer 'AssertionFailure''s message, call site, and diff over the
--- engine's stable origin string, which is a dedup key rather than prose.
+-- | Attempt to recover an 'AssertionFailure' from the given exception, and (if
+-- present) extract the message, callsite, and diff associated with it.
+--
+-- If the given exception is /not/ an 'AssertionFailure', return just the
+-- fallback 'Text' argument.
 failureDetails :: Text -> SomeException -> (Text, Maybe SrcLoc, Maybe Diff)
-failureDetails engineMsg e = case fromException e of
+failureDetails fallback e = case fromException e of
   Just (af :: AssertionFailure) -> (af.message, callSite af.callStack, af.diff)
-  Nothing -> (engineMsg, Nothing, Nothing)
+  Nothing -> (fallback, Nothing, Nothing)

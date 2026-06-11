@@ -38,22 +38,9 @@ import UnliftIO.Exception (Handler (..), catches, finally)
 -- abort; otherwise the tally decides between 'GaveUp' and 'Ok'.
 check :: Settings -> Property () -> IO Report
 check settings prop =
-  -- 'withAsyncBound' rather than 'runInBoundThread': both fork a bound OS
-  -- thread (required because 'hegel_last_error_message' is thread-local and
-  -- 'throwOnError' must read it on the same OS thread that made the failing
-  -- call), but 'withAsyncBound' cancels the worker when the caller is
-  -- interrupted. An async exception to the 'check' caller is forwarded into
-  -- 'go', which unwinds the loop and runs 'hegel_run_free' promptly (it
-  -- drains any in-flight case, sets the abort flag, and joins the worker --
-  -- see refs/hegel-rust.md). 'runInBoundThread' has no such cancellation
-  -- path and would orphan the worker.
-  --
   -- Note: 'safe' blocking FFI calls (notably 'hegel_next_test_case') cannot
   -- be interrupted by async exceptions; a cancellation signal is deferred
-  -- until that call returns. Teardown latency is therefore bounded by one
-  -- engine step. A cancellation hook in libhegel (e.g.
-  -- 'hegel_run_request_abort') is the only way to remove this bound; tracked
-  -- as a follow-up.
+  -- until that call returns.
   withAsyncBound go wait
     `catches` [ Handler \(e :: HegelStartupError) -> pure (aborted (Errored (toException e))),
                 -- A libhegel call outside the per-case try (e.g. markComplete)
@@ -107,8 +94,9 @@ applySettings s ptr = do
 boolC :: Bool -> CBool
 boolC b = CBool (if b then 1 else 0)
 
--- | OR the per-phase flags into a bitmask. An empty list yields @0@ (no phases
--- enabled).
+-- | OR the per-phase flags into a bitmask.
+--
+-- An empty list yields @0@ (no phases enabled).
 phasesBitmask :: [Phase] -> Word32
 phasesBitmask = foldl' (\acc p -> acc .|. phaseFlag p) 0
 
@@ -132,7 +120,7 @@ healthCheckFlag LargeInitialTestCase = HEGEL_HC_LARGE_INITIAL_TEST_CASE
 
 -- | A single failure copied out of the run result.
 data Failure = Failure
-  { -- | Stable, draw-independent dedup key (e.g. @\"file:line\"@).
+  { -- | Stable, draw-independent deduplication key (e.g. @\"file:line\"@).
     origin :: !Text,
     -- | Engine diagnostic, if any.
     diagnostic :: !Text,
@@ -142,9 +130,11 @@ data Failure = Failure
   }
 
 -- | Read and copy the first failure from the engine's run result, if any.
+--
 -- 'Report' carries a single counterexample, so any additional distinct
--- failures are not surfaced. Must be called before 'hegel_run_free' frees the
--- borrowed result.
+-- failures are not surfaced.
+--
+-- Must be called before 'hegel_run_free' frees the borrowed result.
 readPrimaryFailure :: Ptr HegelRun -> IO (Maybe Failure)
 readPrimaryFailure run = do
   res <- hegel_run_result run
@@ -163,24 +153,21 @@ readPrimaryFailure run = do
 
 -- * Counterexample reconstruction
 
--- | Prefer the engine's diagnostic; fall back to the (stable) origin string.
+-- | Prefer the engine's diagnostic; if none exists, fall back to the (stable)
+-- origin string.
 failureMessage :: Failure -> Text
 failureMessage f
   | T.null f.diagnostic = f.origin
   | otherwise = f.diagnostic
 
--- | Replay a reproduction blob through the property to harvest its journal.
---
--- The replay handle is caller-owned and freed by 'withTestCaseFromBlob' on
--- exit. 'observeProperty' only draws and journals — it never calls
--- 'markComplete' — so 'mkTestCase' is safe here; @hegel_mark_complete@ is
--- never invoked on the from-blob handle.
+-- | Replay a reproduction blob through the 'Property' to harvest its journal.
 --
 -- The failure is expected to recur; its notes become the counterexample
 -- description, and its exception supplies the message and source location
--- (via 'failureDetails'). A replay that passes, discards, or runs out of
--- choices did not reproduce the engine's failure — surface the mismatch
--- rather than fabricating a report from a non-failing run.
+-- (via 'failureDetails').
+--
+-- A replay that passes, discards, or runs out of choices did not reproduce the
+-- engine's failure and will be reported as an unexpected divergence.
 reconstructProperty :: Property () -> Ptr HegelSettings -> ByteString -> Text -> IO Result
 reconstructProperty prop s blob msg =
   withTestCaseFromBlob s blob \tcPtr -> do
@@ -212,7 +199,7 @@ driveLoop settings action run = loop 0 0
       if tcPtr == nullPtr
         then pure (nValid, nInvalid)
         else
-          runCase settings action tcPtr >>= \case
+          runTestCase settings action tcPtr >>= \case
             Valid -> loop (nValid + 1) nInvalid
             -- 'Invalid' is reserved for assume\/filter rejections; it feeds
             -- 'Stats.invalid'.
@@ -235,12 +222,12 @@ driveLoop settings action run = loop 0 0
 -- The handlers only classify; 'markComplete' runs once, outside the 'catches'
 -- scope, so an engine error raised while reporting (a 'HegelError') propagates
 -- to 'check''s outer handler instead of being misread as a test failure.
-runCase ::
+runTestCase ::
   Settings ->
   (TestCase -> IO ()) ->
   Ptr HegelTestCase ->
   IO Status
-runCase settings action tcPtr =
+runTestCase settings action tcPtr =
   run `finally` settings.perCaseFinalizer
   where
     tc = mkTestCase tcPtr

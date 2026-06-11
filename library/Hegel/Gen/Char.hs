@@ -4,8 +4,8 @@
 --
 -- > Gen.char & Gen.build
 --
--- To restrict the character set — for example when providing an alphabet
--- to 'Hegel.Gen.Regex.alphabet' — use the modifier functions:
+-- To restrict the character set, for example when providing an alphabet
+-- to 'Hegel.Gen.Regex.alphabet', use the modifier functions:
 --
 -- > Gen.char & Gen.minCodepoint 97 & Gen.maxCodepoint 122 & Gen.build
 module Hegel.Gen.Char
