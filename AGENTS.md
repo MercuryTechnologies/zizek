@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) and other coding age
 
 ## Overview
 
-This is the Haskell library for Hegel, a universal property-based testing framework. The library drives a Hypothesis-style engine through one of two backends: natively via FFI to `libhegel` (the default), or over stdin/stdout pipes to a `hegel-core` server child process.
+This is the Haskell library for Hegel, a universal property-based testing framework. The library drives a Hypothesis-style engine in-process via FFI to the `libhegel` C library.
 
 ```bash
 just check                                           # run check-format + build + test (CI gate)
 just test                                            # run tests
-just test <name>                                     # run a specific test suite (e.g. just test native)
+just test <name>                                     # run a specific test suite (e.g. just test ffi)
 just lint                                            # STUB: run linters (add hlint to flake.nix first)
 just format                                          # run formatters (cabal, Haskell, Nix)
 just check-format                                    # check formatting without modifying files
@@ -23,18 +23,18 @@ Minimum supported GHC version is 9.10 (enforced in CI and `zizek.cabal`). If you
 
 ## Package Structure
 
-- `library/Hegel.hs` — Public API: `runProperty`/`runPropertyWith`/`runProperty_`; re-exports settings, reports, and assertions
-- `library/Hegel/Property.hs` — Property monad public API: `PropertyT`/`Property`, `forAll`/`forAllWith`/`forAllSilent`, `annotate`/`footnote`, `assume`/`discard`, `check`. Internals (env, runner hooks) in `library/Hegel/Property/Internal.hs`
+- `library/Hegel.hs` — Public API: `prop`/`forEach`/`forEachWith`; re-exports `Gen`, settings, database, reports, phases, and assertions
+- `library/Hegel/Property.hs` — Property monad public API: `PropertyT`/`Property`, `forAll`/`forAllWith`/`forAllSilent`, `annotate`/`footnote`, `assume`/`discard`, `check`/`check_`, `assert`/`failure`, `(===)`/`(/==)`. Internals in `library/Hegel/Property/Internal.hs`
 - `library/Hegel/Report.hs` — `Report`/`Result`/`Note`/`Stats`: what a property run produces
 - `library/Hegel/Assertion.hs` — `assert`/`failure` (`MonadIO`-polymorphic, call-stack-aware), failure-origin formatting
-- `library/Hegel/TestCase.hs` — per-test-case vtable through which generators talk to whichever backend is active
-- `library/Hegel/Native/` — native backend: FFI bindings to `libhegel` (`FFI.hsc`), runner (`runProperty`, `check`)
-- `library/Hegel/Server/` — server backend: protocol client, session management, runner (`runProperty`, `check`, `*On` variants)
+- `library/Hegel/TestCase.hs` — thin newtype around a `hegel_test_case_t*` pointer plus the `generate`/`startSpan`/`stopSpan`/`markComplete` operations generators use to talk to `libhegel`
+- `library/Hegel/FFI.hsc` — raw `foreign import ccall` bindings to `libhegel`: all `hegel_*` C functions, opaque handle types, `HEGEL_*` pattern synonyms, and bracket helpers
+- `library/Hegel/Runner.hs` — `check`: drives the `libhegel` engine, applies `Settings`, pumps test cases, replays reproduction blobs
 - `library/Hegel/Gen.hs` — Umbrella re-export; designed for `import Hegel.Gen qualified as Gen`
 - `library/Hegel/Gen/Internal.hs` — `Gen` GADT, `BasicGenerator`, combinators (`oneOf`, `filtered`, `assume`, `draw`)
 - `library/Hegel/Gen/Builder.hs` — `Build`, `HasMin`, `HasMax`, `HasSize` typeclasses
 - `library/Hegel/Gen/*.hs` — per-category builders (bool, integer, float, binary, char, text, regex, uri, uuid, list, set, map, …)
-- `library/Hegel/Collection.hs` — backend-managed variable-length collection handle, used by the list/set/map generators
+- `library/Hegel/Collection.hs` — `libhegel`-managed variable-length collection handle, used by the list/set/map generators
 
 ## Module Style
 
@@ -70,21 +70,18 @@ The `Build`, `HasMin`, `HasMax`, and `HasSize` typeclasses in `Hegel.Gen.Builder
 
 ### How It Works
 
-Two backends drive the same engine behavior behind the `TestCase` vtable:
+`zizek` drives the Hypothesis engine in-process via FFI to `libhegel`. The engine owns sampling, choice-sequence bookkeeping, and integrated shrinking; `zizek` describes what to generate using CBOR schemas and interprets the engine's replies.
 
-- **Native** (default): FFI calls into `libhegel` in-process.
-- **Server**: spawns `hegel-core` as a child process and communicates over its stdin/stdout handles; a single persistent session is maintained for the program run, supporting multiple test executions.
-
-There are two property-writing surfaces, both yielding a `Report`: the simple `runProperty settings gen body` API, which is sugar over the property monad, and `check settings property`, where a `Property` interleaves `forAll` draws, effects, and assertions (see `Hegel.Property`).
+There are two property-writing surfaces, both yielding a `Report`: the simple `prop settings gen body` API (sugar over `forEach`), and `check settings property`, where a `Property` interleaves `forAll` draws, effects, and assertions (see `Hegel.Property`).
 
 ### Protocol
 
-CBOR-encoded binary protocol over multiplexed streams. For each test:
-1. Client sends `run_test` request on control stream (stream 0)
-2. Server sends `test_case` events with stream IDs for each test case
-3. Client runs the test function, sending `generate`/`start_span`/`stop_span` requests on the test stream
-4. Client sends `mark_complete` with status (VALID, INVALID, or INTERESTING)
-5. After all test cases, server sends `test_done` with results
+CBOR is the wire vocabulary between `zizek` and `libhegel`. For each test case:
+1. `generate` sends a CBOR schema to the engine and receives back a CBOR value
+2. `startSpan`/`stopSpan` bracket groups of related draws so the engine can shrink them as a unit
+3. `markComplete` reports the outcome (VALID, INVALID, or INTERESTING) at the end of each test case
+
+All three are direct FFI calls into `libhegel` via `Hegel.FFI`.
 
 ### `Gen` GADT and `BasicGenerator`
 
@@ -96,17 +93,13 @@ When `toBasic` returns `Just`, generation uses a single request with the schema.
 
 `fmap` on a `BasicGenerator` preserves the schema by composing the transform into the parse function, rather than promoting to a non-basic generator.
 
-### Server Session
-
-The test suite initializes a global session variable that holds `hegel-core` server & control stream references as well as a handle to the child process that spawned `hegel-core`.
-
 ### Span System
 
 Spans (`start_span`/`stop_span`) group related generation calls so the engine can shrink them as a unit. The `Label` type in `Hegel.TestCase` identifies span types (LIST, TUPLE, ONE_OF, FILTER, etc.).
 
 ### Collections
 
-Backend-managed collections (`Collection.new`/`Collection.more`/`Collection.reject` in `Hegel.Collection`) drive variable-length generation; the list/set/map generators are built on them. Rejecting duplicates requires variable-size mode — see Note [Variable-size mode required for reject] in `Hegel.Collection`.
+`libhegel`-managed collections (`Collection.new`/`Collection.more`/`Collection.reject` in `Hegel.Collection`) drive variable-length generation; the list/set/map generators are built on them. Rejecting duplicates requires variable-size mode — see Note [Variable-size mode required for reject] in `Hegel.Collection`.
 
 ### Conformance Tests
 

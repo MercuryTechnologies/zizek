@@ -56,7 +56,7 @@ import Hegel.TestCase
   )
 import UnliftIO.IORef (IORef, newIORef, readIORef, writeIORef)
 
--- | Opaque handle to a backend-managed collection.
+-- | Opaque handle to a @libhegel@-managed collection.
 data Collection = Collection
   { tc :: !TestCase,
     minSize :: !Int,
@@ -78,7 +78,7 @@ new tc minSz maxSz = do
 -- Returns 'False' once the collection is complete; subsequent calls return
 -- 'False' immediately.
 --
--- Throws 'Hegel.TestCase.TestStopped' when the server sends a stop-test signal.
+-- Throws 'Hegel.TestCase.TestStopped' when @libhegel@ signals the test should stop.
 more :: Collection -> IO Bool
 more coll = do
   done <- readIORef coll.finished

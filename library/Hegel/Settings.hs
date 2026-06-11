@@ -1,4 +1,4 @@
--- | Configuration for a single property run, shared across all backends.
+-- | Configuration for a single property run.
 module Hegel.Settings
   ( Settings (..),
     defaultSettings,

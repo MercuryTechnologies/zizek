@@ -60,7 +60,7 @@ data BasicGenerator a = BasicGenerator
   { -- | The schema's structure: a scalar wire schema, or a tuple of two or
     -- more parts produced by 'Applicative' composition.
     schema :: !BasicSchema,
-    -- | Converts the server's response back to @a@. For a 'Scalar' schema the
+    -- | Converts the engine's response back to @a@. For a 'Scalar' schema the
     -- input is the raw scalar value; for a 'Tuple' schema it is the response
     -- 'Array' wrapping every flat component.
     parse :: Value -> Either ParseError a
@@ -266,7 +266,7 @@ parseIndex v = Left ParseError {expected = "integer", got = v}
 
 -- | Run a generator against a live test case, producing a value. May throw
 -- 'AssumeRejected' (via 'assume', 'discard', or an exhausted 'filtered'
--- retry budget) or 'UnexpectedResponse' on an unparseable server reply.
+-- retry budget) or 'UnexpectedResponse' on an unparseable engine reply.
 draw :: TestCase -> Gen a -> IO a
 draw = runGenerator
 
@@ -444,7 +444,7 @@ enumerate _ = Nothing
 -- The list must be non-empty and all weights must be positive; violations
 -- raise an error at the call site.
 --
--- /NOTE/: Weights bias which branch the server prefers, especially early in a
+-- /NOTE/: Weights bias which branch the engine prefers, especially early in a
 -- run, however they do __not__ describe a long-run sampling distribution:
 --
 -- Hypothesis explores novel choice sequences rather than drawing uniformly, so
@@ -499,7 +499,7 @@ either ga gb = oneOf [Left <$> ga, Right <$> gb]
 data UnexpectedResponse = UnexpectedResponse
   { -- | The CBOR schema sent to @hegel@.
     sentSchema :: !Value,
-    -- | The raw value returned by the server.
+    -- | The raw value returned by the engine.
     received :: !Value,
     -- | The parse failure.
     cause :: !ParseError

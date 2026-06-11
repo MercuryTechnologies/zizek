@@ -1,8 +1,7 @@
--- | Per-test-case handle and native operations.
+-- | Per-test-case handle and @libhegel@ operations.
 --
 -- Defines 'TestCase' — a thin wrapper around a @hegel_test_case_t*@ pointer —
--- and the operations through which generators communicate with the native
--- @libhegel@ backend.
+-- and the operations through which generators communicate with @libhegel@.
 module Hegel.TestCase
   ( -- * Construction
     mkTestCase,
@@ -91,7 +90,7 @@ generate tc schema = do
         HEGEL_E_ASSUME -> throwIO AssumeRejected
         _ -> throwIO e
   case CD.decode resultBytes of
-    Left err -> ioError (userError ("native backend: CBOR decode failed: " <> err))
+    Left err -> ioError (userError ("libhegel: CBOR decode failed: " <> err))
     Right v -> pure v
 
 -- | Interpret a return code from a per-test-case operation. The engine may

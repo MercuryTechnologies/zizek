@@ -1,4 +1,4 @@
--- | Native @libhegel@ property runner.
+-- | @libhegel@ property runner.
 module Hegel.Runner
   ( check,
   )
@@ -30,7 +30,7 @@ import Hegel.Settings (Settings (..))
 import Hegel.TestCase (AssumeRejected (..), Status (..), TestCase, TestStopped (..), isControlSignal, markComplete, mkTestCase)
 import UnliftIO.Exception (Handler (..), catchAny, catches, finally)
 
--- | Run a 'Property' using the native @libhegel@ backend.
+-- | Run a 'Property' through @libhegel@.
 --
 -- The engine's run result is the authority for the verdict: a failure with
 -- a reproduction blob is replayed through the property to describe the

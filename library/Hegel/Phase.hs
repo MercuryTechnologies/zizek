@@ -1,4 +1,4 @@
--- | Phases of a property run, as sent to the @hegel@ server.
+-- | Phases of a property run, as reported to @libhegel@.
 module Hegel.Phase
   ( Phase (..),
     toWire,

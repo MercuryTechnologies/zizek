@@ -66,7 +66,7 @@ _conformance-build:
   @ln -sf $(cabal list-bin zizek:test-char) tests/conformance/pytest/bin/test-char
   @ln -sf $(cabal list-bin zizek:test-regex) tests/conformance/pytest/bin/test-regex
 
-# Run the Python conformance harness using the native backend.
+# Run the Python conformance harness.
 check-conformance: _conformance-build
   @pytest tests/conformance/pytest/ -n auto
 

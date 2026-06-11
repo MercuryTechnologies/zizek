@@ -39,11 +39,11 @@ Should we ever produce an Antithesis SDK for Haskell[^2], tests written with `zi
 
 ## How It Works
 
-`zizek` does not implement its own generators or shrinking logic. Instead, this library provides combinators for building generation strategies that are submitted to the `hegel` CLI as a child process. Everything related to random sampling, choice sequence bookkeeping, and integrated shrinking happens server-side in `hegel` and is communicated back to `zizek` via the [Hegel protocol].
+`zizek` does not implement its own generators or shrinking logic. Instead, this library provides combinators for building generation strategies that are handed to the in-process `libhegel` engine via FFI. Everything related to random sampling, choice sequence bookkeeping, and integrated shrinking happens inside `libhegel` and is communicated back to `zizek` via the [Hegel protocol].
 
 A generator built with this library is a description of a *schema*: `Gen.int & Gen.min 0 & Gen.max 100 & Gen.build` describes a generation strategy for integers in `[0,100]`.
 
-When all the draws in a property can be expressed as one schema, `zizek` sends a single request and gets back the full bundle of values in one round-trip; we colloquially refer to these as "independent draws".
+When all the draws in a property can be expressed as one schema, `zizek` makes a single FFI call into `libhegel` and gets back the full bundle of values in one round-trip; we colloquially refer to these as "independent draws".
 
 When one draw depends on the results of an earlier draw, or uses a combinator that is not expressible as a schema (e.g. `filtered`, `defer`), `zizek` falls back to step-by-step interactive generation, wrapping the calls in labelled spans so Hypothesis can still shrink effectively.
 
@@ -53,7 +53,7 @@ When one draw depends on the results of an earlier draw, or uses a combinator th
 ## Installation
 
 > [!IMPORTANT]
-> `zizek` depends on the [`hegel-core`] server; it is made available in this project's Nix dev shell, but any downstream consumers will need to ensure that `hegel` is available on their `$PATH`.
+> `zizek` links the `libhegel` C library via pkg-config (`pkgconfig-depends: hegel` in `zizek.cabal`). It is provided by this project's Nix dev shell; downstream consumers will need `libhegel` discoverable by pkg-config on their system.
 
 This project is not yet published to Hackage and has dependencies that are, themselves, not yet published to Hackage.
 
@@ -88,8 +88,6 @@ source-repository-package
 
 </details>
 
-[`hegel-core`]: https://pypi.org/project/hegel-core/
-
 ## Usage
 
 `zizek` tries to wrap the underlying `hegel` machinery in a higher-level API for constructing and exercising complex generators.
@@ -107,13 +105,13 @@ import Hegel.Property (assert)
 prop_successor :: IO ()
 prop_successor = do
   let ints = Gen.int & Gen.min 0 & Gen.max 1000 & Gen.build
-  prop ints $ \n ->
+  prop ints \n ->
     assert (n + 1 > n) "successor should be greater"
 ```
 
 ### Independent Generators
 
-When the draws in a `do` block don't reference each other, and `ApplicativeDo` has been enabled, `zizek` will batch them into a single request to `hegel` for the whole tuple and the server can shrink each component independently when a counterexample is found:
+When the draws in a `do` block don't reference each other, and `ApplicativeDo` has been enabled, `zizek` will batch them into a single FFI call into `libhegel` for the whole tuple and the engine can shrink each component independently when a counterexample is found:
 
 ```haskell
 {-# LANGUAGE ApplicativeDo #-}
@@ -130,12 +128,12 @@ boolAndInt = do
   pure (b, n)
 
 prop_pair :: IO ()
-prop_pair = prop boolAndInt $ \(_, n) ->
+prop_pair = prop boolAndInt \(_, n) ->
   assert (n >= 0 && n <= 100) "second component out of range"
 ```
 
 > [!NOTE]
-> The example will compile and run without `ApplicativeDo`, but `zizek` will now issue two calls to `hegel` and shrinking will be dependent.
+> The example will compile and run without `ApplicativeDo`, but `zizek` will now issue two separate FFI calls and shrinking will be dependent.
 
 ### Dependent Generators
 
@@ -150,12 +148,11 @@ import Hegel.Gen qualified as Gen
 import Hegel.Property (annotate, assert, check_, forAll)
 
 prop_intervalOrdered :: IO ()
-prop_intervalOrdered =
-  check_ def do
-    lo <- forAll (Gen.int & Gen.min 0 & Gen.max 100  & Gen.build)
-    hi <- forAll (Gen.int & Gen.min lo & Gen.max 100 & Gen.build)
-    annotate "interval should be ordered"
-    assert (lo <= hi) "interval invariant broken"
+prop_intervalOrdered = check_ def do
+  lo <- forAll (Gen.int & Gen.min 0  & Gen.max 100 & Gen.build)
+  hi <- forAll (Gen.int & Gen.min lo & Gen.max 100 & Gen.build)
+  annotate "interval should be ordered"
+  assert (lo <= hi) "interval invariant broken"
 ```
 
 Alternatively, when the dependency is a precondition rather than a constraint you can express directly, `Gen.assume` states it inline; if the condition fails, the test case is discarded rather than counted as a failure:
@@ -181,7 +178,7 @@ import Data.Function ((&))
 import Data.List (nub)
 import Hegel (Gen, prop)
 import Hegel.Gen qualified as Gen
-import Hegel.Property (assert)
+import Hegel.Property ((===))
 
 uniqueInts :: Gen [Int]
 uniqueInts =
@@ -194,8 +191,8 @@ uniqueInts =
       & Gen.build
 
 prop_uniqueInts :: IO ()
-prop_uniqueInts = prop uniqueInts $ \xs ->
-  assert (length xs == length (nub xs)) "list had duplicates"
+prop_uniqueInts = prop uniqueInts \xs ->
+  length xs === length (nub xs)
 ```
 
 ### Recursive Generators
@@ -206,7 +203,7 @@ Self-referential generators must wrap each recursive edge in `Gen.defer`; failin
 import Data.Function ((&))
 import Hegel (Gen, prop)
 import Hegel.Gen qualified as Gen
-import Hegel.Property (assert)
+import Hegel.Property ((===))
 
 data Tree = Leaf Int | Branch Tree Tree
   deriving stock Show
@@ -218,8 +215,8 @@ tree = Gen.oneOf [leaf, branch]
     branch = Branch <$> Gen.defer tree <*> Gen.defer tree
 
 prop_tree :: IO ()
-prop_tree = prop tree $ \t ->
-  assert (leaves t == branches t + 1) "leaf/branch count invariant broken"
+prop_tree = prop tree \t ->
+  leaves t === branches t + 1
   where
     leaves (Leaf _)     = 1
     leaves (Branch l r) = leaves l + leaves r
@@ -228,7 +225,7 @@ prop_tree = prop tree $ \t ->
 ```
 
 > [!NOTE]
-> `Gen.defer` always falls back to interactive generation; each recursive step is a separate round-trip to the `hegel` server.
+> `Gen.defer` always falls back to interactive generation; each recursive step is a separate FFI call into `libhegel`.
 
 ### Integrations
 
@@ -244,10 +241,9 @@ import Hegel.Tasty (testProperty)
 import Test.Tasty (TestTree)
 
 test_reverseInvolutive :: TestTree
-test_reverseInvolutive =
-  testProperty "reverse is involutive" do
-    xs <- forAll (Gen.list (Gen.int & Gen.build) & Gen.build)
-    reverse (reverse xs) === xs
+test_reverseInvolutive = testProperty "reverse is involutive" do
+  xs <- forAll (Gen.list (Gen.int & Gen.build) & Gen.build)
+  reverse (reverse xs) === xs
 ```
 
 With `hspec`, a `PropertyT IO ()` is itself an `Example`, so a property can be the body of an `it` directly:
@@ -265,6 +261,9 @@ spec = describe "reverse" $
     xs <- forAll (Gen.list (Gen.int & Gen.build) & Gen.build)
     reverse (reverse xs) === xs
 ```
+
+> [!NOTE]
+> The `hegel` helper function is just `id` with a fixed `PropertyT` type to make type inference a little easier.
 
 ## Generators
 
@@ -327,7 +326,6 @@ $ just repl              # start a GHCi session with this library in-scope
 
 `zizek` passes `hegel-core`'s conformance tests, but some work remains outstanding:
 
-* deprecation & removal of the subprocess backend in favor of the native backend
 * automatic, stable `databaseKey` derivation; replay currently requires supplying the same key by hand on every run
 * an API to seed the `Explicit` phase with hand-written examples
 * stateful/state-machine testing

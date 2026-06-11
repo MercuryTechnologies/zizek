@@ -140,9 +140,6 @@ instance (ToCBOR a) => ToCBOR (FloatSchema a) where
           ]
 
 -- | Character filtering options, shared by 'TextSchema' and 'RegexSchema'.
--- Every field is optional; absent fields tell the server to apply no
--- restriction on that axis. Wire representation is a CBOR map with the
--- character-filtering keys described in the @hegel@ wire spec.
 data CharacterFields = CharacterFields
   { -- | Restrict to characters encodable in this codec (e.g. @"ascii"@,
     -- @"latin-1"@).
@@ -267,7 +264,7 @@ instance ToCBOR DomainSchema where
       ["type" .= ("domain" :: Text)]
         <> catMaybes ["max_length" .=? s.maxLength]
 
--- | Default domain schema: no length limit (server default is 255).
+-- | Default domain schema: no length limit (engine default is 255).
 domain :: DomainSchema
 domain = DomainSchema {maxLength = Nothing}
 
@@ -303,7 +300,7 @@ data ListSchema = ListSchema
     minSize :: !Int,
     -- | Maximum number of elements (inclusive), or unbounded.
     maxSize :: !(Maybe Int),
-    -- | When 'True', the server rejects duplicate elements.
+    -- | When 'True', the engine rejects duplicate elements.
     unique :: !Bool
   }
 
@@ -381,7 +378,7 @@ tuple = TupleSchema
 
 -- | OneOf schema: a tagged-union draw.
 data OneOfSchema = OneOfSchema
-  { -- | Branch schemas; the server picks one and returns @[index, value]@.
+  { -- | Branch schemas; the engine picks one and returns @[index, value]@.
     generators :: ![Value]
   }
 

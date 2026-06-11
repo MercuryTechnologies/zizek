@@ -198,6 +198,10 @@ runConformancePropertyExpectFailures gen body = run `finally` pure ()
 
 -- | Write @{\"interesting_test_cases\": N}@ to @CONFORMANCE_SERVER_RUN_METRICS_FILE@.
 -- No-op when the env var is absent.
+--
+-- NOTE: @CONFORMANCE_SERVER_RUN_METRICS_FILE@ is set by the upstream
+-- @hegel.conformance@ Python harness; the name is an external contract and
+-- must not be changed here.
 writeInterestingCount :: Int -> IO ()
 writeInterestingCount n =
   lookupEnv "CONFORMANCE_SERVER_RUN_METRICS_FILE" >>= \case

@@ -35,9 +35,11 @@ list :: Gen a -> ListBuilder a
 list g = ListBuilder {lElement = g, lMinSize = 0, lMaxSize = Nothing, lUnique = Nothing}
 
 -- | Require all elements to be distinct according to the given equality
--- predicate. On the basic path the server enforces uniqueness using its own
+-- predicate.
+--
+-- On the basic path, the engine enforces uniqueness using its own
 -- representation equality; on the interactive path the predicate is used
--- client-side to reject duplicates.
+-- locally to reject duplicates.
 unique :: (a -> a -> Bool) -> ListBuilder a -> ListBuilder a
 unique eq b = b {lUnique = Just eq}
 

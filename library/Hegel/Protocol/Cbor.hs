@@ -110,9 +110,9 @@ boolVal = Bool
 nullVal :: Value
 nullVal = Null
 
--- | Decode a generated string value from the @hegel@ server.
+-- | Decode a generated string value from @libhegel@.
 --
--- The server encodes all string values as @CBOR tag 91@ wrapping a WTF-8
+-- The engine encodes all string values as @CBOR tag 91@ wrapping a WTF-8
 -- byte string (identical to UTF-8 for non-surrogate code points). Returns
 -- 'Left' when the value is not a tag-91 byte string or the bytes are not
 -- valid UTF-8.
