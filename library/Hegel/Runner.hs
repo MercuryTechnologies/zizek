@@ -5,13 +5,13 @@ module Hegel.Runner
 where
 
 import Control.Concurrent.Async (wait, withAsyncBound)
-import Control.Exception (SomeException, fromException, toException)
+import Control.Exception (toException)
+import Control.Exception qualified as E
 import Data.Bits ((.|.))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Foldable (for_)
 import Data.Functor (($>))
-import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
@@ -27,8 +27,8 @@ import Hegel.Phase (Phase (..))
 import Hegel.Property.Internal (Property, failureDetails, observeProperty, propertyAction)
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
 import Hegel.Settings (Settings (..))
-import Hegel.TestCase (AssumeRejected (..), Status (..), TestCase, TestStopped (..), markComplete, mkTestCase)
-import UnliftIO.Exception (Handler (..), catches, finally)
+import Hegel.TestCase (AssumeRejected (..), Status (..), TestCase, TestStopped (..), isControlSignal, markComplete, mkTestCase)
+import UnliftIO.Exception (Handler (..), catchAny, catches, finally)
 
 -- | Run a 'Property' using the native @libhegel@ backend.
 --
@@ -60,7 +60,7 @@ check settings prop =
         pure (nv, ni, f)
       result <- case mFailure of
         Just f
-          | Just blob <- f.reproductionBlob -> reconstructProperty prop s blob (failureMessage f)
+          | Just blob <- f.reproductionBlob -> reconstructProperty prop s blob
           | otherwise -> pure (Aborted (UnhealthyInput (failureMessage f)))
         Nothing
           | nValid == 0 -> pure (GaveUp "no valid examples found")
@@ -168,22 +168,22 @@ failureMessage f
 --
 -- A replay that passes, discards, or runs out of choices did not reproduce the
 -- engine's failure and will be reported as an unexpected divergence.
-reconstructProperty :: Property () -> Ptr HegelSettings -> ByteString -> Text -> IO Result
-reconstructProperty prop s blob msg =
+reconstructProperty :: Property () -> Ptr HegelSettings -> ByteString -> IO Result
+reconstructProperty prop s blob =
   withTestCaseFromBlob s blob \tcPtr -> do
     (eRes, notes) <- observeProperty (mkTestCase tcPtr) prop
     pure case eRes of
       Left e
-        | isDivergence e -> diverged
+        -- A discard or budget stop during replay means the engine's failure
+        -- did not recur.
+        | isControlSignal e -> diverged
         | otherwise ->
-            let (message, loc, diff) = failureDetails msg e
+            let (message, loc, diff) = failureDetails e
              in Counterexample {message, notes, loc, diff}
       Right () -> diverged
   where
     diverged =
       Aborted (Errored (toException (userError "failure reported but the property did not reproduce it on replay")))
-    isDivergence e =
-      isJust (fromException @AssumeRejected e) || isJust (fromException @TestStopped e)
 
 -- * Per-case loop
 
@@ -233,13 +233,18 @@ runTestCase settings action tcPtr =
     tc = mkTestCase tcPtr
     run = do
       status <-
+        -- The control signals are thrown as asynchronous exceptions, so
+        -- they must be caught with base 'E.catches'.
+        --
+        -- All synchronous exceptions are caught by `catchAny` so they can be
+        -- marked as indicative of test failure.
         (action tc $> Valid)
-          `catches` [ Handler \AssumeRejected -> pure Invalid,
-                      -- libhegel owns the choice budget but does not observe
-                      -- that we stopped, so report Overrun explicitly to let
-                      -- the engine shrink.
-                      Handler \TestStopped -> pure Overrun,
-                      Handler \(e :: SomeException) -> pure (Interesting (originOf e))
-                    ]
+          `E.catches` [ E.Handler \AssumeRejected -> pure Invalid,
+                        -- libhegel owns the choice budget but does not observe
+                        -- that we stopped, so report Overrun explicitly to let
+                        -- the engine shrink.
+                        E.Handler \TestStopped -> pure Overrun
+                      ]
+          `catchAny` \e -> pure (Interesting (originOf e))
       markComplete tc status
       pure status

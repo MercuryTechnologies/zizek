@@ -1,5 +1,5 @@
 -- | Boolean generator.
--- 
+--
 -- > Gen.bool & Gen.build
 module Hegel.Gen.Bool
   ( BoolBuilder,

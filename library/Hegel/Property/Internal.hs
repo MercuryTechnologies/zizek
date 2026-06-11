@@ -28,6 +28,7 @@ module Hegel.Property.Internal
 where
 
 import Control.Exception (SomeException, fromException)
+import Control.Exception qualified as E
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Class (MonadTrans (..))
 import Control.Monad.Trans.Reader (ReaderT (..), ask)
@@ -35,14 +36,15 @@ import Data.Foldable (toList)
 import Data.Sequence ((|>))
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
+import Data.Text qualified as T
 import GHC.Stack (HasCallStack, SrcLoc, callStack, withFrozenCallStack)
 import Hegel.Assertion (AssertionFailure (..), callSite)
 import Hegel.Diff (Diff)
 import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
 import Hegel.Report (Note (..), NoteKind (..), renderValue)
-import Hegel.TestCase (TestCase)
+import Hegel.TestCase (TestCase, isControlSignal)
 import UnliftIO (MonadUnliftIO)
-import UnliftIO.Exception (throwIO, tryAny)
+import UnliftIO.Exception (isSyncException)
 import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
 
 -- | The per-test-case environment a property runs against:
@@ -136,9 +138,21 @@ footnote = note Footnote Nothing
 assume :: (MonadIO m) => Bool -> m ()
 assume cond = if cond then pure () else discard
 
+-- NOTE: This function _needs_ to use 'Control.Exception.throwIO' so that
+-- 'AssumeRejected' can be thrown as as a proper async exception.
+
 -- | Discard the current test case unconditionally.
+--
+-- The discard signal is delivered as an asynchronous exception
+-- ('Hegel.TestCase.AssumeRejected') so that catch-all handlers in the
+-- property body may pass it through to the runner instead of silently ignoring
+-- them.
+--
+-- __NOTE__: A bare 'Control.Exception.try' @\@SomeException@ will catch
+-- asynchronous exceptions, which will produce undefined behavior from this
+-- library.
 discard :: (MonadIO m) => m a
-discard = throwIO AssumeRejected
+discard = liftIO (E.throwIO AssumeRejected)
 
 -- * Runner hooks
 
@@ -160,16 +174,35 @@ observeProperty :: TestCase -> Property () -> IO (Either SomeException (), [Note
 observeProperty tc prop = do
   j <- newIORef Seq.empty
   let record kind loc text = modifyIORef' j (|> Note {kind, text, loc})
-  eRes <- tryAny (runPropertyT PropertyEnv {testCase = tc, journal = record} prop)
+  eRes <- tryProperty (runPropertyT PropertyEnv {testCase = tc, journal = record} prop)
   notes <- toList <$> readIORef j
   pure (eRes, notes)
+
+-- NOTE: This function _needs_ to use 'Control.Exception.throwIO' so that
+-- all non-Hegel async exceptions are rethrown _as_ async exceptions (and not
+-- re-wrapped in a synchronous exception wrapper by safe-exceptions).
+
+-- | Like 'UnliftIO.Exception.tryAny', but additionally catches Hegel's
+-- control signals ('Hegel.TestCase.AssumeRejected',
+-- 'Hegel.TestCase.TestStopped'), which are async exceptions precisely so that
+-- user catch-alls pass them through.
+--
+-- All other async exceptions should be passed through unmodified.
+tryProperty :: IO a -> IO (Either SomeException a)
+tryProperty act =
+  E.try act >>= \res -> case res of
+    Right a -> pure (Right a)
+    Left e
+      | isControlSignal e || isSyncException e -> pure (Left e)
+      -- Base 'E.throwIO' to preserve the exception's async flavor on rethrow.
+      | otherwise -> E.throwIO e
 
 -- | Attempt to recover an 'AssertionFailure' from the given exception, and (if
 -- present) extract the message, callsite, and diff associated with it.
 --
--- If the given exception is /not/ an 'AssertionFailure', return just the
--- fallback 'Text' argument.
-failureDetails :: Text -> SomeException -> (Text, Maybe SrcLoc, Maybe Diff)
-failureDetails fallback e = case fromException e of
+-- If the given exception is /not/ an 'AssertionFailure', render it with
+-- 'displayException' and return that on its own.
+failureDetails :: SomeException -> (Text, Maybe SrcLoc, Maybe Diff)
+failureDetails e = case fromException e of
   Just (af :: AssertionFailure) -> (af.message, callSite af.callStack, af.diff)
-  Nothing -> (fallback, Nothing, Nothing)
+  Nothing -> (T.pack (E.displayException e), Nothing, Nothing)

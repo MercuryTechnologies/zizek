@@ -491,8 +491,8 @@ either :: Gen a -> Gen b -> Gen (Either a b)
 either ga gb = oneOf [Left <$> ga, Right <$> gb]
 
 -- $exceptions
--- 'AssumeRejected' is re-exported from 'Hegel.TestCase'.
--- Used for control flow within the runner, not for surfacing test failures.
+-- 'AssumeRejected' is re-exported from 'Hegel.TestCase', as it is used for
+-- control flow within the runner rather than for surfacing test failures.
 
 -- | Thrown when @hegel@ returns a value that cannot be parsed according
 -- to the schema that was sent.

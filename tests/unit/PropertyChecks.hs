@@ -25,6 +25,7 @@ import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), Stats (
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Test.Hspec
+import UnliftIO.Exception (throwIO, tryAny)
 import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 
 intR :: (Int, Int) -> Gen Int
@@ -64,6 +65,26 @@ spec = do
     case report.result of
       Ok -> report.stats.invalid `shouldSatisfy` (> 0)
       other -> expectationFailure ("expected Ok, got: " <> show other)
+
+  it "discards through catch-all handlers in the body" $ do
+    -- The discard signal is thrown as an asynchronous exception, so a body-level
+    -- 'tryAny' must rethrow it; otherwise the x >= 50 cases would run and fail
+    -- the assertion.
+    report <- check defaultSettings do
+      x <- forAll (intR (0, 100))
+      _ <- tryAny (assume (x < 50))
+      assert (x < 50) "assumed bound holds despite the catch-all"
+    case report.result of
+      Ok -> report.stats.invalid `shouldSatisfy` (> 0)
+      other -> expectationFailure ("expected Ok, got: " <> show other)
+
+  it "reports non-assertion exceptions as counterexamples" $ do
+    report <- check defaultSettings do
+      x <- forAll (intR (0, 100))
+      if x >= 0 then throwIO (userError "boom") else pure ()
+    case report.result of
+      Counterexample {message} -> message `shouldSatisfy` T.isInfixOf "boom"
+      other -> expectationFailure ("expected a counterexample, got: " <> show other)
 
   it "shrinks dependent draws to a minimal counterexample" $ do
     -- The second range depends on the first draw; minimal failing case is

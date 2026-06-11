@@ -31,14 +31,22 @@ module Hegel.TestCase
 
     -- * Exceptions
     AssumeRejected (..),
+    isControlSignal,
   )
 where
 
 import CBOR.Decode qualified as CD
 import CBOR.Encode qualified as CE
 import CBOR.Value (Value)
-import Control.Exception (Exception)
+import Control.Exception
+  ( Exception (..),
+    SomeException,
+    asyncExceptionFromException,
+    asyncExceptionToException,
+    throwIO,
+  )
 import Data.Int (Int64)
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Foreign (Ptr, alloca, nullPtr, peek)
@@ -46,7 +54,7 @@ import Foreign.C.String (withCString)
 import Foreign.C.Types (CBool (..), CInt)
 import Hegel.FFI hiding (generate)
 import Hegel.FFI qualified as FFI (generate)
-import UnliftIO.Exception (catch, throwIO)
+import UnliftIO.Exception (catch)
 
 -- * Construction
 
@@ -66,6 +74,9 @@ mkTestCase = TestCase
 newtype TestCase = TestCase {ptr :: Ptr HegelTestCase}
 
 -- * Generation
+
+-- NOTE: This function _needs_ to use 'Control.Exception.throwIO' so that
+-- 'TestStop' & 'AssumeRejected' can be thrown as proper async exceptions.
 
 -- | Ask the engine for a value matching the CBOR schema.
 --
@@ -143,7 +154,7 @@ stopSpan tc isDiscard =
 
 -- | Report the final outcome for this test case.
 --
--- Swallows 'HEGEL_E_STOP_TEST' for all statuses — the engine may return it as
+-- Handles 'HEGEL_E_STOP_TEST' for all statuses: the engine may return it as
 -- a normal "continue" signal at any point during the run (not only after
 -- INTERESTING).
 --
@@ -168,12 +179,29 @@ markComplete tc status = do
 
 -- * Exceptions
 
+-- $controlSignals
+--
+-- 'TestStopped' and 'AssumeRejected' are /control signals/: they carry the
+-- runner's verdict for the current test case and must reach
+-- 'Hegel.Runner.runTestCase' to be classified.
+--
+-- A user handler that discards one of these exceptions would silently
+-- corrupt the run; to protect against this, they are thrown as asynchronous
+-- exceptions.
+--
+-- Internal handlers that must catch these signals can use 'isControlSignal'
+-- to filter for them in asynchronous exception handlers.
+
 -- | Thrown when the engine signals that the current test case should be
--- abandoned (choice budget exhausted). The runner treats this as a discard.
+-- abandoned (choice budget exhausted).
+--
+-- The runner treats this as a discard.
 data TestStopped = TestStopped
   deriving stock (Show)
 
-instance Exception TestStopped
+instance Exception TestStopped where
+  toException = asyncExceptionToException
+  fromException = asyncExceptionFromException
 
 -- | Thrown when a test case is deliberately discarded, either via
 -- 'Hegel.Property.assume' or 'Hegel.Property.discard', or by an exhausted
@@ -181,7 +209,19 @@ instance Exception TestStopped
 data AssumeRejected = AssumeRejected
   deriving stock (Show)
 
-instance Exception AssumeRejected
+instance Exception AssumeRejected where
+  toException = asyncExceptionToException
+  fromException = asyncExceptionFromException
+
+-- | Is this exception one of Hegel's control signals ('AssumeRejected' or
+-- 'TestStopped')?
+--
+-- These signals are thrown as asynchronous exceptions, so handlers that need
+-- to catch them may use this predicate to recognize them.
+isControlSignal :: SomeException -> Bool
+isControlSignal e =
+  isJust (fromException @AssumeRejected e)
+    || isJust (fromException @TestStopped e)
 
 -- * Status
 
