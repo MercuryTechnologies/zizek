@@ -7,7 +7,7 @@ import Data.List (isInfixOf)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import GHC.Stack (SrcLoc (..))
+import GHC.Stack (HasCallStack, SrcLoc (..), callStack, getCallStack)
 import Hegel.Assertion (AssertionFailure (..), (/==), (===))
 import Hegel.Diff (Diff, LineDiff (..), diffShown)
 import Hegel.Report
@@ -29,6 +29,13 @@ drawn, annotation, footer :: Text -> Note
 drawn t = Note {kind = Drawn, text = t, loc = Nothing}
 annotation t = Note {kind = Annotation, text = t, loc = Nothing}
 footer t = Note {kind = Footnote, text = t, loc = Nothing}
+
+-- | The 'SrcLoc' of the call site, so tests can point a note at a line that
+-- really exists in this file without hardcoding line numbers.
+hereLoc :: (HasCallStack) => SrcLoc
+hereLoc = case getCallStack callStack of
+  (_, loc) : _ -> loc
+  [] -> error "hereLoc: empty call stack"
 
 spec :: Spec
 spec = do
@@ -113,18 +120,8 @@ spec = do
       "\ESC[" `isInfixOf` ansi `shouldBe` True
 
   describe "renderReportRich" $ do
-    it "splices the source line for a Drawn note with a known location" $ do
-      -- Point this at the first line of this very file; it's stable.
-      let loc' =
-            SrcLoc
-              { srcLocPackage = "zizek",
-                srcLocModule = "ReportRendering",
-                srcLocFile = "tests/unit/ReportRendering.hs",
-                srcLocStartLine = 1,
-                srcLocStartCol = 1,
-                srcLocEndLine = 1,
-                srcLocEndCol = 1
-              }
+    it "splices the enclosing declaration for a Drawn note with a known location" $ do
+      let loc' = hereLoc -- splice-marker: this line should appear in the rich report
           result =
             Counterexample
               { message = "boom",
@@ -134,8 +131,9 @@ spec = do
               }
           report = Report {result, stats = Stats {valid = 3, invalid = 0}}
       rich <- renderReportRich report
-      -- The first line of ReportRendering.hs should appear in the output.
-      "-- | Pure tests" `T.isInfixOf` rich `shouldBe` True
+      -- The note's location sits inside the `spec` declaration of this very
+      -- file, so the source listing should include the marked line.
+      "splice-marker" `T.isInfixOf` rich `shouldBe` True
 
     it "degrades to plain renderReport when the source file is missing" $ do
       let loc' =

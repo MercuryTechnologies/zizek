@@ -16,7 +16,7 @@ where
 import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Hegel.Property.Internal (Property)
-import Hegel.Report (Report (..), Result (..), renderReport, renderReportAnsi)
+import Hegel.Report (Report (..), Result (..), renderReportRich, renderReportRichAnsi)
 import Hegel.Runner (check)
 import Hegel.Settings (Settings, defaultSettings)
 import System.Environment (lookupEnv)
@@ -34,8 +34,10 @@ instance IsTest HegelTest where
   run opts (HegelTest settings prop) _progress = do
     report <- check settings prop
     useColor <- resolveColor (lookupOption opts)
-    let render = if useColor then renderReportAnsi else renderReport
-        rendered = T.unpack (render report)
+    -- The rich renderer falls back internally to the plain renderer when the
+    -- result is not a Counterexample or source files can't be read.
+    let render = if useColor then renderReportRichAnsi else renderReportRich
+    rendered <- T.unpack <$> render report
     pure case report.result of
       Ok -> testPassed rendered
       _ -> testFailed rendered

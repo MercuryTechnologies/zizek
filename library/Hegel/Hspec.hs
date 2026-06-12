@@ -20,20 +20,17 @@ module Hegel.Hspec
 where
 
 import Data.Maybe (isJust)
-import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Stack (SrcLoc (..))
-import Hegel.Diff (Diff)
 import Hegel.Property.Internal (PropertyT)
 import Hegel.Report
   ( Abort (..),
-    Note,
     Report (..),
     Result (..),
-    renderFailure,
-    renderFailureAnsi,
     renderReport,
     renderReportAnsi,
+    renderReportRich,
+    renderReportRichAnsi,
   )
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
@@ -65,7 +62,8 @@ instance (m ~ IO) => Hspec.Example (arg -> PropertyT m ()) where
       -- fall back to a terminal check; this is the closest we can get to
       -- hspec's own color decision from within evaluateExample.
       useColor <- shouldUseColor
-      writeIORef ref (toHspecResult useColor report)
+      result <- toHspecResult useColor report
+      writeIORef ref result
     readIORef ref
 
 -- | Returns 'True' when ANSI colour output is appropriate: the output handle
@@ -78,26 +76,25 @@ shouldUseColor = do
     then pure False
     else hIsTerminalDevice stderr
 
-toHspecResult :: Bool -> Report -> Hspec.Result
+toHspecResult :: Bool -> Report -> IO Hspec.Result
 toHspecResult useColor report = case report.result of
-  Ok -> Hspec.Result (T.unpack (render report)) Hspec.Success
-  Counterexample {message, notes, loc, diff} ->
-    failed
-      (hspecLocation <$> loc)
-      -- The location travels in hspec's own slot; keep it out of the text.
-      (Hspec.Reason (T.unpack (renderFail message notes Nothing diff)))
+  Ok -> pure (Hspec.Result (T.unpack (render report)) Hspec.Success)
+  Counterexample {loc} -> do
+    -- Use the source-aware rich renderer; falls back internally to the plain
+    -- renderer when source files can't be read.  The ┏━━ header already shows
+    -- the file, so there's no need to duplicate it in hspec's Location slot —
+    -- but we still fill that slot so hspec can jump to the right line.
+    rendered <- richRender report
+    pure (failed (hspecLocation <$> loc) (Hspec.Reason (T.unpack rendered)))
   GaveUp msg ->
-    failed Nothing (Hspec.Reason ("gave up: " <> T.unpack msg))
+    pure (failed Nothing (Hspec.Reason ("gave up: " <> T.unpack msg)))
   Aborted (Errored e) ->
-    failed Nothing (Hspec.Error Nothing e)
+    pure (failed Nothing (Hspec.Error Nothing e))
   Aborted (UnhealthyInput msg) ->
-    failed Nothing (Hspec.Reason ("health check failed: " <> T.unpack msg))
+    pure (failed Nothing (Hspec.Reason ("health check failed: " <> T.unpack msg)))
   where
-    render :: Report -> Text
     render = if useColor then renderReportAnsi else renderReport
-    renderFail :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Text
-    renderFail = if useColor then renderFailureAnsi else renderFailure
-    failed :: Maybe Hspec.Location -> Hspec.FailureReason -> Hspec.Result
+    richRender = if useColor then renderReportRichAnsi else renderReportRich
     failed loc reason = Hspec.Result "" (Hspec.Failure loc reason)
 
 hspecLocation :: SrcLoc -> Hspec.Location

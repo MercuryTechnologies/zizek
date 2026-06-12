@@ -16,27 +16,39 @@ module Hegel.Report
     renderReport,
     renderReportAnsi,
     renderReportRich,
+    renderReportRichAnsi,
     renderFailure,
-    renderFailureAnsi,
     renderValue,
+
+    -- * Re-exports from 'Hegel.Report.Ann'
+    Ann (..),
 
     -- * Exceptions
     PropertyFailed (..),
   )
 where
 
-import Control.Exception (Exception (displayException), IOException, SomeException, throwIO)
-import Control.Exception qualified as Ex
+import Control.Exception (Exception (displayException), SomeException, throwIO)
+import Data.Either (partitionEithers)
 import Data.List (mapAccumL, partition)
+import Data.Maybe (catMaybes, maybeToList)
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Stack (SrcLoc (..))
-import Hegel.Diff (Diff, LineDiff (..))
+import Hegel.Diff (Diff)
+import Hegel.Report.Ann (Ann (..), docToAnsi, docToText, lineDiffDoc)
+import Hegel.Report.Discovery (loadDeclarations)
+import Hegel.Report.Source
+  ( applyContext,
+    defaultContext,
+    mergeDeclarations,
+    ppDeclaration,
+    ppFailedInput,
+    ppFailureLocation,
+  )
+import Hegel.Report.Span (Span (..), spanFromSrcLoc)
 import Prettyprinter (Doc, (<+>))
 import Prettyprinter qualified as PP
-import Prettyprinter.Render.Terminal (AnsiStyle)
-import Prettyprinter.Render.Terminal qualified as PP.Terminal
-import Prettyprinter.Render.Text qualified as PP.Text
 import Text.Show.Pretty qualified as Pretty
 
 -- | Summary statistics for a property run.
@@ -126,18 +138,7 @@ data Note = Note
   }
   deriving stock (Show)
 
--- * Rendering
-
--- | Semantic annotations on report fragments. The plain-text renderer strips
--- them; the ANSI renderer maps them to colours.
-data Ann
-  = MessageAnn
-  | LocAnn
-  | DrawnAnn
-  | NoteAnn
-  | DiffSame
-  | DiffRemoved
-  | DiffAdded
+-- * Pure rendering (always succeeds, no IO)
 
 -- | Render a report as plain text.
 renderReport :: Report -> Text
@@ -148,51 +149,10 @@ renderReport = docToText . reportDoc
 renderReportAnsi :: Report -> Text
 renderReportAnsi = docToAnsi . reportDoc
 
--- | Render a report as plain text, splicing in the source line above each
--- 'Drawn' note whose location is known. Reads source files at render time;
--- degrades gracefully to 'renderReport' when files are unavailable.
-renderReportRich :: Report -> IO Text
-renderReportRich report = case report.result of
-  Counterexample {message, notes, loc, diff} -> do
-    richNotes <- mapM enrichNote notes
-    pure $
-      docToText $
-        PP.vsep
-          [ "failed after" <+> statsDoc report.stats,
-            failureDoc message richNotes loc diff
-          ]
-  _ -> pure (renderReport report)
-  where
-    enrichNote :: Note -> IO Note
-    enrichNote n@Note {kind = Drawn, loc = Just sl} =
-      readSourceLine sl.srcLocFile sl.srcLocStartLine
-        >>= \msrc -> pure case msrc of
-          Nothing -> n
-          Just src -> n {text = T.pack src <> "\n" <> n.text}
-    enrichNote n = pure n
-
--- | Read a single line (1-based) from a source file, returning 'Nothing' on
--- any 'IOException' or out-of-range line number.
-readSourceLine :: FilePath -> Int -> IO (Maybe String)
-readSourceLine path lineNo =
-  ( do
-      ls <- lines <$> readFile path
-      let idx = lineNo - 1
-      pure
-        if idx >= 0 && idx < length ls
-          then Just (ls !! idx)
-          else Nothing
-  )
-    `Ex.catch` \(_ :: IOException) -> pure Nothing
-
 -- | Render the failure section alone (headline message, diff, location,
 -- journal). 'PropertyFailed' and 'renderReport' share this layout.
 renderFailure :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Text
 renderFailure message notes loc diff = docToText (failureDoc message notes loc diff)
-
--- | 'renderFailure' with ANSI colour codes.
-renderFailureAnsi :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Text
-renderFailureAnsi message notes loc diff = docToAnsi (failureDoc message notes loc diff)
 
 -- | Render a value via its 'Show' instance, pretty-printed multi-line when
 -- the output parses as a value AST, the raw 'show' string otherwise. The
@@ -201,6 +161,58 @@ renderValue :: (Show a) => a -> Text
 renderValue a = T.pack (maybe s Pretty.valToStr (Pretty.parseValue s))
   where
     s = show a
+
+-- * Source-aware rendering (reads files; degrades gracefully)
+
+-- | Render a report as plain text, splicing drawn values and the failure
+-- message inline into a source listing. Reads source files at render time;
+-- degrades to 'renderReport' when no source is readable.
+renderReportRich :: Report -> IO Text
+renderReportRich = renderReportRichWith renderReport docToText
+
+-- | 'renderReportRich' with ANSI colour codes. Degrades to 'renderReportAnsi'
+-- when no source is readable.
+renderReportRichAnsi :: Report -> IO Text
+renderReportRichAnsi = renderReportRichWith renderReportAnsi docToAnsi
+
+-- | Shared implementation of the rich renderers, parameterised over the
+-- plain-text fallback and the final document renderer.
+renderReportRichWith :: (Report -> Text) -> (Doc Ann -> Text) -> Report -> IO Text
+renderReportRichWith plain toText report = case report.result of
+  Counterexample {message, notes, loc, diff} -> do
+    mdoc <- richDoc message notes loc diff
+    pure case mdoc of
+      Nothing -> plain report
+      Just body -> toText (PP.vsep ["failed after" <+> statsDoc report.stats, body])
+  _ -> pure (plain report)
+
+-- | Attempt to build the rich failure doc, falling back to 'Nothing' when no
+-- declaration could be read for any location.
+richDoc :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> IO (Maybe (Doc Ann))
+richDoc message notes loc diff = do
+  let (footers, inline) = partition (\n -> n.kind == Footnote) notes
+      inputs = [(fmap spanFromSrcLoc n.loc, n.text) | n <- inline]
+      mFailureSpan = fmap spanFromSrcLoc loc
+      spans = catMaybes (fmap fst inputs) <> maybeToList mFailureSpan
+  decls <- loadDeclarations (fmap (.spanFile) spans)
+  let (args, idecls) =
+        partitionEithers (zipWith (ppFailedInput decls) [0 ..] inputs)
+      mFailureDecl =
+        ppFailureLocation decls (fmap PP.pretty (T.lines message)) diff
+          =<< mFailureSpan
+      allDecls = mergeDeclarations (maybeToList mFailureDecl <> idecls)
+      declDocs = fmap (ppDeclaration . applyContext defaultContext) allDecls
+      footerDocs = [PP.annotate NoteAnn (PP.pretty n.text) | n <- footers]
+      sections = [PP.vsep ds | ds <- [args, declDocs, footerDocs], not (null ds)]
+  -- Degrade to the plain renderer unless at least one declaration rendered;
+  -- the @forAll N =@ fallback docs in 'args' only supplement a source
+  -- listing, they don't constitute one.
+  pure
+    if null allDecls
+      then Nothing
+      else Just (PP.vsep sections)
+
+-- * Internal pure layout
 
 reportDoc :: Report -> Doc Ann
 reportDoc report = case report.result of
@@ -238,11 +250,6 @@ failureDoc message notes loc diff =
 
 diffDoc :: Diff -> Doc Ann
 diffDoc = PP.vsep . fmap lineDiffDoc
-  where
-    lineDiffDoc :: LineDiff -> Doc Ann
-    lineDiffDoc (LineSame t) = PP.annotate DiffSame ("  " <> PP.pretty t)
-    lineDiffDoc (LineRemoved t) = PP.annotate DiffRemoved ("- " <> PP.pretty t)
-    lineDiffDoc (LineAdded t) = PP.annotate DiffAdded ("+ " <> PP.pretty t)
 
 statsDoc :: Stats -> Doc Ann
 statsDoc stats
@@ -252,25 +259,6 @@ statsDoc stats
 
 locDoc :: SrcLoc -> Doc Ann
 locDoc sl = PP.pretty sl.srcLocFile <> ":" <> PP.pretty sl.srcLocStartLine
-
-docToText :: Doc Ann -> Text
-docToText = PP.Text.renderStrict . PP.layoutPretty PP.defaultLayoutOptions
-
-docToAnsi :: Doc Ann -> Text
-docToAnsi =
-  PP.Terminal.renderStrict
-    . PP.layoutPretty PP.defaultLayoutOptions
-    . PP.reAnnotate annToAnsi
-
-annToAnsi :: Ann -> AnsiStyle
-annToAnsi = \case
-  MessageAnn -> PP.Terminal.bold
-  LocAnn -> PP.Terminal.colorDull PP.Terminal.White
-  DrawnAnn -> PP.Terminal.color PP.Terminal.Cyan
-  NoteAnn -> mempty
-  DiffSame -> mempty
-  DiffRemoved -> PP.Terminal.color PP.Terminal.Red
-  DiffAdded -> PP.Terminal.color PP.Terminal.Green
 
 -- * Exceptions
 
