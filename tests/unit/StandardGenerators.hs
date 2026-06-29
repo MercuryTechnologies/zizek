@@ -17,6 +17,12 @@ spec = do
     it "draws Bool values" $ do
       check_ (defaultSettings {testCases = 1}) $ forEach (Gen.bool & Gen.build) $ \_ -> pure ()
 
+    it "weighted 1.0 always draws True, 0.0 always False" $ do
+      prop (Gen.bool & Gen.weighted 1.0 & Gen.build) $ \b ->
+        b `shouldBe` True
+      prop (Gen.bool & Gen.weighted 0.0 & Gen.build) $ \b ->
+        b `shouldBe` False
+
   describe "Gen.binary" $ do
     it "draws ByteStrings" $ do
       check_ (defaultSettings {testCases = 1}) $ forEach (Gen.binary & Gen.build) $ \_ -> pure ()

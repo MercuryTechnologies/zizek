@@ -12,14 +12,16 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Foldable (for_)
 import Data.Functor (($>))
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
 import Data.Word (Word32)
-import Foreign (Ptr, nullPtr)
+import Foreign (Ptr, Storable, alloca, nullPtr, peek)
 import Foreign.C.String (withCString)
-import Foreign.C.Types (CBool (..))
+import Foreign.C.Types (CBool (..), CInt, CSize)
 import Hegel.Assertion (originOf)
+import Hegel.Backend (Backend (..))
 import Hegel.Database (Database (..))
 import Hegel.FFI
 import Hegel.HealthCheck (HealthCheck (..))
@@ -28,6 +30,7 @@ import Hegel.Property.Internal (Property, failureDetails, observeProperty, prope
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
 import Hegel.Settings (Settings (..))
 import Hegel.TestCase (AssumeRejected (..), Status (..), TestCase, TestStopped (..), isControlSignal, markComplete, mkTestCase)
+import Hegel.Verbosity (Verbosity (..))
 import UnliftIO.Exception (Handler (..), catchAny, catches, finally)
 
 -- | Run a 'Property' through @libhegel@.
@@ -49,50 +52,73 @@ check settings prop =
                 Handler \(e :: HegelError) -> pure (aborted (Errored (toException e)))
               ]
   where
-    go = withSettings \s -> do
-      applySettings settings s
-      (nValid, nInvalid, mFailure) <- withRun s \run -> do
-        (nv, ni) <- driveLoop settings (propertyAction prop) run
-        -- The failure record is borrowed from the run handle and only valid
-        -- until hegel_run_free (called by withRun on bracket exit), so read
-        -- and copy it out before returning from the lambda.
-        f <- readPrimaryFailure run
-        pure (nv, ni, f)
-      result <- case mFailure of
-        Just f
-          | Just blob <- f.reproductionBlob -> reconstructProperty prop s blob
-          | otherwise -> pure (Aborted (UnhealthyInput (failureMessage f)))
-        Nothing
-          | nValid == 0 -> pure (GaveUp "no valid examples found")
-          | otherwise -> pure Ok
-      pure Report {result, stats = Stats {valid = nValid, invalid = nInvalid}}
+    go = withContext \ctx ->
+      withSettings ctx \s -> do
+        applySettings ctx settings s
+        -- The run result, its failures, and their blobs are all borrowed from
+        -- the run handle and only valid until hegel_run_free (called by withRun
+        -- on bracket exit), so read and copy everything out before returning
+        -- from the lambda.
+        (nValid, nInvalid, outcome) <- withRun ctx s \run -> do
+          (nv, ni) <- driveLoop ctx settings (propertyAction prop) run
+          o <- readRunOutcome ctx run
+          pure (nv, ni, o)
+        result <- case outcome.status of
+          HEGEL_RUN_STATUS_PASSED
+            | nValid == 0 -> pure (GaveUp "no valid examples found")
+            | otherwise -> pure Ok
+          HEGEL_RUN_STATUS_FAILED -> case outcome.failure of
+            Just f
+              | Just blob <- f.reproductionBlob -> reconstructProperty ctx prop s blob
+              | otherwise -> pure (Aborted (UnhealthyInput f.origin))
+            Nothing ->
+              pure (Aborted (Errored (toException (userError "run reported a failure but exposed no counterexample"))))
+          -- HEGEL_RUN_STATUS_ERROR (and any unexpected status): the run itself
+          -- failed (a health check, a nondeterministic test, an engine panic)
+          -- and produced no verdict on the property.
+          _ -> pure (Aborted (UnhealthyInput (fromMaybe "the run failed" outcome.runError)))
+        pure Report {result, stats = Stats {valid = nValid, invalid = nInvalid}}
 
 -- * Settings
 
 -- | Map a 'Settings' value onto the corresponding @libhegel@ settings setters.
-applySettings :: Settings -> Ptr HegelSettings -> IO ()
-applySettings s ptr = do
-  hegel_settings_mode ptr HEGEL_MODE_TEST_RUN
-  hegel_settings_test_cases ptr (fromIntegral s.testCases)
-  hegel_settings_verbosity ptr HEGEL_VERBOSITY_QUIET
+applySettings :: Ptr HegelContext -> Settings -> Ptr HegelSettings -> IO ()
+applySettings ctx s ptr = do
+  chk (hegel_settings_set_mode ctx ptr HEGEL_MODE_TEST_RUN)
+  chk (hegel_settings_set_backend ctx ptr (backendC s.backend))
+  chk (hegel_settings_set_test_cases ctx ptr (fromIntegral s.testCases))
+  chk (hegel_settings_set_verbosity ctx ptr (verbosityC s.verbosity))
   case s.seed of
-    Just seed -> hegel_settings_seed ptr seed (CBool 1)
-    Nothing -> hegel_settings_seed ptr 0 (CBool 0)
-  hegel_settings_derandomize ptr (boolC s.derandomize)
-  hegel_settings_report_multiple_failures ptr (boolC s.reportMultipleFailures)
-  hegel_settings_phases ptr (phasesBitmask s.phases)
-  hegel_settings_suppress_health_check ptr (hcBitmask s.suppressHealthCheck)
+    Just seed -> chk (hegel_settings_set_seed ctx ptr seed (CBool 1))
+    Nothing -> chk (hegel_settings_set_seed ctx ptr 0 (CBool 0))
+  chk (hegel_settings_set_derandomize ctx ptr (boolC s.derandomize))
+  chk (hegel_settings_set_report_multiple_failures ctx ptr (boolC s.reportMultipleFailures))
+  chk (hegel_settings_set_phases ctx ptr (phasesBitmask s.phases))
+  chk (hegel_settings_set_suppress_health_check ctx ptr (hcBitmask s.suppressHealthCheck))
   -- "" disables the store; skipping the call leaves the engine default
   -- (.hegel/ under the cwd).
   case s.database of
     DatabaseDefault -> pure ()
-    DatabaseDisabled -> withCString "" (hegel_settings_database ptr)
-    DatabaseDirectory p -> withCString p (hegel_settings_database ptr)
+    DatabaseDisabled -> withCString "" \p -> chk (hegel_settings_set_database ctx ptr p)
+    DatabaseDirectory p -> withCString p \cp -> chk (hegel_settings_set_database ctx ptr cp)
   for_ s.databaseKey \key ->
-    BS.useAsCString (encodeUtf8 key) (hegel_settings_database_key ptr)
+    BS.useAsCString (encodeUtf8 key) \p -> chk (hegel_settings_set_database_key ctx ptr p)
+  where
+    chk io = io >>= throwOnError ctx
 
 boolC :: Bool -> CBool
 boolC b = CBool (if b then 1 else 0)
+
+backendC :: Backend -> CInt
+backendC Auto = HEGEL_BACKEND_AUTO
+backendC Default = HEGEL_BACKEND_DEFAULT
+backendC Urandom = HEGEL_BACKEND_URANDOM
+
+verbosityC :: Verbosity -> CInt
+verbosityC Quiet = HEGEL_VERBOSITY_QUIET
+verbosityC Normal = HEGEL_VERBOSITY_NORMAL
+verbosityC Verbose = HEGEL_VERBOSITY_VERBOSE
+verbosityC Debug = HEGEL_VERBOSITY_DEBUG
 
 -- | OR the per-phase flags into a bitmask.
 --
@@ -122,43 +148,76 @@ healthCheckFlag LargeInitialTestCase = HEGEL_HC_LARGE_INITIAL_TEST_CASE
 data Failure = Failure
   { -- | Stable, draw-independent deduplication key (e.g. @\"file:line\"@).
     origin :: !Text,
-    -- | Engine diagnostic, if any.
-    diagnostic :: !Text,
     -- | Base64 reproduction blob, or 'Nothing' for failures that carry none
     -- (e.g. a health-check failure).
     reproductionBlob :: !(Maybe ByteString)
   }
 
--- | Read and copy the first failure from the engine's run result, if any.
---
--- 'Report' carries a single counterexample, so any additional distinct
--- failures are not surfaced.
+-- | The aggregated verdict of a finished run, copied out of the borrowed
+-- result before 'hegel_run_free' invalidates it.
+data RunOutcome = RunOutcome
+  { -- | One of the @HEGEL_RUN_STATUS_*@ codes.
+    status :: !CInt,
+    -- | The first distinct failure, when the run failed. 'Report' carries a
+    -- single counterexample, so any additional distinct failures are not
+    -- surfaced.
+    failure :: !(Maybe Failure),
+    -- | The run-level error message, when the run errored.
+    runError :: !(Maybe Text)
+  }
+
+-- | Read the aggregate status, the primary failure, and the run-level error
+-- out of the engine's result, copying anything we keep.
 --
 -- Must be called before 'hegel_run_free' frees the borrowed result.
-readPrimaryFailure :: Ptr HegelRun -> IO (Maybe Failure)
-readPrimaryFailure run = do
-  res <- hegel_run_result run
-  count <- fromIntegral <$> hegel_run_result_failure_count res
-  if count <= (0 :: Int)
+readRunOutcome :: Ptr HegelContext -> Ptr HegelRun -> IO RunOutcome
+readRunOutcome ctx run = do
+  res <- outWith (hegel_run_result ctx run)
+  status <- outWith (hegel_run_result_status ctx res)
+  failure <- readPrimaryFailure ctx res
+  runError <- readRunError ctx res
+  pure RunOutcome {status, failure, runError}
+  where
+    -- Run one @out_*@ call, checking its return code and reading the result.
+    outWith :: (Storable a) => (Ptr a -> IO CInt) -> IO a
+    outWith act = alloca \out -> do
+      throwOnError ctx =<< act out
+      peek out
+
+-- | Read and copy the first failure from the engine's run result, if any.
+readPrimaryFailure :: Ptr HegelContext -> Ptr HegelRunResult -> IO (Maybe Failure)
+readPrimaryFailure ctx res = do
+  count <- alloca \out -> do
+    throwOnError ctx =<< hegel_run_result_failure_count ctx res out
+    peek out
+  if (count :: CSize) == 0
     then pure Nothing
     else do
-      f <- hegel_run_result_failure res 0
+      f <- alloca \out -> do
+        throwOnError ctx =<< hegel_run_result_failure ctx res 0 out
+        peek out
       if f == nullPtr
         then pure Nothing
         else do
-          org <- peekUtf8 =<< hegel_failure_origin f
-          diag <- peekUtf8 =<< hegel_failure_diagnostic f
-          blob <- failureReproductionBlob f
-          pure (Just Failure {origin = org, diagnostic = diag, reproductionBlob = blob})
+          org <- alloca \out -> do
+            throwOnError ctx =<< hegel_failure_origin ctx f out
+            peekUtf8 =<< peek out
+          blob <- failureReproductionBlob ctx f
+          pure (Just Failure {origin = org, reproductionBlob = blob})
+
+-- | Read and copy the run-level error message, if the run carries one.
+readRunError :: Ptr HegelContext -> Ptr HegelRunResult -> IO (Maybe Text)
+readRunError ctx res =
+  alloca \out -> do
+    throwOnError ctx =<< hegel_run_result_error ctx res out
+    ptr <- peek out
+    if ptr == nullPtr
+      then pure Nothing
+      else do
+        msg <- peekUtf8 ptr
+        pure (if T.null msg then Nothing else Just msg)
 
 -- * Counterexample reconstruction
-
--- | Prefer the engine's diagnostic; if none exists, fall back to the (stable)
--- origin string.
-failureMessage :: Failure -> Text
-failureMessage f
-  | T.null f.diagnostic = f.origin
-  | otherwise = f.diagnostic
 
 -- | Replay a reproduction blob through the 'Property' to harvest its journal.
 --
@@ -168,10 +227,10 @@ failureMessage f
 --
 -- A replay that passes, discards, or runs out of choices did not reproduce the
 -- engine's failure and will be reported as an unexpected divergence.
-reconstructProperty :: Property () -> Ptr HegelSettings -> ByteString -> IO Result
-reconstructProperty prop s blob =
-  withTestCaseFromBlob s blob \tcPtr -> do
-    (eRes, notes) <- observeProperty (mkTestCase tcPtr) prop
+reconstructProperty :: Ptr HegelContext -> Property () -> Ptr HegelSettings -> ByteString -> IO Result
+reconstructProperty ctx prop s blob =
+  withTestCaseFromBlob ctx s blob \tcPtr -> do
+    (eRes, notes) <- observeProperty (mkTestCase ctx tcPtr) prop
     pure case eRes of
       Left e
         -- A discard or budget stop during replay means the engine's failure
@@ -188,18 +247,21 @@ reconstructProperty prop s blob =
 -- * Per-case loop
 
 driveLoop ::
+  Ptr HegelContext ->
   Settings ->
   (TestCase -> IO ()) ->
   Ptr HegelRun ->
   IO (Int, Int)
-driveLoop settings action run = loop 0 0
+driveLoop ctx settings action run = loop 0 0
   where
     loop !nValid !nInvalid = do
-      tcPtr <- hegel_next_test_case run
+      tcPtr <- alloca \out -> do
+        throwOnError ctx =<< hegel_next_test_case ctx run out
+        peek out
       if tcPtr == nullPtr
         then pure (nValid, nInvalid)
         else
-          runTestCase settings action tcPtr >>= \case
+          runTestCase ctx settings action tcPtr >>= \case
             Valid -> loop (nValid + 1) nInvalid
             -- 'Invalid' is reserved for assume\/filter rejections; it feeds
             -- 'Stats.invalid'.
@@ -223,14 +285,15 @@ driveLoop settings action run = loop 0 0
 -- scope, so an engine error raised while reporting (a 'HegelError') propagates
 -- to 'check''s outer handler instead of being misread as a test failure.
 runTestCase ::
+  Ptr HegelContext ->
   Settings ->
   (TestCase -> IO ()) ->
   Ptr HegelTestCase ->
   IO Status
-runTestCase settings action tcPtr =
+runTestCase ctx settings action tcPtr =
   run `finally` settings.perCaseFinalizer
   where
-    tc = mkTestCase tcPtr
+    tc = mkTestCase ctx tcPtr
     run = do
       status <-
         -- The control signals are thrown as asynchronous exceptions, so

@@ -74,11 +74,12 @@ common library
 library
   import: library
   hs-source-dirs: library
-  pkgconfig-depends: hegel_c
+  pkgconfig-depends: hegel
   -- cabal-gild: discover library
   exposed-modules:
     Hegel
     Hegel.Assertion
+    Hegel.Backend
     Hegel.Cbor
     Hegel.Collection
     Hegel.Database
@@ -119,6 +120,7 @@ library
     Hegel.Settings
     Hegel.Tasty
     Hegel.TestCase
+    Hegel.Verbosity
 
   if os(osx)
     frameworks:

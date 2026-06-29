@@ -11,6 +11,7 @@ module Hegel.TestCase
 
     -- * Generation
     generate,
+    primitiveBoolean,
     TestStopped (..),
 
     -- * Collections
@@ -50,27 +51,32 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Foreign (Ptr, alloca, nullPtr, peek)
 import Foreign.C.String (withCString)
-import Foreign.C.Types (CBool (..), CInt)
+import Foreign.C.Types (CBool (..), CDouble (..), CInt)
 import Hegel.FFI hiding (generate)
 import Hegel.FFI qualified as FFI (generate)
 import UnliftIO.Exception (catch)
 
 -- * Construction
 
--- | Wrap a run-owned @hegel_test_case_t*@ pointer.
+-- | Pair a run-owned @hegel_test_case_t*@ pointer with the error-reporting
+-- context the run is driven under.
 --
 -- The pointer is borrowed from the run handle and remains valid only for the
 -- duration of the current test case (until 'markComplete' is called and the
 -- runner fetches the next case via 'hegel_next_test_case').
-mkTestCase :: Ptr HegelTestCase -> TestCase
-mkTestCase = TestCase
+mkTestCase :: Ptr HegelContext -> Ptr HegelTestCase -> TestCase
+mkTestCase ctx ptr = TestCase {ptr, ctx}
 
 -- * Test case
 
--- | A thin wrapper around a @hegel_test_case_t*@ pointer. Generators and
--- collections call the free functions below, passing 'TestCase' as the first
--- argument, rather than touching the pointer directly.
-newtype TestCase = TestCase {ptr :: Ptr HegelTestCase}
+-- | A @hegel_test_case_t*@ pointer together with the @hegel_context_t*@ it is
+-- driven under. Generators and collections call the free functions below,
+-- passing 'TestCase' as the first argument, rather than touching the pointers
+-- directly; every per-test-case @libhegel@ call needs both.
+data TestCase = TestCase
+  { ptr :: Ptr HegelTestCase,
+    ctx :: Ptr HegelContext
+  }
 
 -- * Generation
 
@@ -84,7 +90,7 @@ newtype TestCase = TestCase {ptr :: Ptr HegelTestCase}
 generate :: TestCase -> Value -> IO Value
 generate tc schema = do
   resultBytes <-
-    FFI.generate tc.ptr (CE.encode schema)
+    FFI.generate tc.ctx tc.ptr (CE.encode schema)
       `catch` \e@(HegelError {code}) -> case code of
         HEGEL_E_STOP_TEST -> throwIO TestStopped
         HEGEL_E_ASSUME -> throwIO AssumeRejected
@@ -98,10 +104,10 @@ generate tc schema = do
 -- (assumption rejected) as ordinary control flow rather than an error, so map
 -- those to the exceptions the generator layer expects. Everything else falls
 -- through to 'throwOnError'.
-handleReturnCode :: CInt -> IO ()
-handleReturnCode HEGEL_E_STOP_TEST = throwIO TestStopped
-handleReturnCode HEGEL_E_ASSUME = throwIO AssumeRejected
-handleReturnCode rc = throwOnError rc
+handleReturnCode :: TestCase -> CInt -> IO ()
+handleReturnCode _ HEGEL_E_STOP_TEST = throwIO TestStopped
+handleReturnCode _ HEGEL_E_ASSUME = throwIO AssumeRejected
+handleReturnCode tc rc = throwOnError tc.ctx rc
 
 -- * Collections
 
@@ -111,8 +117,8 @@ handleReturnCode rc = throwOnError rc
 newCollection :: TestCase -> Int -> Maybe Int -> IO Int
 newCollection tc minSz maxSz =
   alloca \outId -> do
-    hegel_new_collection tc.ptr (fromIntegral minSz) (maybe maxBound fromIntegral maxSz) outId
-      >>= handleReturnCode
+    hegel_new_collection tc.ctx tc.ptr (fromIntegral minSz) (maybe maxBound fromIntegral maxSz) outId
+      >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
 
 -- | Ask whether the engine wants another element.
@@ -121,7 +127,7 @@ newCollection tc minSz maxSz =
 collectionMore :: TestCase -> Int -> IO Bool
 collectionMore tc cid =
   alloca \outMore -> do
-    hegel_collection_more tc.ptr (fromIntegral cid) outMore >>= handleReturnCode
+    hegel_collection_more tc.ctx tc.ptr (fromIntegral cid) outMore >>= handleReturnCode tc
     (/= 0) . (\(CBool b) -> b) <$> peek outMore
 
 -- | Notify the engine that the last element was rejected.
@@ -130,9 +136,24 @@ collectionMore tc cid =
 collectionReject :: TestCase -> Int -> Maybe Text -> IO ()
 collectionReject tc cid mWhy =
   case mWhy of
-    Nothing -> hegel_collection_reject tc.ptr (fromIntegral cid) nullPtr >>= handleReturnCode
+    Nothing -> hegel_collection_reject tc.ctx tc.ptr (fromIntegral cid) nullPtr >>= handleReturnCode tc
     Just why -> withCString (T.unpack why) \p ->
-      hegel_collection_reject tc.ptr (fromIntegral cid) p >>= handleReturnCode
+      hegel_collection_reject tc.ctx tc.ptr (fromIntegral cid) p >>= handleReturnCode tc
+
+-- * Primitives
+
+-- | Draw a single boolean that is 'True' with probability @p@ (clamped to
+-- @[0,1]@ by the engine).
+--
+-- Throws 'TestStopped' on exhaustion.
+primitiveBoolean :: TestCase -> Double -> IO Bool
+primitiveBoolean tc p =
+  alloca \outValue -> do
+    -- The engine's forced-draw support (forced / has_forced) is unused here;
+    -- pass has_forced = 0 so the draw always consults the data stream.
+    hegel_primitive_boolean tc.ctx tc.ptr (CDouble p) (CBool 0) (CBool 0) outValue
+      >>= handleReturnCode tc
+    (/= 0) . (\(CBool b) -> b) <$> peek outValue
 
 -- * Spans
 
@@ -141,13 +162,13 @@ startSpan :: TestCase -> Label -> IO ()
 -- The span label's wire identifier is the single source of truth in
 -- 'labelValue' (1–15, matching @HEGEL_LABEL_*@); reuse it rather than
 -- maintaining a parallel @Label -> Word64@ mapping that could drift.
-startSpan tc label = hegel_start_span tc.ptr (fromIntegral (labelValue label)) >>= throwOnError
+startSpan tc label = hegel_start_span tc.ctx tc.ptr (fromIntegral (labelValue label)) >>= throwOnError tc.ctx
 
 -- | Close the most-recently-opened span.
 -- Pass 'True' to mark it discarded.
 stopSpan :: TestCase -> Bool -> IO ()
 stopSpan tc isDiscard =
-  hegel_stop_span tc.ptr (CBool (if isDiscard then 1 else 0)) >>= throwOnError
+  hegel_stop_span tc.ctx tc.ptr (CBool (if isDiscard then 1 else 0)) >>= throwOnError tc.ctx
 
 -- * Completion
 
@@ -165,16 +186,16 @@ stopSpan tc isDiscard =
 markComplete :: TestCase -> Status -> IO ()
 markComplete tc status = do
   rc <- case status of
-    Valid -> hegel_mark_complete tc.ptr HEGEL_STATUS_VALID nullPtr
-    Invalid -> hegel_mark_complete tc.ptr HEGEL_STATUS_INVALID nullPtr
-    Overrun -> hegel_mark_complete tc.ptr HEGEL_STATUS_OVERRUN nullPtr
+    Valid -> hegel_mark_complete tc.ctx tc.ptr HEGEL_STATUS_VALID nullPtr
+    Invalid -> hegel_mark_complete tc.ctx tc.ptr HEGEL_STATUS_INVALID nullPtr
+    Overrun -> hegel_mark_complete tc.ctx tc.ptr HEGEL_STATUS_OVERRUN nullPtr
     Interesting origin ->
       withCString (T.unpack origin) \p ->
-        hegel_mark_complete tc.ptr HEGEL_STATUS_INTERESTING p
+        hegel_mark_complete tc.ctx tc.ptr HEGEL_STATUS_INTERESTING p
   case rc of
     HEGEL_OK -> pure ()
     HEGEL_E_STOP_TEST -> pure ()
-    _ -> throwOnError rc
+    _ -> throwOnError tc.ctx rc
 
 -- * Exceptions
 

@@ -32,6 +32,7 @@ module Hegel.Gen
     -- * Boolean
     BoolBuilder,
     bool,
+    weighted,
 
     -- * Integral
     IntegralBuilder,
@@ -156,7 +157,7 @@ module Hegel.Gen
 where
 
 import Hegel.Gen.Binary (BinaryBuilder, binary)
-import Hegel.Gen.Bool (BoolBuilder, bool)
+import Hegel.Gen.Bool (BoolBuilder, bool, weighted)
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasSize (..))
 import Hegel.Gen.Char
   ( CharBuilder,

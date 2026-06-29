@@ -8,9 +8,11 @@ where
 import Data.Default.Class (Default (..))
 import Data.Text (Text)
 import Data.Word (Word64)
+import Hegel.Backend (Backend (..))
 import Hegel.Database (Database (..))
 import Hegel.HealthCheck (HealthCheck)
 import Hegel.Phase (Phase (..))
+import Hegel.Verbosity (Verbosity (..))
 
 -- | Configuration for a single property run.
 data Settings = Settings
@@ -30,6 +32,10 @@ data Settings = Settings
     databaseKey :: !(Maybe Text),
     -- | Phases the engine should execute, in order.
     phases :: ![Phase],
+    -- | The engine's source of randomness.
+    backend :: !Backend,
+    -- | How much diagnostic output the engine emits during a run.
+    verbosity :: !Verbosity,
     -- | When 'True', the engine collects every distinct failure instead of
     -- stopping at the first.
     reportMultipleFailures :: !Bool,
@@ -54,6 +60,10 @@ instance Show Settings where
         . shows s.databaseKey
         . showString ", phases = "
         . shows s.phases
+        . showString ", backend = "
+        . shows s.backend
+        . showString ", verbosity = "
+        . shows s.verbosity
         . showString ", reportMultipleFailures = "
         . shows s.reportMultipleFailures
         . showString ", suppressHealthCheck = "
@@ -61,7 +71,8 @@ instance Show Settings where
         . showString ", perCaseFinalizer = <<function>>}"
 
 -- | Defaults for a property run: 100 test cases, a fresh seed each run,
--- all phases enabled, persistence disabled, and no per-case finalizer.
+-- all phases enabled, the automatic backend, quiet output, persistence
+-- disabled, and no per-case finalizer.
 --
 -- > defaultSettings { testCases = 1000 }
 defaultSettings :: Settings
@@ -73,6 +84,8 @@ defaultSettings =
       database = DatabaseDisabled,
       databaseKey = Nothing,
       phases = [Explicit, Reuse, Generate, Target, Shrink],
+      backend = Auto,
+      verbosity = Quiet,
       reportMultipleFailures = False,
       suppressHealthCheck = [],
       perCaseFinalizer = pure ()

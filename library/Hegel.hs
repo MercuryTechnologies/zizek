@@ -18,6 +18,8 @@ module Hegel
 
     -- * Settings and reports
     module Hegel.Settings,
+    module Hegel.Backend,
+    module Hegel.Verbosity,
     module Hegel.Database,
     module Hegel.Report,
     module Hegel.Phase,
@@ -28,12 +30,14 @@ module Hegel
 where
 
 import Hegel.Assertion
+import Hegel.Backend
 import Hegel.Database
 import Hegel.Gen.Internal (Gen)
 import Hegel.Phase
 import Hegel.Property (check_, forEach, forEachWith)
 import Hegel.Report
 import Hegel.Settings
+import Hegel.Verbosity
 
 -- | 'check_' with 'defaultSettings' and 'forEach': the shortest spelling for
 -- use inside a test framework's @it@\/@testCase@, where the framework owns the
