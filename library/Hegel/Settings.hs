@@ -3,6 +3,7 @@ module Hegel.Settings
   ( Settings (..),
     Finalizer (..),
     defaultSettings,
+    withDatabaseKey,
   )
 where
 
@@ -80,3 +81,12 @@ defaultSettings =
 -- | Alias for 'defaultSettings'.
 instance Default Settings where
   def = defaultSettings
+
+-- | Set the stable 'databaseKey' used to file and replay failures, leaving the
+-- 'database' (where, or whether, they are persisted) untouched.
+--
+-- This backs the automatic keying in "Hegel.Hspec" and "Hegel.Tasty"; persistence
+-- itself is chosen by 'database', which 'Hegel.Hspec.prop'\/'Hegel.Tasty.testProperty'
+-- turn on and @propWith def@\/@testPropertyWith def@ leave off.
+withDatabaseKey :: Text -> Settings -> Settings
+withDatabaseKey key s = s {databaseKey = Just key}

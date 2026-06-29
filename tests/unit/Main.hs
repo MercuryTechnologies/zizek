@@ -4,6 +4,7 @@ import BasicProperties qualified
 import DatabaseReplay qualified
 import GeneratorSchemas qualified
 import Integrations qualified
+import KeyedProperties qualified
 import PropertyChecks qualified
 import ReportRendering qualified
 import SourceRendering qualified
@@ -21,6 +22,7 @@ main = do
   standards <- testSpec "standard generators" StandardGenerators.spec
   properties <- testSpec "property monad" PropertyChecks.spec
   replay <- testSpec "database replay" DatabaseReplay.spec
+  keyed <- testSpec "keyed properties" KeyedProperties.spec
   defaultMain
     ( testGroup
         "zizek:unit"
@@ -32,6 +34,8 @@ main = do
           schemas,
           standards,
           properties,
-          replay
+          replay,
+          keyed,
+          KeyedProperties.tastyTree
         ]
     )
