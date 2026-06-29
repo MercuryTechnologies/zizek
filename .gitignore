@@ -31,5 +31,4 @@ tests/conformance/pytest/bin/*
 __pycache__/
 
 # misc docs
-refs/*
 notes/*

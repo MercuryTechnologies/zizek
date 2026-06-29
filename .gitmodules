@@ -1,0 +1,3 @@
+[submodule "references/hegel-rust"]
+	path = references/hegel-rust
+	url = https://github.com/hegeldev/hegel-rust/
