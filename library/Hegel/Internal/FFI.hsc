@@ -11,16 +11,21 @@
 -- __Calling convention__: every @libhegel@ entry point (except
 -- 'hegel_context_new' and 'hegel_context_last_error') takes a
 -- @hegel_context_t*@ as its first argument and returns a @hegel_result_t@
--- ('HEGEL_OK' is zero; negatives are errors). Anything else a call produces —
--- a handle, a string, a count — is written through a trailing out-parameter.
+-- ('HEGEL_OK' is zero; negatives are errors).
+--
+-- Anything else a call produces (e.g. a handle, a string, a count) is written
+-- through a trailing out-parameter.
 --
 -- __Error reporting__: a failed call records its diagnostic on the
 -- caller-supplied 'HegelContext' rather than in thread-local state; read the
 -- most recent message with 'hegel_context_last_error' (or 'throwOnError',
--- which does this for you). A single context must not be used concurrently
--- from multiple threads — each fallible call overwrites the stored message.
--- The runner drives a whole run from one bound thread (see 'withContext'); the
--- blocking 'hegel_next_test_case' is declared @safe@ so it does not pin a
+-- which does this for you).
+--
+-- A single context must not be used concurrently from multiple threads, as each
+-- fallible call overwrites the stored message.
+--
+-- The runner drives a whole run from one bound thread (see 'withContext');
+-- the blocking 'hegel_next_test_case' is declared @safe@ so it does not pin a
 -- capability while parked on the Rust worker.
 module Hegel.Internal.FFI
   ( -- * Opaque handle phantoms
@@ -35,7 +40,6 @@ module Hegel.Internal.FFI
     -- * Error types
     -- $errortypes
     HegelError (..),
-    HegelStartupError (..),
 
     -- * Error-code pattern synonyms
     -- $errorcodes
@@ -230,11 +234,11 @@ data HegelFailure
 
 -- $errortypes
 --
--- * 'HegelError': a @libhegel@ FFI call returned a non-zero @HEGEL_E_*@ code,
---   which callers can branch off of and potentially handle
--- * 'HegelStartupError': constructing a run ('hegel_run_start') or a replay
---   test case ('hegel_test_case_from_blob') failed before any test case could
---   be produced.
+-- 'HegelError': a @libhegel@ FFI call returned a non-zero @HEGEL_E_*@ code,
+-- which callers can branch off of and potentially handle. This includes
+-- failures that occur before any test case is produced — constructing a run
+-- ('hegel_run_start') or a replay test case ('hegel_test_case_from_blob') — as
+-- those calls now report a result code like every other.
 
 -- | Exception thrown when a @libhegel@ call returns a non-zero error code.
 data HegelError = HegelError
@@ -246,15 +250,6 @@ data HegelError = HegelError
   deriving stock (Show)
 
 instance Exception HegelError
-
--- | Exception thrown when the engine fails to start.
-newtype HegelStartupError = HegelStartupError
-  { -- | Diagnostic from 'hegel_context_last_error', if any.
-    diagnostic :: Maybe Text
-  }
-  deriving stock (Show)
-
-instance Exception HegelStartupError
 
 -- $errorcodes
 --
@@ -895,7 +890,7 @@ withSettings ctx = bracket acquire release
 -- | Start a run with the given settings, run the action, then join the
 -- worker thread and free the run handle.
 --
--- Throws 'HegelStartupError' if the engine fails to start.
+-- Throws 'HegelError' if the engine fails to start.
 withRun :: Ptr HegelContext -> Ptr HegelSettings -> (Ptr HegelRun -> IO a) -> IO a
 withRun ctx s = bracket acquire release
   where
@@ -903,7 +898,7 @@ withRun ctx s = bracket acquire release
       rc <- hegel_run_start ctx s out
       if rc == HEGEL_OK
         then peek out
-        else lastErrorMessage ctx >>= throwIO . HegelStartupError
+        else lastErrorMessage ctx >>= \msg -> throwIO HegelError {code = rc, message = msg}
     release run = void (hegel_run_free ctx run)
 
 -- | Copy the reproduction blob for @f@ into a fresh 'ByteString', or return
@@ -928,10 +923,10 @@ failureReproductionBlob ctx f =
 -- in @blob@, pass it to @action@, and free it on exit.
 --
 -- @blob@ must be a base64 string obtained from 'failureReproductionBlob' (or
--- the underlying 'hegel_failure_reproduction_blob').  Throws 'HegelStartupError'
--- when @libhegel@ cannot decode the blob (corrupt data, incompatible version,
--- @NULL@ arguments).
+-- the underlying 'hegel_failure_reproduction_blob').
 --
+-- Throws 'HegelError' when @libhegel@ cannot decode the blob.
+-- 
 -- The bracket frees the handle. __Do not call 'hegel_test_case_free' or
 -- 'hegel_run_free' on the handle.__
 withTestCaseFromBlob
@@ -949,7 +944,7 @@ withTestCaseFromBlob ctx s blob action =
       rc <- hegel_test_case_from_blob ctx s blobPtr out
       if rc == HEGEL_OK
         then peek out
-        else lastErrorMessage ctx >>= throwIO . HegelStartupError
+        else lastErrorMessage ctx >>= \msg -> throwIO HegelError {code = rc, message = msg}
     release tc = void (hegel_test_case_free ctx tc)
 
 -- | Draw one value from a test case using the supplied CBOR-encoded schema,

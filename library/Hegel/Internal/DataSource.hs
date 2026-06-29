@@ -157,6 +157,7 @@ data Label
   | LabelMapped
   | LabelSampledFrom
   | LabelEnumVariant
+  | LabelFeatureFlag
   deriving stock (Show)
 
 -- | The @hegel_label_t@ wire identifier (the @HEGEL_LABEL_*@ constants are the
@@ -177,3 +178,4 @@ instance Witch.From Label Word64 where
   from LabelMapped = HEGEL_LABEL_MAPPED
   from LabelSampledFrom = HEGEL_LABEL_SAMPLED_FROM
   from LabelEnumVariant = HEGEL_LABEL_ENUM_VARIANT
+  from LabelFeatureFlag = HEGEL_LABEL_FEATURE_FLAG

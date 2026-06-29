@@ -1,6 +1,7 @@
 -- | Configuration for a single property run.
 module Hegel.Settings
   ( Settings (..),
+    Finalizer (..),
     defaultSettings,
   )
 where
@@ -42,33 +43,18 @@ data Settings = Settings
     -- | Health checks to skip.
     suppressHealthCheck :: ![HealthCheck],
     -- | Action run after each test case, on both success and failure.
-    perCaseFinalizer :: !(IO ())
+    perCaseFinalizer :: !Finalizer
   }
+  deriving stock (Show)
 
-instance Show Settings where
-  showsPrec p s =
-    showParen (p > 10) $
-      showString "Settings {testCases = "
-        . shows s.testCases
-        . showString ", seed = "
-        . shows s.seed
-        . showString ", derandomize = "
-        . shows s.derandomize
-        . showString ", database = "
-        . shows s.database
-        . showString ", databaseKey = "
-        . shows s.databaseKey
-        . showString ", phases = "
-        . shows s.phases
-        . showString ", backend = "
-        . shows s.backend
-        . showString ", verbosity = "
-        . shows s.verbosity
-        . showString ", reportMultipleFailures = "
-        . shows s.reportMultipleFailures
-        . showString ", suppressHealthCheck = "
-        . shows s.suppressHealthCheck
-        . showString ", perCaseFinalizer = <<function>>}"
+-- | A per-test-case finalizer action.
+--
+-- Wraps an @'IO' ()@ so 'Settings' can derive 'Show' (the action itself
+-- renders as a @\<\<finalizer\>\>@ placeholder).
+newtype Finalizer = Finalizer (IO ())
+
+instance Show Finalizer where
+  show _ = "<<finalizer>>"
 
 -- | Defaults for a property run: 100 test cases, a fresh seed each run,
 -- all phases enabled, the automatic backend, quiet output, persistence
@@ -88,7 +74,7 @@ defaultSettings =
       verbosity = Quiet,
       reportMultipleFailures = False,
       suppressHealthCheck = [],
-      perCaseFinalizer = pure ()
+      perCaseFinalizer = Finalizer (pure ())
     }
 
 -- | Alias for 'defaultSettings'.

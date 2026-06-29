@@ -29,8 +29,8 @@ import Hegel.Internal.TestCase (Status (..), TestCase, markComplete, mkTestCase)
 import Hegel.Phase (Phase)
 import Hegel.Property.Internal (Property, failureDetails, observeProperty, propertyAction)
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
-import Hegel.Settings (Settings (..))
-import UnliftIO.Exception (Handler (..), catchAny, catches, finally)
+import Hegel.Settings (Finalizer (..), Settings (..))
+import UnliftIO.Exception (catch, catchAny, finally)
 import Witch qualified
 
 -- | Run a 'Property' through @libhegel@.
@@ -44,13 +44,11 @@ check settings prop =
   -- Note: 'safe' blocking FFI calls (notably 'hegel_next_test_case') cannot
   -- be interrupted by async exceptions; a cancellation signal is deferred
   -- until that call returns.
+  -- A libhegel call outside the per-case try (engine startup, blob replay, or
+  -- e.g. markComplete) can fail with a HegelError; surface it as Errored rather
+  -- than letting it escape the runner.
   withAsyncBound go wait
-    `catches` [ Handler \(e :: HegelStartupError) -> pure (aborted (Errored (toException e))),
-                -- A libhegel call outside the per-case try (e.g. markComplete)
-                -- can fail with a HegelError; surface it as Errored rather than
-                -- letting it escape the runner.
-                Handler \(e :: HegelError) -> pure (aborted (Errored (toException e)))
-              ]
+    `catch` \(e :: HegelError) -> pure (aborted (Errored (toException e)))
   where
     go = withContext \ctx ->
       withSettings ctx \s -> do
@@ -83,35 +81,35 @@ check settings prop =
 -- | Map a 'Settings' value onto the corresponding @libhegel@ settings setters.
 applySettings :: Ptr HegelContext -> Settings -> Ptr HegelSettings -> IO ()
 applySettings ctx s ptr = do
-  check $ hegel_settings_set_mode ctx ptr HEGEL_MODE_TEST_RUN
-  check $ hegel_settings_set_backend ctx ptr (Witch.into @CInt s.backend)
-  check $ hegel_settings_set_test_cases ctx ptr (fromIntegral s.testCases)
-  check $ hegel_settings_set_verbosity ctx ptr (Witch.into @CInt s.verbosity)
+  chk $ hegel_settings_set_mode ctx ptr HEGEL_MODE_TEST_RUN
+  chk $ hegel_settings_set_backend ctx ptr (Witch.into @CInt s.backend)
+  chk $ hegel_settings_set_test_cases ctx ptr (fromIntegral s.testCases)
+  chk $ hegel_settings_set_verbosity ctx ptr (Witch.into @CInt s.verbosity)
 
   case s.seed of
-    Nothing -> check $ hegel_settings_set_seed ctx ptr 0 (CBool 0)
+    Nothing -> chk $ hegel_settings_set_seed ctx ptr 0 (CBool 0)
     Just seed ->
-      check $ hegel_settings_set_seed ctx ptr seed (CBool 1)
+      chk $ hegel_settings_set_seed ctx ptr seed (CBool 1)
 
-  check $ hegel_settings_set_derandomize ctx ptr (fromBool s.derandomize)
-  check $ hegel_settings_set_report_multiple_failures ctx ptr (fromBool s.reportMultipleFailures)
-  check $ hegel_settings_set_phases ctx ptr (phasesBitmask s.phases)
-  check $ hegel_settings_set_suppress_health_check ctx ptr (hcBitmask s.suppressHealthCheck)
+  chk $ hegel_settings_set_derandomize ctx ptr (fromBool s.derandomize)
+  chk $ hegel_settings_set_report_multiple_failures ctx ptr (fromBool s.reportMultipleFailures)
+  chk $ hegel_settings_set_phases ctx ptr (phasesBitmask s.phases)
+  chk $ hegel_settings_set_suppress_health_check ctx ptr (hcBitmask s.suppressHealthCheck)
 
   -- "" disables the store; skipping the call leaves the engine default
   -- (.hegel/ under the cwd).
   case s.database of
     DatabaseDefault -> pure ()
-    DatabaseDisabled -> withCString "" \p -> chk (hegel_settings_set_database ctx ptr p)
-    DatabaseDirectory p -> withCString p \cp -> chk (hegel_settings_set_database ctx ptr cp)
+    DatabaseDisabled -> withCString "" \p -> chk $ hegel_settings_set_database ctx ptr p
+    DatabaseDirectory dir -> withCString dir \p -> chk $ hegel_settings_set_database ctx ptr p
 
   for_ s.databaseKey \key ->
-    BS.useAsCString (encodeUtf8 key) \p -> chk (hegel_settings_set_database_key ctx ptr p)
+    BS.useAsCString (encodeUtf8 key) \p -> chk $ hegel_settings_set_database_key ctx ptr p
   where
-    check io = io >>= throwOnError ctx
+    chk io = io >>= throwOnError ctx
 
 -- | OR the per-phase wire flags into a bitmask.
--- 
+--
 -- An empty list yields @0@, which disables all phases.
 phasesBitmask :: [Phase] -> Word32
 phasesBitmask = foldl' (\acc p -> acc .|. Witch.into @Word32 p) 0
@@ -291,8 +289,9 @@ runTestCase ::
   Ptr HegelTestCase ->
   IO Status
 runTestCase ctx settings action tcPtr =
-  run `finally` settings.perCaseFinalizer
+  run `finally` finalizer
   where
+    Finalizer finalizer = settings.perCaseFinalizer
     tc = mkTestCase ctx tcPtr
     run = do
       status <-
