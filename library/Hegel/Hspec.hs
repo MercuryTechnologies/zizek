@@ -6,27 +6,31 @@
 -- the test's path and persists failures for replay (the usual entry point):
 --
 -- @
--- describe "reverse" do
+-- describe "reverse" $ do
 --   'prop' "is involutive" do
 --     xs <- 'Hegel.Property.forAll' (Gen.list (Gen.int & Gen.build) & Gen.build)
 --     reverse (reverse xs) 'Hegel.Property.===' xs
 -- @
 --
 -- Use 'propWith' for explicit 'Settings'; @propWith def@ runs a property with
--- no persistence.
+-- no persistence. The @arg ->@ 'Hspec.Example' instance composes with hspec's
+-- @around@\/fixtures. For a property over a custom base monad (e.g. a
+-- @ReaderT Env IO@ application stack), use 'propT'\/'propWithT'.
 module Hegel.Hspec
   ( prop,
+    propT,
     propWith,
+    propWithT,
   )
 where
 
 import Control.Monad ((>=>))
 import Data.Maybe (isJust)
 import Data.Text qualified as T
-import GHC.Stack (HasCallStack, SrcLoc (..), callStack, withFrozenCallStack)
+import GHC.Stack (CallStack, HasCallStack, SrcLoc (..), callStack, withFrozenCallStack)
 import Hegel.Database (Database (..))
 import Hegel.Internal.DatabaseKey (propKey)
-import Hegel.Property.Internal (Property, PropertyT)
+import Hegel.Property.Internal (Property, PropertyT, hoist)
 import Hegel.Report
   ( Abort (..),
     Report (..),
@@ -59,6 +63,17 @@ instance Hspec.Example HegelExample where
   type Arg HegelExample = ()
   evaluateExample (HegelExample settings body) _params aroundAction _progress =
     withAroundResult aroundAction \() -> runProperty settings body
+
+-- | A property over an arbitrary base monad @m@ (e.g. an application stack),
+-- paired with the 'Settings' to run under and a runner that — given the fixture
+-- @env@ — collapses @m@ to 'IO'. Built by 'propT'\/'propWithT'.
+data HegelExampleT env m
+  = HegelExampleT Settings (env -> forall x. m x -> IO x) (PropertyT m ())
+
+instance Hspec.Example (HegelExampleT env m) where
+  type Arg (HegelExampleT env m) = env
+  evaluateExample (HegelExampleT settings nat body) _params aroundAction _progress =
+    withAroundResult aroundAction \env -> runProperty settings (hoist (nat env) body)
 
 -- | Run @mk@ inside hspec's around-action (which owns any fixture) and return
 -- its result.
@@ -120,6 +135,62 @@ propWith settings label body = do
         Just _ -> settings
         Nothing -> withDatabaseKey (propKey callStack path label) settings
   Hspec.it label (HegelExample settings' body)
+
+-- | 'prop' for a property over a custom base monad @m@.
+--
+-- The first argument turns the fixture @env@ (from an enclosing @around@\/
+-- @before@) into a runner @(forall x. m x -> IO x)@ that collapses @m@ to 'IO';
+-- for a @ReaderT Env IO@ stack that is just @\\env m -> runReaderT m env@:
+--
+-- @
+-- around withEnv $
+--   propT (\\env m -> runReaderT m env) "round-trips" prop_roundTrip
+-- @
+--
+-- Persistence is enabled as for 'prop'.
+--
+-- __NOTE__: Replays reproduce stored failures /only/ when the fixture is
+-- deterministic\/in-memory!
+--
+-- The choice sequence is replayed against whatever @env@ the fixture builds
+-- next run, so against external mutable state (e.g. a live database) a stored
+-- counterexample may not re-trigger.
+--
+-- Use 'propWithT' to provide an explicit 'Settings' record.
+propT ::
+  (HasCallStack) =>
+  (env -> forall x. m x -> IO x) ->
+  String ->
+  PropertyT m () ->
+  Hspec.SpecWith env
+propT = keyedT callStack defaultSettings {database = DatabaseDefault}
+
+-- | 'propT' with explicit 'Settings', mirroring 'propWith'.
+propWithT ::
+  (HasCallStack) =>
+  Settings ->
+  (env -> forall x. m x -> IO x) ->
+  String ->
+  PropertyT m () ->
+  Hspec.SpecWith env
+propWithT settings = keyedT callStack settings
+
+-- | Shared implementation of 'propT'\/'propWithT'. Takes the 'CallStack'
+-- explicitly so the public entry points capture the user's call site (for the
+-- module salt) rather than this module.
+keyedT ::
+  CallStack ->
+  Settings ->
+  (env -> forall x. m x -> IO x) ->
+  String ->
+  PropertyT m () ->
+  Hspec.SpecWith env
+keyedT cs settings nat label body = do
+  path <- Hspec.getSpecDescriptionPath
+  let settings' = case settings.databaseKey of
+        Just _ -> settings
+        Nothing -> withDatabaseKey (propKey cs path label) settings
+  Hspec.it label (HegelExampleT settings' nat body)
 
 -- | Returns 'True' when ANSI colour output is appropriate: the output handle
 -- is a terminal AND the @NO_COLOR@ environment variable is unset (per

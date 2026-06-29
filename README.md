@@ -231,7 +231,9 @@ prop_tree = prop tree \t ->
 
 `zizek` ships adapters for the common test runners, so a `Property` can be a leaf in an existing suite.
 
-With `tasty`, `Hegel.Tasty.testProperty` turns a property into a `TestTree` (use `testPropertyWith` for custom `Settings`):
+#### `tasty`
+
+With `tasty`, `Hegel.Tasty.testProperty` turns a property into a `TestTree`, keyed for replay by the test name (use `testPropertyWith` for custom `Settings`):
 
 ```haskell
 import Data.Function ((&))
@@ -246,24 +248,52 @@ test_reverseInvolutive = testProperty "reverse is involutive" do
   reverse (reverse xs) === xs
 ```
 
-With `hspec`, a `PropertyT IO ()` is itself an `Example`, so a property can be the body of an `it` directly:
+#### `hspec`
+
+With `hspec`, `Hegel.Hspec.prop` is a drop-in for `it` that runs a property and persists any failure under a key derived from the test's path, so a counterexample replays on the next run:
 
 ```haskell
 import Data.Function ((&))
 import Hegel.Gen qualified as Gen
-import Hegel.Hspec (hegel)
+import Hegel.Hspec (prop)
 import Hegel.Property (forAll, (===))
 import Test.Hspec
 
 spec :: Spec
-spec = describe "reverse" $
-  it "is involutive" $ hegel do
+spec = describe "reverse" do
+  prop "is involutive" do
     xs <- forAll (Gen.list (Gen.int & Gen.build) & Gen.build)
     reverse (reverse xs) === xs
 ```
 
-> [!NOTE]
-> The `hegel` helper function is just `id` with a fixed `PropertyT` type to make type inference a little easier.
+> [!TIP]
+> Use `propWith` to supply `Settings`, and `propWith def` to disable counterexample persistence.
+
+For properties written over a monad-transformer stack, `propT` takes a function that can evaluate the transformer down to the `IO` context that the engine runs in (`forall x. m x -> IO x`).
+
+For a `ReaderT` stack that runner is just `runReaderT` applied to the environment:
+
+```haskell
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Reader (ask, runReaderT)
+import Data.Function ((&))
+import Hegel.Gen qualified as Gen
+import Hegel.Hspec (propT)
+import Hegel.Property (assert, forAll)
+import Test.Hspec
+
+-- A property over a `ReaderT` stack; in practice the environment is typically
+-- some slice of an application's context.
+spec :: Spec
+spec = describe "trivial reader example" do
+  propT (\_ m -> runReaderT m 100) "stays within the bound" do
+    n     <- forAll (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
+    bound <- lift ask
+    assert (n <= bound) "stays within the configured bound"
+```
+
+> [!TIP]
+> Use `propWithT` to supply custom `Settings`.
 
 ## Generators
 
@@ -326,7 +356,6 @@ $ just repl              # start a GHCi session with this library in-scope
 
 `zizek` passes `hegel-core`'s conformance tests, but some work remains outstanding:
 
-* automatic, stable `databaseKey` derivation; replay currently requires supplying the same key by hand on every run
 * an API to seed the `Explicit` phase with hand-written examples
 * stateful/state-machine testing
 * Hackage publication
