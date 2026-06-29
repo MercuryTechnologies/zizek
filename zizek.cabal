@@ -70,6 +70,7 @@ common library
     uuid ^>=1.3,
     vector ^>=0.13,
     wireform-cbor,
+    witch ^>=1.2,
 
 library
   import: library
@@ -314,6 +315,11 @@ test-suite ffi
   type: exitcode-stdio-1.0
   hs-source-dirs: tests/ffi
   main-is: Main.hs
+  pkgconfig-depends: hegel
+  -- Closed-world guard: fails to build if libhegel adds an enum variant.
+  c-sources: cbits/wire_enum_guard.c
+  cc-options: -Werror=switch-enum
+  other-modules: WireEnumCoverage
   ghc-options:
     -threaded
     -rtsopts
@@ -322,4 +328,5 @@ test-suite ffi
   build-depends:
     hspec ^>=2.11,
     tasty-hspec ^>=1.2,
+    witch ^>=1.2,
     zizek,

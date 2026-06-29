@@ -21,7 +21,6 @@ module Hegel.Internal.DataSource
 
     -- * Spans
     Label (..),
-    labelValue,
     startSpan,
     stopSpan,
   )
@@ -34,6 +33,7 @@ import Control.Exception (throwIO)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Word (Word64)
 import Foreign (alloca, nullPtr, peek)
 import Foreign.C.String (withCString)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt)
@@ -42,6 +42,7 @@ import Hegel.Internal.FFI hiding (generate)
 import Hegel.Internal.FFI qualified as FFI (generate)
 import Hegel.Internal.TestCase (TestCase (..))
 import UnliftIO.Exception (catch)
+import Witch qualified
 
 -- * Generation
 
@@ -64,11 +65,13 @@ generate tc schema = do
     Left err -> ioError (userError ("libhegel: CBOR decode failed: " <> err))
     Right v -> pure v
 
--- | Interpret a return code from a per-test-case operation. The engine may
--- signal 'HEGEL_E_STOP_TEST' (choice budget exhausted) or 'HEGEL_E_ASSUME'
--- (assumption rejected) as ordinary control flow rather than an error, so map
--- those to the exceptions the generator layer expects. Everything else falls
--- through to 'throwOnError'.
+-- | Interpret a return code from a per-test-case operation.
+--
+-- The engine may signal 'HEGEL_E_STOP_TEST' or 'HEGEL_E_ASSUME' as ordinary
+-- control flow rather than an error, so map those to the exceptions the
+-- generator layer expects.
+--
+-- Everything else falls through to 'throwOnError'.
 handleReturnCode :: TestCase -> CInt -> IO ()
 handleReturnCode _ HEGEL_E_STOP_TEST = throwIO TestStopped
 handleReturnCode _ HEGEL_E_ASSUME = throwIO AssumeRejected
@@ -114,24 +117,27 @@ collectionMore tc cid =
 collectionReject :: TestCase -> Int -> Maybe Text -> IO ()
 collectionReject tc cid mWhy =
   case mWhy of
-    Nothing -> hegel_collection_reject tc.ctx tc.ptr (fromIntegral cid) nullPtr >>= handleReturnCode tc
-    Just why -> withCString (T.unpack why) \p ->
-      hegel_collection_reject tc.ctx tc.ptr (fromIntegral cid) p >>= handleReturnCode tc
+    Nothing -> do
+      result <- hegel_collection_reject tc.ctx tc.ptr (fromIntegral cid) nullPtr
+      handleReturnCode tc result
+    Just why -> withCString (T.unpack why) \p -> do
+      result <- hegel_collection_reject tc.ctx tc.ptr (fromIntegral cid) p
+      handleReturnCode tc result
 
 -- * Spans
 
 -- | Open a labeled span.
 startSpan :: TestCase -> Label -> IO ()
--- The span label's wire identifier is the single source of truth in
--- 'labelValue' (1–15, matching @HEGEL_LABEL_*@); reuse it rather than
--- maintaining a parallel @Label -> Word64@ mapping that could drift.
-startSpan tc label = hegel_start_span tc.ctx tc.ptr (fromIntegral (labelValue label)) >>= throwOnError tc.ctx
+startSpan tc label = do
+  result <- hegel_start_span tc.ctx tc.ptr (Witch.into @Word64 label)
+  throwOnError tc.ctx result
 
 -- | Close the most-recently-opened span.
 -- Pass 'True' to mark it discarded.
 stopSpan :: TestCase -> Bool -> IO ()
-stopSpan tc isDiscard =
-  hegel_stop_span tc.ctx tc.ptr (CBool (if isDiscard then 1 else 0)) >>= throwOnError tc.ctx
+stopSpan tc isDiscard = do
+  result <- hegel_stop_span tc.ctx tc.ptr (CBool (if isDiscard then 1 else 0))
+  throwOnError tc.ctx result
 
 -- | Span labels used to group related draws so the engine can shrink them
 -- as a unit. Numeric values match @libhegel@'s constants.
@@ -153,21 +159,21 @@ data Label
   | LabelEnumVariant
   deriving stock (Show)
 
--- | Map a 'Label' to its integer wire identifier (1–15, matching
--- @HEGEL_LABEL_*@ constants).
-labelValue :: Label -> Int
-labelValue LabelList = 1
-labelValue LabelListElement = 2
-labelValue LabelSet = 3
-labelValue LabelSetElement = 4
-labelValue LabelMap = 5
-labelValue LabelMapEntry = 6
-labelValue LabelTuple = 7
-labelValue LabelOneOf = 8
-labelValue LabelOptional = 9
-labelValue LabelFixedDict = 10
-labelValue LabelFlatMap = 11
-labelValue LabelFilter = 12
-labelValue LabelMapped = 13
-labelValue LabelSampledFrom = 14
-labelValue LabelEnumVariant = 15
+-- | The @hegel_label_t@ wire identifier (the @HEGEL_LABEL_*@ constants are the
+-- single source of truth).
+instance Witch.From Label Word64 where
+  from LabelList = HEGEL_LABEL_LIST
+  from LabelListElement = HEGEL_LABEL_LIST_ELEMENT
+  from LabelSet = HEGEL_LABEL_SET
+  from LabelSetElement = HEGEL_LABEL_SET_ELEMENT
+  from LabelMap = HEGEL_LABEL_MAP
+  from LabelMapEntry = HEGEL_LABEL_MAP_ENTRY
+  from LabelTuple = HEGEL_LABEL_TUPLE
+  from LabelOneOf = HEGEL_LABEL_ONE_OF
+  from LabelOptional = HEGEL_LABEL_OPTIONAL
+  from LabelFixedDict = HEGEL_LABEL_FIXED_DICT
+  from LabelFlatMap = HEGEL_LABEL_FLAT_MAP
+  from LabelFilter = HEGEL_LABEL_FILTER
+  from LabelMapped = HEGEL_LABEL_MAPPED
+  from LabelSampledFrom = HEGEL_LABEL_SAMPLED_FROM
+  from LabelEnumVariant = HEGEL_LABEL_ENUM_VARIANT

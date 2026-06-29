@@ -26,7 +26,9 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Foreign (Ptr, nullPtr)
 import Foreign.C.String (withCString)
+import Foreign.C.Types (CInt)
 import Hegel.Internal.FFI
+import Witch qualified
 
 -- * Construction
 
@@ -42,10 +44,10 @@ mkTestCase ctx ptr = TestCase {ptr, ctx}
 -- * Test case
 
 -- | A @hegel_test_case_t*@ pointer together with the @hegel_context_t*@ it is
--- driven under. Generators, collections, and the runner call free functions
--- (here and in "Hegel.Internal.DataSource"), passing 'TestCase' as the first
--- argument, rather than touching the pointers directly; every per-test-case
--- @libhegel@ call needs both.
+-- driven under.
+--
+-- Generators, collections, and the runner pass 'TestCase' handles into the
+-- FFI bindings rather than touching these pointers directly.
 data TestCase = TestCase
   { ptr :: Ptr HegelTestCase,
     ctx :: Ptr HegelContext
@@ -66,13 +68,12 @@ data TestCase = TestCase
 -- 'mkTestCase'.
 markComplete :: TestCase -> Status -> IO ()
 markComplete tc status = do
+  -- The status code is the 'Status' discriminant ('Witch.into'); only an
+  -- 'Interesting' case also carries an origin string, passed separately.
   rc <- case status of
-    Valid -> hegel_mark_complete tc.ctx tc.ptr HEGEL_STATUS_VALID nullPtr
-    Invalid -> hegel_mark_complete tc.ctx tc.ptr HEGEL_STATUS_INVALID nullPtr
-    Overrun -> hegel_mark_complete tc.ctx tc.ptr HEGEL_STATUS_OVERRUN nullPtr
     Interesting origin ->
-      withCString (T.unpack origin) \p ->
-        hegel_mark_complete tc.ctx tc.ptr HEGEL_STATUS_INTERESTING p
+      withCString (T.unpack origin) (hegel_mark_complete tc.ctx tc.ptr (Witch.into @CInt status))
+    _ -> hegel_mark_complete tc.ctx tc.ptr (Witch.into @CInt status) nullPtr
   case rc of
     HEGEL_OK -> pure ()
     HEGEL_E_STOP_TEST -> pure ()
@@ -91,3 +92,13 @@ data Status
   | -- | The case failed; the payload is the origin string used for
     -- deduplication.
     Interesting Text
+
+-- | The @hegel_status_t@ wire value.
+--
+-- Note this is the status /discriminant/ only: an 'Interesting' case's origin
+-- is passed to 'markComplete' separately.
+instance Witch.From Status CInt where
+  from Valid = HEGEL_STATUS_VALID
+  from Invalid = HEGEL_STATUS_INVALID
+  from Overrun = HEGEL_STATUS_OVERRUN
+  from (Interesting _) = HEGEL_STATUS_INTERESTING

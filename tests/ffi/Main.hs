@@ -40,6 +40,7 @@ import Test.Hspec
 import Test.Tasty (defaultMain)
 import Test.Tasty.Hspec (testSpec)
 import UnliftIO.IORef (newIORef, readIORef, writeIORef)
+import WireEnumCoverage (wireEnumCoverageSpec)
 
 main :: IO ()
 main = defaultMain =<< testSpec "zizek:ffi" spec
@@ -50,6 +51,7 @@ spec = do
   genMachinerySpec
   completionSpec
   asyncTeardownSpec
+  wireEnumCoverageSpec
 
 -- * Helpers over the out-parameter calling convention
 

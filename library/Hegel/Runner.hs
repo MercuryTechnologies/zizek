@@ -17,22 +17,21 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
 import Data.Word (Word32)
-import Foreign (Ptr, Storable, alloca, nullPtr, peek)
+import Foreign (Ptr, Storable, alloca, fromBool, nullPtr, peek)
 import Foreign.C.String (withCString)
 import Foreign.C.Types (CBool (..), CInt, CSize)
 import Hegel.Assertion (originOf)
-import Hegel.Backend (Backend (..))
 import Hegel.Database (Database (..))
-import Hegel.HealthCheck (HealthCheck (..))
+import Hegel.HealthCheck (HealthCheck)
 import Hegel.Internal.Control (AssumeRejected (..), TestStopped (..), isControlSignal)
 import Hegel.Internal.FFI
 import Hegel.Internal.TestCase (Status (..), TestCase, markComplete, mkTestCase)
-import Hegel.Phase (Phase (..))
+import Hegel.Phase (Phase)
 import Hegel.Property.Internal (Property, failureDetails, observeProperty, propertyAction)
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
 import Hegel.Settings (Settings (..))
-import Hegel.Verbosity (Verbosity (..))
 import UnliftIO.Exception (Handler (..), catchAny, catches, finally)
+import Witch qualified
 
 -- | Run a 'Property' through @libhegel@.
 --
@@ -65,19 +64,18 @@ check settings prop =
           o <- readRunOutcome ctx run
           pure (nv, ni, o)
         result <- case outcome.status of
-          HEGEL_RUN_STATUS_PASSED
+          RunPassed
             | nValid == 0 -> pure (GaveUp "no valid examples found")
             | otherwise -> pure Ok
-          HEGEL_RUN_STATUS_FAILED -> case outcome.failure of
+          RunFailed -> case outcome.failure of
             Just f
               | Just blob <- f.reproductionBlob -> reconstructProperty ctx prop s blob
               | otherwise -> pure (Aborted (UnhealthyInput f.origin))
             Nothing ->
               pure (Aborted (Errored (toException (userError "run reported a failure but exposed no counterexample"))))
-          -- HEGEL_RUN_STATUS_ERROR (and any unexpected status): the run itself
-          -- failed (a health check, a nondeterministic test, an engine panic)
-          -- and produced no verdict on the property.
-          _ -> pure (Aborted (UnhealthyInput (fromMaybe "the run failed" outcome.runError)))
+          -- The run itself failed (a health check, a nondeterministic test, an
+          -- engine panic) and produced no verdict on the property.
+          RunErrored -> pure (Aborted (UnhealthyInput (fromMaybe "the run failed" outcome.runError)))
         pure Report {result, stats = Stats {valid = nValid, invalid = nInvalid}}
 
 -- * Settings
@@ -85,63 +83,42 @@ check settings prop =
 -- | Map a 'Settings' value onto the corresponding @libhegel@ settings setters.
 applySettings :: Ptr HegelContext -> Settings -> Ptr HegelSettings -> IO ()
 applySettings ctx s ptr = do
-  chk (hegel_settings_set_mode ctx ptr HEGEL_MODE_TEST_RUN)
-  chk (hegel_settings_set_backend ctx ptr (backendC s.backend))
-  chk (hegel_settings_set_test_cases ctx ptr (fromIntegral s.testCases))
-  chk (hegel_settings_set_verbosity ctx ptr (verbosityC s.verbosity))
+  check $ hegel_settings_set_mode ctx ptr HEGEL_MODE_TEST_RUN
+  check $ hegel_settings_set_backend ctx ptr (Witch.into @CInt s.backend)
+  check $ hegel_settings_set_test_cases ctx ptr (fromIntegral s.testCases)
+  check $ hegel_settings_set_verbosity ctx ptr (Witch.into @CInt s.verbosity)
+
   case s.seed of
-    Just seed -> chk (hegel_settings_set_seed ctx ptr seed (CBool 1))
-    Nothing -> chk (hegel_settings_set_seed ctx ptr 0 (CBool 0))
-  chk (hegel_settings_set_derandomize ctx ptr (boolC s.derandomize))
-  chk (hegel_settings_set_report_multiple_failures ctx ptr (boolC s.reportMultipleFailures))
-  chk (hegel_settings_set_phases ctx ptr (phasesBitmask s.phases))
-  chk (hegel_settings_set_suppress_health_check ctx ptr (hcBitmask s.suppressHealthCheck))
+    Nothing -> check $ hegel_settings_set_seed ctx ptr 0 (CBool 0)
+    Just seed ->
+      check $ hegel_settings_set_seed ctx ptr seed (CBool 1)
+
+  check $ hegel_settings_set_derandomize ctx ptr (fromBool s.derandomize)
+  check $ hegel_settings_set_report_multiple_failures ctx ptr (fromBool s.reportMultipleFailures)
+  check $ hegel_settings_set_phases ctx ptr (phasesBitmask s.phases)
+  check $ hegel_settings_set_suppress_health_check ctx ptr (hcBitmask s.suppressHealthCheck)
+
   -- "" disables the store; skipping the call leaves the engine default
   -- (.hegel/ under the cwd).
   case s.database of
     DatabaseDefault -> pure ()
     DatabaseDisabled -> withCString "" \p -> chk (hegel_settings_set_database ctx ptr p)
     DatabaseDirectory p -> withCString p \cp -> chk (hegel_settings_set_database ctx ptr cp)
+
   for_ s.databaseKey \key ->
     BS.useAsCString (encodeUtf8 key) \p -> chk (hegel_settings_set_database_key ctx ptr p)
   where
-    chk io = io >>= throwOnError ctx
+    check io = io >>= throwOnError ctx
 
-boolC :: Bool -> CBool
-boolC b = CBool (if b then 1 else 0)
-
-backendC :: Backend -> CInt
-backendC Auto = HEGEL_BACKEND_AUTO
-backendC Default = HEGEL_BACKEND_DEFAULT
-backendC Urandom = HEGEL_BACKEND_URANDOM
-
-verbosityC :: Verbosity -> CInt
-verbosityC Quiet = HEGEL_VERBOSITY_QUIET
-verbosityC Normal = HEGEL_VERBOSITY_NORMAL
-verbosityC Verbose = HEGEL_VERBOSITY_VERBOSE
-verbosityC Debug = HEGEL_VERBOSITY_DEBUG
-
--- | OR the per-phase flags into a bitmask.
---
--- An empty list yields @0@ (no phases enabled).
+-- | OR the per-phase wire flags into a bitmask.
+-- 
+-- An empty list yields @0@, which disables all phases.
 phasesBitmask :: [Phase] -> Word32
-phasesBitmask = foldl' (\acc p -> acc .|. phaseFlag p) 0
+phasesBitmask = foldl' (\acc p -> acc .|. Witch.into @Word32 p) 0
 
-phaseFlag :: Phase -> Word32
-phaseFlag Explicit = HEGEL_PHASE_EXPLICIT
-phaseFlag Reuse = HEGEL_PHASE_REUSE
-phaseFlag Generate = HEGEL_PHASE_GENERATE
-phaseFlag Target = HEGEL_PHASE_TARGET
-phaseFlag Shrink = HEGEL_PHASE_SHRINK
-
+-- | OR the per-health-check wire flags into a suppression bitmask.
 hcBitmask :: [HealthCheck] -> Word32
-hcBitmask = foldl' (\acc hc -> acc .|. healthCheckFlag hc) 0
-
-healthCheckFlag :: HealthCheck -> Word32
-healthCheckFlag FilterTooMuch = HEGEL_HC_FILTER_TOO_MUCH
-healthCheckFlag TooSlow = HEGEL_HC_TOO_SLOW
-healthCheckFlag TestCasesTooLarge = HEGEL_HC_TEST_CASES_TOO_LARGE
-healthCheckFlag LargeInitialTestCase = HEGEL_HC_LARGE_INITIAL_TEST_CASE
+hcBitmask = foldl' (\acc hc -> acc .|. Witch.into @Word32 hc) 0
 
 -- * Failures
 
@@ -154,14 +131,34 @@ data Failure = Failure
     reproductionBlob :: !(Maybe ByteString)
   }
 
+-- | The aggregate verdict of a finished run.
+data RunStatus
+  = -- | The property held across every generated test case.
+    RunPassed
+  | -- | The property failed; inspect the counterexample(s).
+    RunFailed
+  | -- | The run itself failed and produced no verdict on the property.
+    RunErrored
+  deriving stock (Show, Eq)
+
+-- | Decode the @hegel_run_status_t@ wire code; an unrecognised code is treated
+-- as 'RunErrored'.
+instance Witch.TryFrom CInt RunStatus where
+  tryFrom = Witch.maybeTryFrom \case
+    HEGEL_RUN_STATUS_PASSED -> Just RunPassed
+    HEGEL_RUN_STATUS_FAILED -> Just RunFailed
+    HEGEL_RUN_STATUS_ERROR -> Just RunErrored
+    _ -> Nothing
+
 -- | The aggregated verdict of a finished run, copied out of the borrowed
 -- result before 'hegel_run_free' invalidates it.
 data RunOutcome = RunOutcome
-  { -- | One of the @HEGEL_RUN_STATUS_*@ codes.
-    status :: !CInt,
-    -- | The first distinct failure, when the run failed. 'Report' carries a
-    -- single counterexample, so any additional distinct failures are not
-    -- surfaced.
+  { -- | The decoded run status.
+    status :: !RunStatus,
+    -- | The first distinct failure, when the run failed.
+    --
+    -- 'Report' carries a single counterexample, so any additional distinct
+    -- failures are not surfaced.
     failure :: !(Maybe Failure),
     -- | The run-level error message, when the run errored.
     runError :: !(Maybe Text)
@@ -174,7 +171,9 @@ data RunOutcome = RunOutcome
 readRunOutcome :: Ptr HegelContext -> Ptr HegelRun -> IO RunOutcome
 readRunOutcome ctx run = do
   res <- outWith (hegel_run_result ctx run)
-  status <- outWith (hegel_run_result_status ctx res)
+  rawStatus <- outWith (hegel_run_result_status ctx res)
+  -- An unrecognised status code is folded into 'RunErrored'.
+  let status = either (const RunErrored) id (Witch.tryInto rawStatus)
   failure <- readPrimaryFailure ctx res
   runError <- readRunError ctx res
   pure RunOutcome {status, failure, runError}
