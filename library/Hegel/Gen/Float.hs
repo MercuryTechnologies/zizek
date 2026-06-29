@@ -23,10 +23,10 @@ where
 import CBOR.Value (Value (..))
 import Data.Maybe (isJust)
 import GHC.Float (double2Float, float2Double)
-import Hegel.Cbor (ParseError (..))
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Schema (FloatSchema (..))
+import Hegel.Internal.CBOR (ParseError (..))
+import Hegel.Internal.Schema (FloatSchema (..))
 
 data FloatBuilder a = FloatBuilder
   { bMin :: Maybe a,

@@ -48,12 +48,8 @@ The trim only fires when @libhegel@ actually overshoots the declared maximum.
 -}
 
 import Data.Text (Text)
-import Hegel.TestCase
-  ( TestCase,
-    collectionMore,
-    collectionReject,
-    newCollection,
-  )
+import Hegel.Internal.DataSource (collectionMore, collectionReject, newCollection)
+import Hegel.Internal.TestCase (TestCase)
 import UnliftIO.IORef (IORef, newIORef, readIORef, writeIORef)
 
 -- | Opaque handle to a @libhegel@-managed collection.
@@ -78,7 +74,7 @@ new tc minSz maxSz = do
 -- Returns 'False' once the collection is complete; subsequent calls return
 -- 'False' immediately.
 --
--- Throws 'Hegel.TestCase.TestStopped' when @libhegel@ signals the test should stop.
+-- Throws 'Hegel.Internal.TestCase.TestStopped' when @libhegel@ signals the test should stop.
 more :: Collection -> IO Bool
 more coll = do
   done <- readIORef coll.finished

@@ -1,5 +1,9 @@
 -- | Low-level FFI bindings to @libhegel@ (@hegeltest-c@).
 --
+-- __Internal module.__ Implementation substrate of @zizek@ itself, exposed so
+-- you can reach past the public API when you must; it is not part of the
+-- stable public interface and may change without notice.
+--
 -- Every @hegel_*@ function from @hegel.h@ is exposed as a
 -- 'foreign import ccall' declaration together with phantom types representing
 -- handles to C constructs, error-code pattern synonyms, and bracket helpers.
@@ -18,7 +22,7 @@
 -- The runner drives a whole run from one bound thread (see 'withContext'); the
 -- blocking 'hegel_next_test_case' is declared @safe@ so it does not pin a
 -- capability while parked on the Rust worker.
-module Hegel.FFI
+module Hegel.Internal.FFI
   ( -- * Opaque handle phantoms
     -- $handles
     HegelContext,
@@ -176,9 +180,7 @@ module Hegel.FFI
     -- * Haskell helpers
     -- $helpers
     throwOnError,
-    lastErrorMessage,
     peekUtf8,
-    withUtf8,
     withContext,
     withSettings,
     withRun,
@@ -866,15 +868,6 @@ peekUtf8 :: CString -> IO Text
 peekUtf8 p
   | p == nullPtr = pure ""
   | otherwise = TE.decodeUtf8Lenient <$> BS.packCString p
-
--- | Marshal 'Text' into a NUL-terminated UTF-8 C string for the duration of
--- the given action; the counterpart to 'peekUtf8'.
---
--- Encodes explicitly as UTF-8 rather than via the locale-sensitive
--- 'Foreign.C.String.withCString', so non-ASCII strings survive on any locale.
--- Matters most for the @origin@ at 'hegel_mark_complete', the shrinker's dedup key.
-withUtf8 :: Text -> (CString -> IO a) -> IO a
-withUtf8 = BS.useAsCString . TE.encodeUtf8
 
 -- | Check a @libhegel@ return code; throws 'HegelError' on any non-zero
 -- value, attaching the diagnostic recorded on the context.

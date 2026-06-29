@@ -10,10 +10,10 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hegel (prop)
-import Hegel.Cbor (ParseError (..))
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), materialize, schemaArity, toBasic)
-import Hegel.Schema qualified as Schema
+import Hegel.Internal.CBOR (ParseError (..))
+import Hegel.Internal.Schema qualified as Schema
 import Test.Hspec
 
 intR :: (Int, Int) -> Gen Int

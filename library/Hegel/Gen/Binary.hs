@@ -11,10 +11,10 @@ where
 
 import CBOR.Value (Value (..))
 import Data.ByteString (ByteString)
-import Hegel.Cbor (ParseError (..))
 import Hegel.Gen.Builder (Build (..), HasSize (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Schema qualified as Schema
+import Hegel.Internal.CBOR (ParseError (..))
+import Hegel.Internal.Schema qualified as Schema
 
 data BinaryBuilder = BinaryBuilder
   { bMinSize :: !Int,

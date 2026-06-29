@@ -22,10 +22,10 @@ where
 import CBOR.Value (Value)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Hegel.Cbor (ParseError (..), hegelText)
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Schema qualified as Schema
+import Hegel.Internal.CBOR (ParseError (..), hegelText)
+import Hegel.Internal.Schema qualified as Schema
 import Network.URI (URI, parseURI)
 
 data UriBuilder = UriBuilder

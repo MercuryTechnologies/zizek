@@ -31,10 +31,10 @@ import CBOR.Value (Value (..))
 import Data.List (nub)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Hegel.Cbor (ParseError (..), hegelText)
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Schema (CharacterFields (..), TextSchema (..), defaultCharacterFields)
+import Hegel.Internal.CBOR (ParseError (..), hegelText)
+import Hegel.Internal.Schema (CharacterFields (..), TextSchema (..), defaultCharacterFields)
 
 -- | Builder for a single Unicode character. Character constraints are
 -- optional; absent fields impose no restriction beyond surrogate exclusion.

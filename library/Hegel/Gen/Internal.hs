@@ -42,16 +42,11 @@ import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import GHC.Stack (HasCallStack)
-import Hegel.Cbor (ParseError (..))
-import Hegel.Schema qualified as Schema
-import Hegel.TestCase
-  ( AssumeRejected (..),
-    Label (..),
-    TestCase (..),
-    generate,
-    startSpan,
-    stopSpan,
-  )
+import Hegel.Internal.CBOR (ParseError (..))
+import Hegel.Internal.Control (AssumeRejected (..))
+import Hegel.Internal.DataSource (Label (..), generate, startSpan, stopSpan)
+import Hegel.Internal.Schema qualified as Schema
+import Hegel.Internal.TestCase (TestCase)
 import Prelude hiding (either, maybe)
 
 -- | A 'Gen' that can be expressed as a single schema request to @hegel@.
@@ -491,7 +486,7 @@ either :: Gen a -> Gen b -> Gen (Either a b)
 either ga gb = oneOf [Left <$> ga, Right <$> gb]
 
 -- $exceptions
--- 'AssumeRejected' is re-exported from 'Hegel.TestCase', as it is used for
+-- 'AssumeRejected' is re-exported from 'Hegel.Internal.TestCase', as it is used for
 -- control flow within the runner rather than for surfacing test failures.
 
 -- | Thrown when @hegel@ returns a value that cannot be parsed according

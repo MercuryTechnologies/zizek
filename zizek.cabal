@@ -80,11 +80,9 @@ library
     Hegel
     Hegel.Assertion
     Hegel.Backend
-    Hegel.Cbor
     Hegel.Collection
     Hegel.Database
     Hegel.Diff
-    Hegel.FFI
     Hegel.Gen
     Hegel.Gen.Binary
     Hegel.Gen.Bool
@@ -107,6 +105,12 @@ library
     Hegel.Gen.Uuid
     Hegel.HealthCheck
     Hegel.Hspec
+    Hegel.Internal.CBOR
+    Hegel.Internal.Control
+    Hegel.Internal.DataSource
+    Hegel.Internal.FFI
+    Hegel.Internal.Schema
+    Hegel.Internal.TestCase
     Hegel.Phase
     Hegel.Property
     Hegel.Property.Internal
@@ -116,10 +120,8 @@ library
     Hegel.Report.Source
     Hegel.Report.Span
     Hegel.Runner
-    Hegel.Schema
     Hegel.Settings
     Hegel.Tasty
-    Hegel.TestCase
     Hegel.Verbosity
 
   if os(osx)

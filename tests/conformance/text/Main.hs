@@ -7,9 +7,9 @@ import Data.Aeson qualified as Aeson
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Generics (Generic)
-import Hegel.Cbor (ParseError, hegelText)
 import Hegel.Gen.Internal (basic)
-import Hegel.Schema (CharacterFields (..), TextSchema (..))
+import Hegel.Internal.CBOR (ParseError, hegelText)
+import Hegel.Internal.Schema (CharacterFields (..), TextSchema (..))
 
 data Params = Params
   { pMinSize :: Int,

@@ -41,8 +41,9 @@ import GHC.Stack (HasCallStack, SrcLoc, callStack, withFrozenCallStack)
 import Hegel.Assertion (AssertionFailure (..), callSite)
 import Hegel.Diff (Diff)
 import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
+import Hegel.Internal.Control (isControlSignal)
+import Hegel.Internal.TestCase (TestCase)
 import Hegel.Report (Note (..), NoteKind (..), renderValue)
-import Hegel.TestCase (TestCase, isControlSignal)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception (isSyncException)
 import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
@@ -144,7 +145,7 @@ assume cond = if cond then pure () else discard
 -- | Discard the current test case unconditionally.
 --
 -- The discard signal is delivered as an asynchronous exception
--- ('Hegel.TestCase.AssumeRejected') so that catch-all handlers in the
+-- ('Hegel.Internal.TestCase.AssumeRejected') so that catch-all handlers in the
 -- property body may pass it through to the runner instead of silently ignoring
 -- them.
 --
@@ -183,8 +184,8 @@ observeProperty tc prop = do
 -- re-wrapped in a synchronous exception wrapper by safe-exceptions).
 
 -- | Like 'UnliftIO.Exception.tryAny', but additionally catches Hegel's
--- control signals ('Hegel.TestCase.AssumeRejected',
--- 'Hegel.TestCase.TestStopped'), which are async exceptions precisely so that
+-- control signals ('Hegel.Internal.TestCase.AssumeRejected',
+-- 'Hegel.Internal.TestCase.TestStopped'), which are async exceptions precisely so that
 -- user catch-alls pass them through.
 --
 -- All other async exceptions should be passed through unmodified.

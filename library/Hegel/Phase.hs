@@ -1,11 +1,8 @@
 -- | Phases of a property run, as reported to @libhegel@.
 module Hegel.Phase
   ( Phase (..),
-    toWire,
   )
 where
-
-import Data.Text (Text)
 
 -- | Phases of a property run, in execution order.
 data Phase
@@ -20,10 +17,3 @@ data Phase
   | -- | Shrink discovered failures.
     Shrink
   deriving stock (Show, Eq)
-
-toWire :: Phase -> Text
-toWire Explicit = "explicit"
-toWire Reuse = "reuse"
-toWire Generate = "generate"
-toWire Target = "target"
-toWire Shrink = "shrink"

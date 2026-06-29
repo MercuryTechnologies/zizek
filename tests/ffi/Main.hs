@@ -26,15 +26,16 @@ import Data.Function ((&))
 import Data.Word (Word64)
 import Foreign (Ptr, alloca, nullPtr, peek)
 import Foreign.C.String (withCString)
-import Hegel.FFI
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Internal (draw)
+import Hegel.Internal.Control (TestStopped (..))
+import Hegel.Internal.FFI
+import Hegel.Internal.Schema qualified as Schema
+import Hegel.Internal.TestCase (Status (..), mkTestCase)
+import Hegel.Internal.TestCase qualified as TC
 import Hegel.Property (forEach)
 import Hegel.Runner qualified as Runner
-import Hegel.Schema qualified as Schema
 import Hegel.Settings (defaultSettings)
-import Hegel.TestCase (Status (..), TestStopped (..), mkTestCase)
-import Hegel.TestCase qualified as TC
 import Test.Hspec
 import Test.Tasty (defaultMain)
 import Test.Tasty.Hspec (testSpec)
@@ -147,7 +148,7 @@ rawCApiSpec = describe "raw C API" $ do
         passed `shouldBe` False
 
 -- | Drive runs through the 'Hegel.Gen' machinery: 'mkTestCase', 'draw', and the
--- 'Hegel.TestCase' operations rather than raw schema bytes.
+-- 'Hegel.Internal.TestCase' operations rather than raw schema bytes.
 genMachinerySpec :: Spec
 genMachinerySpec = describe "Gen machinery" $ do
   it "draws values within range" $ runInBoundThread $ do

@@ -22,6 +22,7 @@
 module Hegel.Gen
   ( -- * Core types
     BasicGenerator (..),
+    TestCase,
 
     -- * Builder classes
     Build (build),
@@ -225,4 +226,5 @@ import Hegel.Gen.Set (SetBuilder, set)
 import Hegel.Gen.Text (TextBuilder, text)
 import Hegel.Gen.Uri (UriBuilder, UriTextBuilder, uri, uriText)
 import Hegel.Gen.Uuid (UuidBuilder, uuid, version)
+import Hegel.Internal.TestCase (TestCase)
 import Prelude hiding (either, map, maybe)

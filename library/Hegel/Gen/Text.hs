@@ -13,11 +13,11 @@ where
 
 import CBOR.Value (Value (..))
 import Data.Text (Text)
-import Hegel.Cbor (ParseError (..), hegelText)
 import Hegel.Gen.Builder (Build (..), HasSize (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Schema (TextSchema (maxSize))
-import Hegel.Schema qualified as Schema
+import Hegel.Internal.CBOR (ParseError (..), hegelText)
+import Hegel.Internal.Schema (TextSchema (maxSize))
+import Hegel.Internal.Schema qualified as Schema
 
 data TextBuilder = TextBuilder
   { bMinSize :: !Int,

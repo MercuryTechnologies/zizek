@@ -1,5 +1,9 @@
 -- | Wire-schema vocabulary for the Hegel protocol.
 --
+-- __Internal module.__ Implementation substrate of @zizek@ itself, exposed so
+-- you can reach past the public API when you must; it is not part of the
+-- stable public interface and may change without notice.
+--
 -- All schema records live here so that @Hegel.Gen.*@ modules consume
 -- typed smart constructors instead of building CBOR maps by hand.
 -- 'CBOR.Class.toCBOR' converts any record to the wire 'CBOR.Value'.
@@ -7,7 +11,7 @@
 -- Records are accessed via 'OverloadedRecordDot'; field selectors are
 -- suppressed ('NoFieldSelectors') so that field names don't escape into
 -- call sites and conflict with identically-named builder modifier functions.
-module Hegel.Schema
+module Hegel.Internal.Schema
   ( -- * Leaf schemas (produced by generator modules)
     BoolSchema,
     bool,
@@ -50,7 +54,7 @@ import CBOR.Value (Value (..))
 import Data.Default.Class (Default (..))
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
-import Hegel.Cbor (buildMap, (.=), (.=?))
+import Hegel.Internal.CBOR (buildMap, (.=), (.=?))
 import Prelude hiding (map)
 
 -- | Boolean schema.

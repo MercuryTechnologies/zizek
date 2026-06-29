@@ -1,6 +1,10 @@
 -- | Constructors and accessors for working with CBOR 'Value's at the wire
 -- layer.
-module Hegel.Cbor
+--
+-- __Internal module.__ Implementation substrate of @zizek@ itself, exposed so
+-- you can reach past the public API when you must; it is not part of the
+-- stable public interface and may change without notice.
+module Hegel.Internal.CBOR
   ( -- * Errors
     ParseError (..),
 

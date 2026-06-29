@@ -23,13 +23,14 @@ import Foreign.C.Types (CBool (..), CInt, CSize)
 import Hegel.Assertion (originOf)
 import Hegel.Backend (Backend (..))
 import Hegel.Database (Database (..))
-import Hegel.FFI
 import Hegel.HealthCheck (HealthCheck (..))
+import Hegel.Internal.Control (AssumeRejected (..), TestStopped (..), isControlSignal)
+import Hegel.Internal.FFI
+import Hegel.Internal.TestCase (Status (..), TestCase, markComplete, mkTestCase)
 import Hegel.Phase (Phase (..))
 import Hegel.Property.Internal (Property, failureDetails, observeProperty, propertyAction)
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
 import Hegel.Settings (Settings (..))
-import Hegel.TestCase (AssumeRejected (..), Status (..), TestCase, TestStopped (..), isControlSignal, markComplete, mkTestCase)
 import Hegel.Verbosity (Verbosity (..))
 import UnliftIO.Exception (Handler (..), catchAny, catches, finally)
 

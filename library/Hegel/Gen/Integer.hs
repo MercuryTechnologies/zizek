@@ -33,10 +33,10 @@ import CBOR.Value (Value (..))
 import Data.Int (Int16, Int32, Int64, Int8)
 import Data.Maybe (fromMaybe)
 import Data.Word (Word16, Word32, Word64, Word8)
-import Hegel.Cbor (ParseError (..))
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..))
 import Hegel.Gen.Internal (Gen, basic)
-import Hegel.Schema qualified as Schema
+import Hegel.Internal.CBOR (ParseError (..))
+import Hegel.Internal.Schema qualified as Schema
 
 data IntegralBuilder a = IntegralBuilder
   { bMin :: Maybe a,
