@@ -6,7 +6,6 @@ where
 
 import Control.Concurrent.Async (wait, withAsyncBound)
 import Control.Exception (toException)
-import Control.Exception qualified as E
 import Data.Bits ((.|.))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
@@ -23,7 +22,7 @@ import Foreign.C.Types (CBool (..), CInt, CSize)
 import Hegel.Assertion (originOf)
 import Hegel.Database (Database (..))
 import Hegel.HealthCheck (HealthCheck)
-import Hegel.Internal.Control (AssumeRejected (..), TestStopped (..), isControlSignal)
+import Hegel.Internal.Control (ControlSignal (..), catchControl, isControlSignal)
 import Hegel.Internal.FFI
 import Hegel.Internal.TestCase (Status (..), TestCase, markComplete, mkTestCase)
 import Hegel.Phase (Phase)
@@ -295,18 +294,15 @@ runTestCase ctx settings action tcPtr =
     tc = mkTestCase ctx tcPtr
     run = do
       status <-
-        -- The control signals are thrown as asynchronous exceptions, so
-        -- they must be caught with base 'E.catches'.
-        --
-        -- All synchronous exceptions are caught by `catchAny` so they can be
-        -- marked as indicative of test failure.
+        -- 'catchControl' catches only Hegel's async control signals via base
+        -- 'E.catches'; 'catchAny' (unliftio) then catches all remaining
+        -- synchronous exceptions and marks them as failures.
         (action tc $> Valid)
-          `E.catches` [ E.Handler \AssumeRejected -> pure Invalid,
-                        -- libhegel owns the choice budget but does not observe
-                        -- that we stopped, so report Overrun explicitly to let
-                        -- the engine shrink.
-                        E.Handler \TestStopped -> pure Overrun
-                      ]
+          `catchControl` \case
+            Assume -> pure Invalid
+            -- @libhegel@ owns the choice budget but does not observe that we
+            -- stopped; report Overrun explicitly to let the engine shrink
+            Stop -> pure Overrun
           `catchAny` \e -> pure (Interesting (originOf e))
       markComplete tc status
       pure status

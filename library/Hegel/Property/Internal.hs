@@ -2,7 +2,8 @@ module Hegel.Property.Internal
   ( -- * Property monad
     PropertyT (..),
     Property,
-    PropertyEnv (..),
+    Env (..),
+    Mode (..),
     hoist,
 
     -- * Draws
@@ -24,6 +25,9 @@ module Hegel.Property.Internal
     propertyAction,
     observeProperty,
     failureDetails,
+
+    -- * Env access
+    askEnv,
   )
 where
 
@@ -48,12 +52,18 @@ import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception (isSyncException)
 import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
 
--- | The per-test-case environment a property runs against:
---
--- * the 'TestCase'
--- * a journal that collects 'Note's
-data PropertyEnv = PropertyEnv
+-- | Test execution mode.
+data Mode
+  = -- | Run multiple test cases, with shrinking; the default mode.
+    TestRun
+  | -- | Run a single test with no shrinking or replay.
+    SingleTestCase
+  deriving stock (Show, Eq)
+
+-- | The per-test-case environment a property runs against.
+data Env = Env
   { testCase :: !TestCase,
+    mode :: !Mode,
     journal :: !(NoteKind -> Maybe SrcLoc -> Text -> IO ())
   }
 
@@ -75,7 +85,7 @@ data PropertyEnv = PropertyEnv
 -- __NOTE__: The entire body of a 'Property' is re-run on every shrink attempt,
 -- and once more to reconstruct the failure report; effects must tolerate
 -- repetition.
-newtype PropertyT m a = PropertyT (ReaderT PropertyEnv m a)
+newtype PropertyT m a = PropertyT (ReaderT Env m a)
   deriving newtype (Functor, Applicative, Monad, MonadIO, MonadFail, MonadUnliftIO)
 
 -- | A property over 'IO', as consumed by the runners' @check@ entry points.
@@ -89,6 +99,10 @@ instance MonadTrans PropertyT where
 -- > check settings (hoist (runAppM env) myProp)
 hoist :: (forall x. m x -> n x) -> PropertyT m a -> PropertyT n a
 hoist f (PropertyT (ReaderT g)) = PropertyT (ReaderT (f . g))
+
+-- | Expose the full 'Env' to a caller.
+askEnv :: (Monad m) => PropertyT m Env
+askEnv = PropertyT ask
 
 -- | Send a note to the journal.
 note :: (MonadIO m) => NoteKind -> Maybe SrcLoc -> Text -> PropertyT m ()
@@ -157,8 +171,8 @@ discard = liftIO (E.throwIO AssumeRejected)
 
 -- * Runner hooks
 
--- | Run a property against the given 'PropertyEnv'.
-runPropertyT :: PropertyEnv -> PropertyT m a -> m a
+-- | Run a property against the given 'Env'.
+runPropertyT :: Env -> PropertyT m a -> m a
 runPropertyT env (PropertyT r) = runReaderT r env
 
 -- | Lower a property to a per-case run loop.
@@ -167,7 +181,7 @@ runPropertyT env (PropertyT r) = runReaderT r env
 -- via 'observeProperty' on the engine's minimal counterexample.
 propertyAction :: Property () -> TestCase -> IO ()
 propertyAction prop tc =
-  runPropertyT PropertyEnv {testCase = tc, journal = \_ _ _ -> pure ()} prop
+  runPropertyT Env {testCase = tc, journal = \_ _ _ -> pure (), mode = TestRun} prop
 
 -- | Run a property against a test case with a recording journal, returning
 -- how the run ended together with the journal contents.
@@ -175,7 +189,7 @@ observeProperty :: TestCase -> Property () -> IO (Either SomeException (), [Note
 observeProperty tc prop = do
   j <- newIORef Seq.empty
   let record kind loc text = modifyIORef' j (|> Note {kind, text, loc})
-  eRes <- tryProperty (runPropertyT PropertyEnv {testCase = tc, journal = record} prop)
+  eRes <- tryProperty (runPropertyT Env {testCase = tc, journal = record, mode = SingleTestCase} prop)
   notes <- toList <$> readIORef j
   pure (eRes, notes)
 

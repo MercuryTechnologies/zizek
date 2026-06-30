@@ -14,14 +14,18 @@ module Hegel.Internal.Control
   ( TestStopped (..),
     AssumeRejected (..),
     isControlSignal,
+    ControlSignal (..),
+    catchControl,
   )
 where
 
 import Control.Exception
   ( Exception (..),
+    Handler (..),
     SomeException,
     asyncExceptionFromException,
     asyncExceptionToException,
+    catches,
   )
 import Data.Maybe (isJust)
 
@@ -55,3 +59,28 @@ isControlSignal :: SomeException -> Bool
 isControlSignal e =
   isJust (fromException @AssumeRejected e)
     || isJust (fromException @TestStopped e)
+
+-- | Discriminated form of one of Hegel's two control signals.
+--
+-- Used with 'catchControl' when a handler needs to know /which/ signal fired,
+-- not merely whether one did.
+data ControlSignal
+  = -- | Corresponds to 'AssumeRejected': the current test case should be
+    -- discarded (assume\/filter failure, empty pool, etc.).
+    Assume
+  | -- | Corresponds to 'TestStopped': the engine's choice budget is exhausted.
+    Stop
+  deriving stock (Show, Eq)
+
+-- | Catch only Hegel's async control signals ('AssumeRejected' \/ 'TestStopped'),
+-- discriminate which one fired, and let every other exception propagate.
+--
+-- Uses base 'Control.Exception.catches' so the async tagging of the signals is
+-- honoured: @unliftio@\/@safe-exceptions@ combinators rethrow async exceptions
+-- and therefore cannot be used to catch these.
+catchControl :: IO a -> (ControlSignal -> IO a) -> IO a
+catchControl act h =
+  act
+    `catches` [ Handler \AssumeRejected -> h Assume,
+                Handler \TestStopped -> h Stop
+              ]
