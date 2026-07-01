@@ -69,9 +69,8 @@ assert cond msg = unless cond (withFrozenCallStack (failure msg))
 
 infix 4 ===, /==
 
--- | Assert two values are equal; on failure, generate a 'Diff' that can be
--- used to generate a structural diff (when both rendered values can be parsed
--- as valid Haskell) or a line-level diff otherwise.
+-- | Assert two values are equal; on failure, capture a 'Diff' — structural
+-- when both rendered values parse as valid Haskell, line-level otherwise.
 (===) :: (HasCallStack, MonadIO m, Eq a, Show a) => a -> a -> m ()
 x === y
   | x == y = pure ()

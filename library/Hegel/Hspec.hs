@@ -114,8 +114,9 @@ runProperty settings body = do
 --     reverse (reverse xs) 'Hegel.Property.===' xs
 -- @
 --
--- The key is the same identity hspec uses for @--match@\/@--rerun@: rewording
--- the label orphans that test's stored failures, exactly as renaming would.
+-- The key is built from the same describe\/it path as hspec's @--match@
+-- identity (plus a module salt): rewording the label orphans that test's
+-- stored failures, exactly as renaming would.
 --
 -- For explicit 'Settings', use 'propWith'.
 prop :: (HasCallStack) => String -> Property () -> Hspec.Spec
@@ -206,10 +207,9 @@ toHspecResult :: Bool -> Report -> IO Hspec.Result
 toHspecResult useColor report = case report.result of
   Ok -> pure (Hspec.Result (T.unpack (render report)) Hspec.Success)
   Counterexample {loc} -> do
-    -- Use the source-aware rich renderer; falls back internally to the plain
-    -- renderer when source files can't be read.  The ┏━━ header already shows
-    -- the file, so there's no need to duplicate it in hspec's Location slot —
-    -- but we still fill that slot so hspec can jump to the right line.
+    -- The ┏━━ header already shows the file, so there's no need to duplicate
+    -- it in hspec's Location slot — but we still fill that slot so hspec can
+    -- jump to the right line.
     rendered <- richRender report
     pure (failed (hspecLocation <$> loc) (Hspec.Reason (T.unpack rendered)))
   GaveUp msg ->

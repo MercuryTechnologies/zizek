@@ -1,6 +1,6 @@
 -- | Integral generators.
 --
--- Unbounded by default; narrow with 'Hegel.Gen.Builder.min' and
+-- Full type range by default; narrow with 'Hegel.Gen.Builder.min' and
 -- 'Hegel.Gen.Builder.max':
 --
 -- > Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
@@ -43,7 +43,8 @@ data IntegralBuilder a = IntegralBuilder
     bMax :: Maybe a
   }
 
--- | Generate a random integral number in the given inclusive range.
+-- | Generate a random integral number, defaulting to the type's full
+-- @minBound..maxBound@ range.
 --
 -- Use a type application or a type-pinned alias to fix the element type:
 --
@@ -56,62 +57,42 @@ integral = IntegralBuilder {bMin = Nothing, bMax = Nothing}
 -- Type-pinned specializations of 'integral'.
 
 -- | Generate a random machine integer.
---
--- /This is a specialization of 'integral', offered for convenience./
 int :: IntegralBuilder Int
 int = integral
 
 -- | Generate a random 8-bit integer.
---
--- /This is a specialization of 'integral', offered for convenience./
 int8 :: IntegralBuilder Int8
 int8 = integral
 
 -- | Generate a random 16-bit integer.
---
--- /This is a specialization of 'integral', offered for convenience./
 int16 :: IntegralBuilder Int16
 int16 = integral
 
 -- | Generate a random 32-bit integer.
---
--- /This is a specialization of 'integral', offered for convenience./
 int32 :: IntegralBuilder Int32
 int32 = integral
 
 -- | Generate a random 64-bit integer.
---
--- /This is a specialization of 'integral', offered for convenience./
 int64 :: IntegralBuilder Int64
 int64 = integral
 
 -- | Generate a random machine word.
---
--- /This is a specialization of 'integral', offered for convenience./
 word :: IntegralBuilder Word
 word = integral
 
 -- | Generate a random 8-bit word.
---
--- /This is a specialization of 'integral', offered for convenience./
 word8 :: IntegralBuilder Word8
 word8 = integral
 
 -- | Generate a random 16-bit word.
---
--- /This is a specialization of 'integral', offered for convenience./
 word16 :: IntegralBuilder Word16
 word16 = integral
 
 -- | Generate a random 32-bit word.
---
--- /This is a specialization of 'integral', offered for convenience./
 word32 :: IntegralBuilder Word32
 word32 = integral
 
 -- | Generate a random 64-bit word.
---
--- /This is a specialization of 'integral', offered for convenience./
 word64 :: IntegralBuilder Word64
 word64 = integral
 

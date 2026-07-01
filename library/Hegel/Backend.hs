@@ -24,9 +24,7 @@ data Backend
   | -- | Drive the whole run from a pseudo-random generator seeded once at the
     -- start, so every draw is a deterministic function of that one seed. A run
     -- therefore replays exactly given the same seed — which is what lets
-    -- shrinking, replay, and the failure database work. (The seed itself is not
-    -- fixed here; an unset seed is randomised per run, so runs still differ by
-    -- default.)
+    -- shrinking, replay, and the failure database work.
     Default
   | -- | Read fresh entropy from @\/dev\/urandom@ on every draw, ignoring the
     -- seed entirely.

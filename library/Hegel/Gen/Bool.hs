@@ -35,9 +35,7 @@ weighted p b = b {probability = Just p}
 
 instance Build BoolBuilder Bool where
   build b = case b.probability of
-    -- A plain fair coin collapses to a single schema request.
     Nothing -> basic Schema.bool parseBool
-    -- Any bias uses the dedicated primitive draw.
     Just p -> Draw \tc -> primitiveBoolean tc p
 
 parseBool :: Value -> Either ParseError Bool

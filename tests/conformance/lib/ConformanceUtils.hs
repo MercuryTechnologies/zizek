@@ -97,8 +97,6 @@ writeMetrics v = do
 --
 -- This exercises the multi-request span path instead of the single-request
 -- CBOR schema path.
---
--- See the Rust analogue: @hegel_conformance::maybe_non_basic@.
 nonBasic :: String -> Gen a -> Gen a
 nonBasic "non_basic" g = g >>= pure
 nonBasic _ g = g

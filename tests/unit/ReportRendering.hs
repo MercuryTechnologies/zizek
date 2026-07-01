@@ -184,7 +184,6 @@ spec = do
                 diff = Just [LineRemoved "old", LineAdded "new"]
               }
           report = Report {result, stats = Stats {valid = 1, invalid = 0}}
-      -- ANSI output contains ESC codes; plain output does not.
       let plain = T.unpack (renderReport report)
           ansi = T.unpack (renderReportAnsi report)
       ansi `shouldNotBe` plain
@@ -343,6 +342,3 @@ instance Show Lines where
 -- structural diff path in '(===)'.
 data TwoField = TwoField {p :: Int, q :: Int}
   deriving stock (Eq, Show)
-
--- | Convenience alias for type inference in 'diffShown' tests.
-type Diff' = Diff

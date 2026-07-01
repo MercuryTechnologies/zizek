@@ -111,7 +111,6 @@ toCharacterFields b =
         excludeCharacters = b.bExcludeCharacters
       }
 
--- Inject "Cs" into excludeCategories when categories is not explicitly set.
 injectCs :: Bool -> CharacterFields -> CharacterFields
 injectCs True cf = cf
 injectCs False cf =

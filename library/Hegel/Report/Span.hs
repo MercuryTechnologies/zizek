@@ -19,7 +19,9 @@ newtype LineNo = LineNo {unLineNo :: Int}
   deriving stock (Show)
   deriving newtype (Eq, Ord, Num, Enum, Real, Integral)
 
--- | A 1-based column number.
+-- | A column number. Positions from "Hegel.Report.Discovery" are 1-based;
+-- spans computed from source text (@lineSpan@ in "Hegel.Report.Source") are
+-- 0-based.
 newtype ColumnNo = ColumnNo {unColumnNo :: Int}
   deriving stock (Show)
   deriving newtype (Eq, Ord, Num, Enum, Real, Integral)

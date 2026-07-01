@@ -37,8 +37,6 @@ instance IsTest HegelTest where
   run opts (HegelTest settings prop) _progress = do
     report <- check settings prop
     useColor <- resolveColor (lookupOption opts)
-    -- The rich renderer falls back internally to the plain renderer when the
-    -- result is not a Counterexample or source files can't be read.
     let render = if useColor then renderReportRichAnsi else renderReportRich
     rendered <- T.unpack <$> render report
     pure case report.result of

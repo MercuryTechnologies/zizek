@@ -122,9 +122,9 @@ data FloatSchema a = FloatSchema
     allowNan :: !Bool,
     -- | Whether ±∞ are permitted draws.
     allowInfinity :: !Bool,
-    -- | Inclusive lower bound, if any.
+    -- | Lower bound, if any; exclusivity governed by 'excludeMin'.
     minValue :: !(Maybe a),
-    -- | Inclusive upper bound, if any.
+    -- | Upper bound, if any; exclusivity governed by 'excludeMax'.
     maxValue :: !(Maybe a)
   }
 
@@ -393,6 +393,6 @@ instance ToCBOR OneOfSchema where
         "generators" .= s.generators
       ]
 
--- | Pick one of the branch schemas uniformly at random.
+-- | Have the engine pick one of the branch schemas.
 oneOf :: [Value] -> OneOfSchema
 oneOf = OneOfSchema

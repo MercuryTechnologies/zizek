@@ -55,10 +55,8 @@ check settings prop =
     go = withContext \ctx ->
       withSettings ctx \s -> do
         applySettings ctx settings s
-        -- The run result, its failures, and their blobs are all borrowed from
-        -- the run handle and only valid until hegel_run_free (called by withRun
-        -- on bracket exit), so read and copy everything out before returning
-        -- from the lambda.
+        -- Read and copy everything out of the run handle before withRun frees
+        -- it on bracket exit (see 'readRunOutcome').
         (nValid, nInvalid, outcome) <- withRun ctx s \run -> do
           (nv, ni) <- driveLoop ctx settings (propertyAction prop) run
           o <- readRunOutcome ctx run
@@ -150,8 +148,7 @@ instance Witch.TryFrom CInt RunStatus where
     HEGEL_RUN_STATUS_ERROR -> Just RunErrored
     _ -> Nothing
 
--- | The aggregated verdict of a finished run, copied out of the borrowed
--- result before 'hegel_run_free' invalidates it.
+-- | The aggregated verdict of a finished run.
 data RunOutcome = RunOutcome
   { -- | The decoded run status.
     status :: !RunStatus,
@@ -172,7 +169,6 @@ readRunOutcome :: Ptr HegelContext -> Ptr HegelRun -> IO RunOutcome
 readRunOutcome ctx run = do
   res <- outWith (hegel_run_result ctx run)
   rawStatus <- outWith (hegel_run_result_status ctx res)
-  -- An unrecognised status code is folded into 'RunErrored'.
   let status = either (const RunErrored) id (Witch.tryInto rawStatus)
   failure <- readPrimaryFailure ctx res
   runError <- readRunError ctx res
@@ -263,8 +259,6 @@ driveLoop ctx settings action run = loop 0 0
         else
           runTestCase ctx settings action tcPtr >>= \case
             Valid -> loop (nValid + 1) nInvalid
-            -- 'Invalid' is reserved for assume\/filter rejections; it feeds
-            -- 'Stats.invalid'.
             Invalid -> loop nValid (nInvalid + 1)
             -- A failure (counted via the run result) or an overrun (a
             -- budget-exhausted shrink probe) — neither is a valid example

@@ -57,7 +57,7 @@ data Collection = Collection
   { tc :: !TestCase,
     minSize :: !Int,
     maxSize :: !(Maybe Int),
-    -- | Populated lazily on the first call to 'more'.
+    -- | Populated lazily on the first 'more'\/'reject' call.
     handle :: !(IORef (Maybe Int)),
     finished :: !(IORef Bool)
   }

@@ -34,9 +34,11 @@ import Witch qualified
 -- | Pair a run-owned @hegel_test_case_t*@ pointer with the error-reporting
 -- context the run is driven under.
 --
--- The pointer is borrowed from the run handle and remains valid only for the
--- duration of the current test case (until 'markComplete' is called and the
--- runner fetches the next case via 'hegel_next_test_case').
+-- For run-owned handles the pointer is borrowed from the run handle and
+-- remains valid only for the duration of the current test case (until
+-- 'markComplete' is called and the runner fetches the next case via
+-- 'hegel_next_test_case'). Blob-derived replay handles are caller-owned and
+-- freed by their bracket instead.
 mkTestCase :: Ptr HegelContext -> Ptr HegelTestCase -> TestCase
 mkTestCase ctx ptr = TestCase {ptr, ctx}
 

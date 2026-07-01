@@ -24,9 +24,7 @@
 -- A single context must not be used concurrently from multiple threads, as each
 -- fallible call overwrites the stored message.
 --
--- The runner drives a whole run from one bound thread (see 'withContext');
--- the blocking 'hegel_next_test_case' is declared @safe@ so it does not pin a
--- capability while parked on the Rust worker.
+-- The runner drives a whole run from one bound thread (see 'withContext').
 module Hegel.Internal.FFI
   ( -- * Opaque handle phantoms
     -- $handles
@@ -225,7 +223,8 @@ data HegelSettings
 -- | Sentinel for @hegel_run_t*@.
 data HegelRun
 
--- | Sentinel for @hegel_test_case_t*@ (borrowed from the run handle).
+-- | Sentinel for @hegel_test_case_t*@ (run-borrowed, or caller-owned when
+-- replayed from a blob — see the reproduction section).
 data HegelTestCase
 
 -- | Sentinel for @hegel_run_result_t*@ (borrowed from the run handle).
@@ -236,11 +235,9 @@ data HegelFailure
 
 -- $errortypes
 --
--- 'HegelError': a @libhegel@ FFI call returned a non-zero @HEGEL_E_*@ code,
--- which callers can branch off of and potentially handle. This includes
--- failures that occur before any test case is produced — constructing a run
--- ('hegel_run_start') or a replay test case ('hegel_test_case_from_blob') — as
--- those calls now report a result code like every other.
+-- 'HegelError' covers failures that occur before any test case is produced —
+-- constructing a run ('hegel_run_start') or a replay test case
+-- ('hegel_test_case_from_blob') — as well as per-call errors.
 
 -- | Exception thrown when a @libhegel@ call returns a non-zero error code.
 data HegelError = HegelError
@@ -532,7 +529,8 @@ foreign import ccall unsafe "hegel_settings_set_verbosity"
 foreign import ccall unsafe "hegel_settings_set_seed"
   hegel_settings_set_seed :: Ptr HegelContext -> Ptr HegelSettings -> Word64 -> CBool -> IO CInt
 
--- | Derive the seed from a hash of the database key for reproducible CI runs.
+-- | When no explicit seed is set, derive it from a hash of the database key
+-- for reproducible CI runs.
 foreign import ccall unsafe "hegel_settings_set_derandomize"
   hegel_settings_set_derandomize :: Ptr HegelContext -> Ptr HegelSettings -> CBool -> IO CInt
 
@@ -563,14 +561,10 @@ foreign import ccall unsafe "hegel_settings_set_suppress_health_check"
 -- Start an engine run from a settings handle, pump test cases out of it,
 -- read the aggregated result, and tear it down.
 --
--- Blocking calls ('hegel_next_test_case', 'hegel_run_free') are declared @safe@.
---
 -- Prefer 'withRun'.
 
 -- | Spawn the engine worker thread and write a run handle into @*out_run@;
 -- returns immediately.
---
--- Use 'withRun' rather than calling this directly.
 foreign import ccall unsafe "hegel_run_start"
   hegel_run_start :: Ptr HegelContext -> Ptr HegelSettings -> Ptr (Ptr HegelRun) -> IO CInt
 
@@ -702,11 +696,10 @@ foreign import ccall safe "hegel_pool_generate"
 -- writes the machine ID into @*out_state_machine_id@.
 --
 -- @rule_names@ and @invariant_names@ are arrays of NUL-terminated UTF-8
--- strings. Pass at least one rule: the engine assumes a non-empty rule set and
--- does not validate @num_rules@, so 'Hegel.Stateful.run' enforces this before
--- calling in.
+-- strings.
 --
--- Returns 'HEGEL_E_INVALID_ARG' when a name is not valid UTF-8.
+-- Returns 'HEGEL_E_INVALID_ARG' when @num_rules@ is zero or a name is not
+-- valid UTF-8.
 foreign import ccall safe "hegel_new_state_machine"
   hegel_new_state_machine
     :: Ptr HegelContext
@@ -755,7 +748,9 @@ foreign import ccall safe "hegel_target"
 
 -- | Mark the test case complete.
 --
--- @origin@ is required (non-@NULL@) when @status == 'HEGEL_STATUS_INTERESTING'@.
+-- @origin@ is only read when @status == 'HEGEL_STATUS_INTERESTING'@. @NULL@ is
+-- accepted there, but collapses every failure under one generic origin —
+-- always pass one.
 --
 -- __NOTE__: @origin@ must be a stable, draw-independent string (e.g. @\"file:line\"@),
 -- so the shrinker can converge towards a target.
@@ -791,8 +786,6 @@ foreign import ccall safe "hegel_mark_complete"
 -- Returns 'HEGEL_E_INVALID_ARG' (with a diagnostic in
 -- 'hegel_context_last_error') when @blob@ is @NULL@, not valid UTF-8, corrupt,
 -- or from an incompatible @libhegel@ version.
---
--- Caller-owned: free with 'hegel_test_case_free'.
 --
 -- A blob whose choice sequence no longer matches the caller's generators
 -- returns 'HEGEL_E_STOP_TEST' on the overrunning draw.
@@ -852,11 +845,8 @@ foreign import ccall unsafe "hegel_failure_origin"
 -- Writes @NULL@ when the engine produced no blob for this failure (e.g. a
 -- health-check failure).
 --
--- The written pointer is __borrowed__ from the parent @hegel_run_result_t@
--- and remains valid only until 'hegel_run_free' is called.
---
--- To preserve the blob beyond the run's lifetime, copy it before freeing the
--- run ('failureReproductionBlob' does this automatically).
+-- The written pointer is borrowed (see the section notes above);
+-- 'failureReproductionBlob' copies it out.
 foreign import ccall unsafe "hegel_failure_reproduction_blob"
   hegel_failure_reproduction_blob :: Ptr HegelContext -> Ptr HegelFailure -> Ptr CString -> IO CInt
 
@@ -942,8 +932,7 @@ withRun ctx s = bracket acquire release
 -- until 'hegel_run_free'; this function copies it immediately so the
 -- 'ByteString' is safe to use after the run is freed.
 --
--- The blob is ASCII base64 and can be passed directly to 'withTestCaseFromBlob'
--- via 'Data.ByteString.useAsCString'.
+-- The blob is ASCII base64 and can be passed directly to 'withTestCaseFromBlob'.
 failureReproductionBlob :: Ptr HegelContext -> Ptr HegelFailure -> IO (Maybe ByteString)
 failureReproductionBlob ctx f =
   alloca $ \out -> do
@@ -960,9 +949,9 @@ failureReproductionBlob ctx f =
 -- the underlying 'hegel_failure_reproduction_blob').
 --
 -- Throws 'HegelError' when @libhegel@ cannot decode the blob.
--- 
--- The bracket frees the handle. __Do not call 'hegel_test_case_free' or
--- 'hegel_run_free' on the handle.__
+--
+-- The bracket frees the handle; do not call 'hegel_test_case_free' on it
+-- yourself.
 withTestCaseFromBlob
   :: Ptr HegelContext
   -> Ptr HegelSettings
@@ -987,8 +976,6 @@ withTestCaseFromBlob ctx s blob action =
 -- The engine's output buffer is borrowed and invalidated by the next
 -- libhegel call on the same test case; this function copies it before
 -- returning so the caller does not need to worry about the lifetime.
---
--- Calls 'throwOnError' on the return code.
 --
 -- Control-flow codes ('HEGEL_E_STOP_TEST', 'HEGEL_E_ASSUME') are converted to
 -- 'HegelError's with the corresponding code so callers can branch on them.

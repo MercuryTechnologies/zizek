@@ -4,8 +4,9 @@
 -- Verifies that:
 --
 --   * A correctly-specified stack machine passes.
---   * A deliberately-buggy machine finds a counterexample.
---   * The counterexample reproduces from its blob (replay alignment gate).
+--   * A deliberately-buggy machine finds a counterexample. This implicitly
+--     gates replay alignment: a counterexample that fails to reproduce from
+--     its blob surfaces as Aborted, not Counterexample.
 --
 -- Exit codes: 0 = all assertions passed, non-zero = failure.
 module Main (main) where
@@ -66,7 +67,6 @@ buggyPushPop :: Stateful.Rule Stack IO
 buggyPushPop =
   Stateful.Rule "buggy_push_pop" \(Stack xs) -> do
     n <- forAll (Gen.int & Gen.min (-100) & Gen.max 100 & Gen.build)
-    -- Bug: asserts that n == 0, which fails for any non-zero n.
     assert (n == 0) "pushed element is zero (bug: should be n)"
     pure (Stack xs)
 

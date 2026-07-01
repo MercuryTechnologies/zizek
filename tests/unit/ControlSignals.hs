@@ -89,7 +89,7 @@ spec = do
       isSyncException escaped `shouldBe` False
 
   describe "onFailure composed inside catchControl" do
-    -- The bracket shape Hegel.Stateful.run will use: the hook observes
+    -- The bracket shape Hegel.Stateful.run uses: the hook observes
     -- failures without disturbing the control-signal handling around it.
     let bracketed :: IO () -> (SomeException -> IO ()) -> IO (Either ControlSignal ())
         bracketed act hook =

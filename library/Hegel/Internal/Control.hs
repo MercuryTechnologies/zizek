@@ -41,7 +41,8 @@ import UnliftIO.Exception (isSyncException)
 -- | Thrown when the engine signals that the current test case should be
 -- abandoned (choice budget exhausted).
 --
--- The runner treats this as a discard.
+-- The runner reports this as 'Hegel.Internal.TestCase.Overrun' — budget
+-- exhaustion, distinct from a discard.
 data TestStopped = TestStopped
   deriving stock (Show)
 

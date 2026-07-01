@@ -106,8 +106,8 @@ defaultStyle = fmap (const (StyleDefault, []))
 
 -- * Span helpers
 
--- | The inclusive span of non-whitespace characters on a source line.
--- Result is @(start, end)@ with @start < end@, both 0-based.
+-- | The half-open span @[start, end)@ of non-whitespace characters on a
+-- source line, both 0-based; @start == end@ for blank lines.
 lineSpan :: Line a -> (ColumnNo, ColumnNo)
 lineSpan line =
   let (pre, rest) = span Char.isSpace line.lineSource

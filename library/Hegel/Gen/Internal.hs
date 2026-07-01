@@ -277,8 +277,8 @@ assume False = Draw \_ -> throwIO AssumeRejected
 discard :: Gen a
 discard = Draw \_ -> throwIO AssumeRejected
 
--- | Apply a function to values drawn from a generator, retrying up to 3 times
--- when the function returns 'Nothing'. Discards the test case when all retries
+-- | Apply a function to values drawn from a generator, making up to 3 attempts
+-- when the function returns 'Nothing'. Discards the test case when all attempts
 -- are exhausted.
 mapMaybe :: (a -> Prelude.Maybe b) -> Gen a -> Gen b
 mapMaybe f g = Draw \tc -> go tc (3 :: Int)
@@ -299,7 +299,7 @@ mapMaybe f g = Draw \tc -> go tc (3 :: Int)
 just :: Gen (Prelude.Maybe a) -> Gen a
 just = mapMaybe Prelude.id
 
--- | Filter values drawn from a generator, retrying up to 3 times before
+-- | Filter values drawn from a generator, making up to 3 attempts before
 -- discarding the test case. Exhaustion is treated as 'assume' 'False'.
 --
 -- When the source generator is finite (i.e. 'enumerate' returns @Just xs@),
@@ -394,8 +394,9 @@ oneOf gens = OneOf basicOneOf gens
           p v = Left ParseError {expected = "[index, value] array", got = v}
       pure (BasicGenerator (Scalar sch) p)
 
--- | Generate one of the given values uniformly. The list must be
--- non-empty; passing @[]@ raises an error at the call site.
+-- | Generate one of the given values (not uniformly — see the distribution
+-- note on 'oneOf'). The list must be non-empty; passing @[]@ raises an error
+-- at the call site.
 element :: (HasCallStack) => [a] -> Gen a
 element [] = error "Gen.element: used with empty list"
 element xs = oneOf (fmap pure xs)
@@ -486,7 +487,7 @@ either :: Gen a -> Gen b -> Gen (Either a b)
 either ga gb = oneOf [Left <$> ga, Right <$> gb]
 
 -- $exceptions
--- 'AssumeRejected' is re-exported from 'Hegel.Internal.TestCase', as it is used for
+-- 'AssumeRejected' is re-exported from 'Hegel.Internal.Control', as it is used for
 -- control flow within the runner rather than for surfacing test failures.
 
 -- | Thrown when @hegel@ returns a value that cannot be parsed according

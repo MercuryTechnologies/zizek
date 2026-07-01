@@ -7,8 +7,7 @@
 --
 -- These are plain functions over a 'TestCase' (libhegel is the only engine, so
 -- there is no @DataSource@ typeclass to implement). This is also the home for
--- non-schema engine primitives — 'primitiveBoolean' today, and pools /
--- state-machine / targeting as stateful testing lands.
+-- non-schema engine primitives: 'primitiveBoolean', pools, and state machines.
 module Hegel.Internal.DataSource
   ( -- * Generation
     generate,
@@ -92,8 +91,7 @@ handleReturnCode tc rc = throwOnError tc.ctx rc
 primitiveBoolean :: TestCase -> Double -> IO Bool
 primitiveBoolean tc p =
   alloca \outValue -> do
-    -- The engine's forced-draw support (forced / has_forced) is unused here;
-    -- pass has_forced = 0 so the draw always consults the data stream.
+    -- has_forced = 0: forced-draw support is unused (see 'hegel_primitive_boolean').
     hegel_primitive_boolean tc.ctx tc.ptr (CDouble p) (CBool 0) (CBool 0) outValue
       >>= handleReturnCode tc
     (/= 0) . (\(CBool b) -> b) <$> peek outValue
@@ -155,7 +153,7 @@ poolAdd tc pid =
 --
 -- Pass 'True' to consume the variable (remove it from the pool).
 --
--- Throws 'TestStopped' when the pool is empty.
+-- Throws 'AssumeRejected' when the pool is empty, discarding the test case.
 poolGenerate :: TestCase -> Int -> Bool -> IO Int
 poolGenerate tc pid consume =
   alloca \outId -> do
@@ -167,8 +165,7 @@ poolGenerate tc pid consume =
 
 -- | Register an engine-owned state machine; returns its ID.
 --
--- @ruleNames@ must be non-empty; each name is marshalled to a NUL-terminated
--- C string.
+-- @ruleNames@ must be non-empty.
 --
 -- Throws 'TestStopped' on exhaustion.
 newStateMachine :: TestCase -> [Text] -> [Text] -> IO Int

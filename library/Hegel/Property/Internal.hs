@@ -65,9 +65,6 @@ data Env = Env
 -- | A property: test logic interleaved with generator draws against a live
 -- test case.
 --
--- An environment that allows for test logic to be interleaved with values
--- drawn from a 'TestCase'.
---
 -- Unlike @'Hegel.Property.forEach' gen body@, where all draws happen up
 -- front, a 'PropertyT' may draw ('forAll'), perform effects, and make
 -- assertions in any order.
@@ -170,12 +167,12 @@ assume :: (MonadIO m) => Bool -> m ()
 assume cond = if cond then pure () else discard
 
 -- NOTE: This function _needs_ to use 'Control.Exception.throwIO' so that
--- 'AssumeRejected' can be thrown as as a proper async exception.
+-- 'AssumeRejected' can be thrown as a proper async exception.
 
 -- | Discard the current test case unconditionally.
 --
 -- The discard signal is delivered as an asynchronous exception
--- ('Hegel.Internal.TestCase.AssumeRejected') so that catch-all handlers in the
+-- ('Hegel.Internal.Control.AssumeRejected') so that catch-all handlers in the
 -- property body may pass it through to the runner instead of silently ignoring
 -- them.
 --
@@ -217,11 +214,9 @@ observeProperty tc prop = do
 -- ('isFailure'\/'Hegel.Internal.Control.onFailure').
 
 -- | Like 'UnliftIO.Exception.tryAny', but additionally catches Hegel's
--- control signals ('Hegel.Internal.TestCase.AssumeRejected',
--- 'Hegel.Internal.TestCase.TestStopped'), which are async exceptions precisely so that
+-- control signals ('Hegel.Internal.Control.AssumeRejected',
+-- 'Hegel.Internal.Control.TestStopped'), which are async exceptions precisely so that
 -- user catch-alls pass them through.
---
--- All other async exceptions should be passed through unmodified.
 tryProperty :: IO a -> IO (Either SomeException a)
 tryProperty act =
   E.try act >>= \res -> case res of
