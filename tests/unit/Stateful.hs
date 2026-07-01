@@ -3,6 +3,7 @@ module Stateful (spec) where
 
 import Control.Monad.IO.Class (liftIO)
 import Data.Function ((&))
+import Data.Maybe (isNothing)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Hegel (Gen)
@@ -11,7 +12,7 @@ import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, assume, forAll, forAllSilent)
 import Hegel.Property.Internal (Env (..), askEnv)
-import Hegel.Report (Report (..), Result (..))
+import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..))
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
@@ -137,6 +138,25 @@ statefulSpec = describe "Machine" do
     report <- check defaultSettings (Stateful.run machine)
     case report.result of
       Counterexample {} -> pure ()
+      other -> expectationFailure ("expected Counterexample, got: " <> show other)
+
+  it "machinery annotations carry no source location" do
+    -- The 'Step N: …' / invariant-check annotations are emitted by
+    -- 'Stateful.run' itself; a call-stack loc would point inside
+    -- @library/Hegel/Stateful.hs@, which the rich renderer would then try
+    -- to splice into the report as if it were the user's test source.
+    let machine =
+          Stateful.Machine
+            { initial = pure (Counter 0),
+              rules = [increment],
+              invariants = [neverAboveFive]
+            }
+    report <- check defaultSettings (Stateful.run machine)
+    case report.result of
+      Counterexample {notes} -> do
+        let annotations = [n | n <- notes, n.kind == Annotation]
+        annotations `shouldNotSatisfy` null
+        annotations `shouldSatisfy` all (isNothing . (.loc))
       other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
   it "value-drawing counterexample reproduces on replay" do

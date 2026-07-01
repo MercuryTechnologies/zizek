@@ -57,7 +57,7 @@ module Hegel.Stateful
 where
 
 import Control.Monad (forM_, when)
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Function ((&))
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -67,10 +67,11 @@ import Hegel.Internal.DataSource (newStateMachine, stateMachineNextRule)
 import Hegel.Property.Internal
   ( Env (..),
     PropertyT,
-    annotate,
     askEnv,
     forAllSilent,
+    note,
   )
+import Hegel.Report (NoteKind (Annotation))
 import UnliftIO (MonadUnliftIO, throwIO, withRunInIO)
 
 -- | A rule applied to the model during a stateful test.
@@ -91,6 +92,14 @@ data Invariant s m = Invariant
   { name :: !Text,
     check :: s -> PropertyT m ()
   }
+
+-- | Journal a step annotation without a source location.
+--
+-- These entries are journal structure emitted by the runner itself; a
+-- call-stack loc would point inside this module, which the rich renderer
+-- would then try to splice as if it were the user's test source.
+stepNote :: (MonadIO m) => Text -> PropertyT m ()
+stepNote = note Annotation Nothing
 
 -- | A complete stateful test specification.
 data Machine s m = Machine
@@ -121,7 +130,7 @@ run machine = do
   machineId <- liftIO (newStateMachine tc (map (.name) machine.rules) (map (.name) machine.invariants))
 
   s0 <- machine.initial
-  annotate "Initial invariant check."
+  stepNote "Initial invariant check."
   checkInvariants s0
 
   stepCap <- min 50 <$> forAllSilent (Gen.int & Gen.min 1 & Gen.build)
@@ -146,7 +155,7 @@ run machine = do
                           <> show (length machine.rules)
                           <> " rules. This should be impossible; please report it as a libhegel bug."
                       )
-            annotate ("Step " <> T.pack (show (attempts + 1)) <> ": " <> rule.name)
+            stepNote ("Step " <> T.pack (show (attempts + 1)) <> ": " <> rule.name)
             -- Only control signals are caught here; a real failure propagates
             -- out to the runner as the counterexample.
             verdict <-
@@ -159,7 +168,7 @@ run machine = do
                 loop s' (succeeded + 1) (attempts + 1)
               Left Stop -> pure ()
               Left Assume -> do
-                annotate "Rule stopped early due to violated assumption."
+                stepNote "Rule stopped early due to violated assumption."
                 loop s succeeded (attempts + 1)
 
   loop s0 0 0

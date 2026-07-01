@@ -11,6 +11,7 @@ module Hegel.Property.Internal
     forAllSilent,
 
     -- * Notes
+    note,
     annotate,
     annotateShow,
     footnote,
@@ -54,7 +55,7 @@ import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
 -- | The per-test-case environment a property runs against.
 data Env = Env
   { testCase :: !TestCase,
-    journal :: !(NoteKind -> Maybe SrcLoc -> Text -> IO ())
+    journal :: !(Note -> IO ())
   }
 
 -- | A property: test logic interleaved with generator draws against a live
@@ -94,11 +95,13 @@ hoist f (PropertyT (ReaderT g)) = PropertyT (ReaderT (f . g))
 askEnv :: (Monad m) => PropertyT m Env
 askEnv = PropertyT ask
 
--- | Send a note to the journal.
+-- | Send a note to the journal. The primitive underneath 'annotate' and
+-- 'footnote', for library-internal callers that need to control the recorded
+-- 'SrcLoc' (or omit it) explicitly.
 note :: (MonadIO m) => NoteKind -> Maybe SrcLoc -> Text -> PropertyT m ()
 note kind loc text = PropertyT do
   env <- ask
-  liftIO (env.journal kind loc text)
+  liftIO (env.journal Note {kind, text, loc})
 
 -- | Draw a value from a generator mid-test.
 --
@@ -171,14 +174,14 @@ runPropertyT env (PropertyT r) = runReaderT r env
 -- via 'observeProperty' on the engine's minimal counterexample.
 propertyAction :: Property () -> TestCase -> IO ()
 propertyAction prop tc =
-  runPropertyT Env {testCase = tc, journal = \_ _ _ -> pure ()} prop
+  runPropertyT Env {testCase = tc, journal = \_ -> pure ()} prop
 
 -- | Run a property against a test case with a recording journal, returning
 -- how the run ended together with the journal contents.
 observeProperty :: TestCase -> Property () -> IO (Either SomeException (), [Note])
 observeProperty tc prop = do
   j <- newIORef Seq.empty
-  let record kind loc text = modifyIORef' j (|> Note {kind, text, loc})
+  let record n = modifyIORef' j (|> n)
   eRes <- tryProperty (runPropertyT Env {testCase = tc, journal = record} prop)
   notes <- toList <$> readIORef j
   pure (eRes, notes)
