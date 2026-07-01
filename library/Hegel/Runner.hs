@@ -5,31 +5,29 @@ module Hegel.Runner
 where
 
 import Control.Concurrent.Async (wait, withAsyncBound)
-import Control.Exception (toException)
+import Control.Exception (fromException, toException)
 import Data.Bits ((.|.))
 import Data.ByteString (ByteString)
-import Data.ByteString qualified as BS
 import Data.Foldable (for_)
 import Data.Functor (($>))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding (encodeUtf8)
 import Data.Word (Word32)
 import Foreign (Ptr, Storable, alloca, fromBool, nullPtr, peek)
-import Foreign.C.String (withCString)
 import Foreign.C.Types (CBool (..), CInt, CSize)
 import Hegel.Assertion (originOf)
 import Hegel.Database (Database (..))
 import Hegel.HealthCheck (HealthCheck)
-import Hegel.Internal.Control (ControlSignal (..), catchControl, isControlSignal)
+import Hegel.Internal.CString qualified as CString
+import Hegel.Internal.Control (ControlSignal (..), MalformedTest, catchControl, isControlSignal)
 import Hegel.Internal.FFI
 import Hegel.Internal.TestCase (Status (..), TestCase, markComplete, mkTestCase)
 import Hegel.Phase (Phase)
 import Hegel.Property.Internal (Property, failureDetails, observeProperty, propertyAction)
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
 import Hegel.Settings (Finalizer (..), Settings (..))
-import UnliftIO.Exception (catch, catchAny, finally)
+import UnliftIO.Exception (catch, catchAny, finally, throwIO)
 import Witch qualified
 
 -- | Run a 'Property' through @libhegel@.
@@ -43,11 +41,16 @@ check settings prop =
   -- Note: 'safe' blocking FFI calls (notably 'hegel_next_test_case') cannot
   -- be interrupted by async exceptions; a cancellation signal is deferred
   -- until that call returns.
-  -- A libhegel call outside the per-case try (engine startup, blob replay, or
-  -- e.g. markComplete) can fail with a HegelError; surface it as Errored rather
-  -- than letting it escape the runner.
+  --
+  -- A @libhegel@ call outside the per-case try (e.g. engine startup, blob
+  -- replay, markComplete) can fail with a HegelError; surface it as
+  -- Errored rather than letting it escape the runner.
+  --
+  -- A MalformedTest (e.g. a state-machine test with no rules) is likewise a
+  -- run-level abort, not a counterexample.
   withAsyncBound go wait
-    `catch` \(e :: HegelError) -> pure (aborted (Errored (toException e)))
+    `catch` (\(e :: MalformedTest) -> pure (aborted (Errored (toException e))))
+    `catch` (\(e :: HegelError) -> pure (aborted (Errored (toException e))))
   where
     go = withContext \ctx ->
       withSettings ctx \s -> do
@@ -99,11 +102,11 @@ applySettings ctx s ptr = do
   -- (.hegel/ under the cwd).
   case s.database of
     DatabaseDefault -> pure ()
-    DatabaseDisabled -> withCString "" \p -> chk $ hegel_settings_set_database ctx ptr p
-    DatabaseDirectory dir -> withCString dir \p -> chk $ hegel_settings_set_database ctx ptr p
+    DatabaseDisabled -> CString.withFilePath "" \p -> chk $ hegel_settings_set_database ctx ptr p
+    DatabaseDirectory dir -> CString.withFilePath dir \p -> chk $ hegel_settings_set_database ctx ptr p
 
   for_ s.databaseKey \key ->
-    BS.useAsCString (encodeUtf8 key) \p -> chk $ hegel_settings_set_database_key ctx ptr p
+    CString.withText key \p -> chk $ hegel_settings_set_database_key ctx ptr p
   where
     chk io = io >>= throwOnError ctx
 
@@ -296,13 +299,16 @@ runTestCase ctx settings action tcPtr =
       status <-
         -- 'catchControl' catches only Hegel's async control signals via base
         -- 'E.catches'; 'catchAny' (unliftio) then catches all remaining
-        -- synchronous exceptions and marks them as failures.
+        -- synchronous exceptions and marks them as failures /except/ for
+        -- 'MalformedTest', which is re-thrown so 'check' can abort the run.
         (action tc $> Valid)
           `catchControl` \case
             Assume -> pure Invalid
             -- @libhegel@ owns the choice budget but does not observe that we
             -- stopped; report Overrun explicitly to let the engine shrink
             Stop -> pure Overrun
-          `catchAny` \e -> pure (Interesting (originOf e))
+          `catchAny` \e -> case fromException e of
+            Just malformed -> throwIO (malformed :: MalformedTest)
+            Nothing -> pure . Interesting $ originOf e
       markComplete tc status
       pure status

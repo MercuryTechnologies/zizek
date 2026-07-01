@@ -23,10 +23,9 @@ module Hegel.Internal.TestCase
 where
 
 import Data.Text (Text)
-import Data.Text qualified as T
 import Foreign (Ptr, nullPtr)
-import Foreign.C.String (withCString)
 import Foreign.C.Types (CInt)
+import Hegel.Internal.CString qualified as CString
 import Hegel.Internal.FFI
 import Witch qualified
 
@@ -72,7 +71,7 @@ markComplete tc status = do
   -- 'Interesting' case also carries an origin string, passed separately.
   rc <- case status of
     Interesting origin ->
-      withCString (T.unpack origin) (hegel_mark_complete tc.ctx tc.ptr (Witch.into @CInt status))
+      CString.withText origin (hegel_mark_complete tc.ctx tc.ptr (Witch.into @CInt status))
     _ -> hegel_mark_complete tc.ctx tc.ptr (Witch.into @CInt status) nullPtr
   case rc of
     HEGEL_OK -> pure ()

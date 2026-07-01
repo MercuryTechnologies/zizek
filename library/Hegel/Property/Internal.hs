@@ -3,7 +3,6 @@ module Hegel.Property.Internal
     PropertyT (..),
     Property,
     Env (..),
-    Mode (..),
     hoist,
 
     -- * Draws
@@ -52,18 +51,9 @@ import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception (isSyncException)
 import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
 
--- | Test execution mode.
-data Mode
-  = -- | Run multiple test cases, with shrinking; the default mode.
-    TestRun
-  | -- | Run a single test with no shrinking or replay.
-    SingleTestCase
-  deriving stock (Show, Eq)
-
 -- | The per-test-case environment a property runs against.
 data Env = Env
   { testCase :: !TestCase,
-    mode :: !Mode,
     journal :: !(NoteKind -> Maybe SrcLoc -> Text -> IO ())
   }
 
@@ -181,7 +171,7 @@ runPropertyT env (PropertyT r) = runReaderT r env
 -- via 'observeProperty' on the engine's minimal counterexample.
 propertyAction :: Property () -> TestCase -> IO ()
 propertyAction prop tc =
-  runPropertyT Env {testCase = tc, journal = \_ _ _ -> pure (), mode = TestRun} prop
+  runPropertyT Env {testCase = tc, journal = \_ _ _ -> pure ()} prop
 
 -- | Run a property against a test case with a recording journal, returning
 -- how the run ended together with the journal contents.
@@ -189,7 +179,7 @@ observeProperty :: TestCase -> Property () -> IO (Either SomeException (), [Note
 observeProperty tc prop = do
   j <- newIORef Seq.empty
   let record kind loc text = modifyIORef' j (|> Note {kind, text, loc})
-  eRes <- tryProperty (runPropertyT Env {testCase = tc, journal = record, mode = SingleTestCase} prop)
+  eRes <- tryProperty (runPropertyT Env {testCase = tc, journal = record} prop)
   notes <- toList <$> readIORef j
   pure (eRes, notes)
 

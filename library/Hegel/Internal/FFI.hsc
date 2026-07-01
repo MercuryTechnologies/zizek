@@ -159,6 +159,8 @@ module Hegel.Internal.FFI
     hegel_new_pool,
     hegel_pool_add,
     hegel_pool_generate,
+    hegel_new_state_machine,
+    hegel_state_machine_next_rule,
     hegel_primitive_boolean,
     hegel_target,
     hegel_mark_complete,
@@ -694,6 +696,38 @@ foreign import ccall safe "hegel_pool_generate"
     -> Int64     -- ^ @pool_id@
     -> CBool     -- ^ @consume@ (remove from pool)
     -> Ptr Int64 -- ^ out: @variable_id@
+    -> IO CInt
+
+-- | Register an engine-owned state machine for swarm-based stateful testing;
+-- writes the machine ID into @*out_state_machine_id@.
+--
+-- @rule_names@ and @invariant_names@ are arrays of NUL-terminated UTF-8
+-- strings. Pass at least one rule: the engine assumes a non-empty rule set and
+-- does not validate @num_rules@, so 'Hegel.Stateful.run' enforces this before
+-- calling in.
+--
+-- Returns 'HEGEL_E_INVALID_ARG' when a name is not valid UTF-8.
+foreign import ccall safe "hegel_new_state_machine"
+  hegel_new_state_machine
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Ptr CString  -- ^ @rule_names@
+    -> CSize        -- ^ @num_rules@
+    -> Ptr CString  -- ^ @invariant_names@
+    -> CSize        -- ^ @num_invariants@
+    -> Ptr Int64    -- ^ out: @state_machine_id@
+    -> IO CInt
+
+-- | Draw the next rule index in @[0, num_rules)@ for the given state machine,
+-- honouring swarm-selected rule restrictions.
+--
+-- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted.
+foreign import ccall safe "hegel_state_machine_next_rule"
+  hegel_state_machine_next_rule
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Int64      -- ^ @state_machine_id@
+    -> Ptr Int64  -- ^ out: @rule_index@
     -> IO CInt
 
 -- | Draw a single boolean that is @true@ with probability @p@ (in @[0,1]@).

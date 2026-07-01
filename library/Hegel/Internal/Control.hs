@@ -13,6 +13,7 @@
 module Hegel.Internal.Control
   ( TestStopped (..),
     AssumeRejected (..),
+    MalformedTest (..),
     isControlSignal,
     ControlSignal (..),
     catchControl,
@@ -28,6 +29,8 @@ import Control.Exception
     catches,
   )
 import Data.Maybe (isJust)
+import Data.Text (Text)
+import Data.Text qualified as T
 
 -- | Thrown when the engine signals that the current test case should be
 -- abandoned (choice budget exhausted).
@@ -49,6 +52,19 @@ data AssumeRejected = AssumeRejected
 instance Exception AssumeRejected where
   toException = asyncExceptionToException
   fromException = asyncExceptionFromException
+
+-- | Thrown when a test is structurally invalid — a precondition on the test
+-- /definition/ rather than a property failure (for example, a stateful
+-- 'Hegel.Stateful.Machine' with no rules).
+--
+-- The runner reports this as 'Hegel.Report.Aborted', keeping "the test was
+-- built wrong" distinct from "the property found a counterexample". Unlike the
+-- control signals above, it is an ordinary synchronous exception.
+newtype MalformedTest = MalformedTest Text
+  deriving stock (Show)
+
+instance Exception MalformedTest where
+  displayException (MalformedTest msg) = T.unpack msg
 
 -- | Is this exception one of Hegel's control signals ('AssumeRejected' or
 -- 'TestStopped')?

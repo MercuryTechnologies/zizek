@@ -9,6 +9,7 @@ import PropertyChecks qualified
 import ReportRendering qualified
 import SourceRendering qualified
 import StandardGenerators qualified
+import Stateful qualified
 import Test.Tasty (defaultMain, testGroup)
 import Test.Tasty.Hspec (testSpec)
 
@@ -23,6 +24,7 @@ main = do
   properties <- testSpec "property monad" PropertyChecks.spec
   replay <- testSpec "database replay" DatabaseReplay.spec
   keyed <- testSpec "keyed properties" KeyedProperties.spec
+  stateful <- testSpec "stateful testing" Stateful.spec
   defaultMain
     ( testGroup
         "zizek:unit"
@@ -36,6 +38,7 @@ main = do
           properties,
           replay,
           keyed,
-          KeyedProperties.tastyTree
+          KeyedProperties.tastyTree,
+          stateful
         ]
     )

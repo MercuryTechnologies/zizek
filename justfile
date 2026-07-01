@@ -48,7 +48,7 @@ lint:
 
 # Build all conformance test binaries and install symlinks (shared helper).
 _conformance-build:
-  @cabal build zizek:test-booleans zizek:test-binary zizek:test-floats zizek:test-integers zizek:test-integers-narrow zizek:test-frequency zizek:test-list zizek:test-set zizek:test-map zizek:test-origin-deduplication zizek:test-sampled-from zizek:test-one-of zizek:test-text zizek:test-char zizek:test-regex
+  @cabal build zizek:test-booleans zizek:test-binary zizek:test-floats zizek:test-integers zizek:test-integers-narrow zizek:test-frequency zizek:test-list zizek:test-set zizek:test-map zizek:test-origin-deduplication zizek:test-sampled-from zizek:test-one-of zizek:test-text zizek:test-char zizek:test-regex zizek:test-stateful
   @mkdir -p tests/conformance/pytest/bin
   @ln -sf $(cabal list-bin zizek:test-booleans) tests/conformance/pytest/bin/test-booleans
   @ln -sf $(cabal list-bin zizek:test-binary) tests/conformance/pytest/bin/test-binary
@@ -66,9 +66,14 @@ _conformance-build:
   @ln -sf $(cabal list-bin zizek:test-char) tests/conformance/pytest/bin/test-char
   @ln -sf $(cabal list-bin zizek:test-regex) tests/conformance/pytest/bin/test-regex
 
-# Run the Python conformance harness.
+# Run the Python conformance harness, then the standalone conformance binaries.
+#
+# test-stateful is a self-contained pass/fail binary (no wire protocol), so it
+# runs directly rather than through pytest.
 check-conformance: _conformance-build
   @pytest tests/conformance/pytest/ -n auto
+  @echo "Running standalone conformance binaries…"
+  @$(cabal list-bin zizek:test-stateful)
 
 # --- Stubs: implement when the underlying tooling lands. ---
 

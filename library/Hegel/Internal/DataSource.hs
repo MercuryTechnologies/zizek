@@ -19,6 +19,15 @@ module Hegel.Internal.DataSource
     collectionMore,
     collectionReject,
 
+    -- * Pools
+    newPool,
+    poolAdd,
+    poolGenerate,
+
+    -- * State machines
+    newStateMachine,
+    stateMachineNextRule,
+
     -- * Spans
     Label (..),
     startSpan,
@@ -32,11 +41,10 @@ import CBOR.Value (Value)
 import Control.Exception (throwIO)
 import Data.Int (Int64)
 import Data.Text (Text)
-import Data.Text qualified as T
 import Data.Word (Word64)
-import Foreign (alloca, nullPtr, peek)
-import Foreign.C.String (withCString)
+import Foreign (alloca, nullPtr, peek, withArray, withMany)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt)
+import Hegel.Internal.CString qualified as CString
 import Hegel.Internal.Control (AssumeRejected (..), TestStopped (..))
 import Hegel.Internal.FFI hiding (generate)
 import Hegel.Internal.FFI qualified as FFI (generate)
@@ -120,9 +128,76 @@ collectionReject tc cid mWhy =
     Nothing -> do
       result <- hegel_collection_reject tc.ctx tc.ptr (fromIntegral cid) nullPtr
       handleReturnCode tc result
-    Just why -> withCString (T.unpack why) \p -> do
+    Just why -> CString.withText why \p -> do
       result <- hegel_collection_reject tc.ctx tc.ptr (fromIntegral cid) p
       handleReturnCode tc result
+
+-- * Pools
+
+-- | Create a new variable pool; returns its ID.
+--
+-- Throws 'TestStopped' on exhaustion.
+newPool :: TestCase -> IO Int
+newPool tc =
+  alloca \outId -> do
+    hegel_new_pool tc.ctx tc.ptr outId >>= handleReturnCode tc
+    fromIntegral <$> (peek outId :: IO Int64)
+
+-- | Register a new variable in the pool; returns the engine-assigned
+-- variable id.
+poolAdd :: TestCase -> Int -> IO Int
+poolAdd tc pid =
+  alloca \outId -> do
+    hegel_pool_add tc.ctx tc.ptr (fromIntegral pid) outId >>= handleReturnCode tc
+    fromIntegral <$> (peek outId :: IO Int64)
+
+-- | Draw a variable id from the pool.
+--
+-- Pass 'True' to consume the variable (remove it from the pool).
+--
+-- Throws 'TestStopped' when the pool is empty.
+poolGenerate :: TestCase -> Int -> Bool -> IO Int
+poolGenerate tc pid consume =
+  alloca \outId -> do
+    hegel_pool_generate tc.ctx tc.ptr (fromIntegral pid) (CBool (if consume then 1 else 0)) outId
+      >>= handleReturnCode tc
+    fromIntegral <$> (peek outId :: IO Int64)
+
+-- * State machines
+
+-- | Register an engine-owned state machine; returns its ID.
+--
+-- @ruleNames@ must be non-empty; each name is marshalled to a NUL-terminated
+-- C string.
+--
+-- Throws 'TestStopped' on exhaustion.
+newStateMachine :: TestCase -> [Text] -> [Text] -> IO Int
+newStateMachine tc ruleNames invariantNames =
+  withMany CString.withText ruleNames \rulePtrs ->
+    withMany CString.withText invariantNames \invPtrs ->
+      withArray rulePtrs \rulesArr ->
+        withArray invPtrs \invArr ->
+          alloca \outId -> do
+            hegel_new_state_machine
+              tc.ctx
+              tc.ptr
+              rulesArr
+              (fromIntegral (length ruleNames))
+              invArr
+              (fromIntegral (length invariantNames))
+              outId
+              >>= handleReturnCode tc
+            fromIntegral <$> (peek outId :: IO Int64)
+
+-- | Draw the next rule index for the state machine.
+--
+-- Throws 'TestStopped' when the choice budget is exhausted.
+stateMachineNextRule :: TestCase -> Int -> IO Int
+stateMachineNextRule tc mid =
+  alloca \outIdx -> do
+    hegel_state_machine_next_rule tc.ctx tc.ptr (fromIntegral mid) outIdx
+      >>= handleReturnCode tc
+    fromIntegral <$> (peek outIdx :: IO Int64)
 
 -- * Spans
 

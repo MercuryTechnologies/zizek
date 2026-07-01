@@ -107,6 +107,7 @@ library
     Hegel.HealthCheck
     Hegel.Hspec
     Hegel.Internal.CBOR
+    Hegel.Internal.CString
     Hegel.Internal.Control
     Hegel.Internal.DataSource
     Hegel.Internal.DatabaseKey
@@ -114,6 +115,7 @@ library
     Hegel.Internal.Schema
     Hegel.Internal.TestCase
     Hegel.Phase
+    Hegel.Pool
     Hegel.Property
     Hegel.Property.Internal
     Hegel.Report
@@ -123,6 +125,7 @@ library
     Hegel.Report.Span
     Hegel.Runner
     Hegel.Settings
+    Hegel.Stateful
     Hegel.Tasty
     Hegel.Verbosity
 
@@ -285,6 +288,13 @@ executable test-regex
     zizek,
     zizek:conformance-utils,
 
+executable test-stateful
+  import: conformance
+  hs-source-dirs: tests/conformance/stateful
+  main-is: Main.hs
+  build-depends:
+    zizek
+
 test-suite unit
   import: library
   type: exitcode-stdio-1.0
@@ -306,6 +316,7 @@ test-suite unit
     ReportRendering
     SourceRendering
     StandardGenerators
+    Stateful
 
   build-depends:
     hspec ^>=2.11,
