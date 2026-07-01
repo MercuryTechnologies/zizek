@@ -127,6 +127,9 @@ data NoteKind
     Annotation
   | -- | Context rendered after the report body (a @footnote@-style call).
     Footnote
+  | -- | A caught failure journaled in-band at the point it occurred (used by
+    -- stateful tests to attach the failure to its step).
+    Failure
   deriving stock (Show, Eq)
 
 -- | One entry in a failure report's journal: rendered text plus the call
@@ -134,7 +137,12 @@ data NoteKind
 data Note = Note
   { kind :: NoteKind,
     text :: Text,
-    loc :: Maybe SrcLoc
+    loc :: Maybe SrcLoc,
+    -- | Structured diff, when this note is a 'Failure' from '(===)'.
+    diff :: Maybe Diff,
+    -- | Nesting level (0 = top level). Draws made inside a stateful step are
+    -- journaled one level deeper than the step header itself.
+    depth :: !Int
   }
   deriving stock (Show)
 
@@ -189,6 +197,13 @@ renderReportRichWith plain toText report = case report.result of
 -- | Attempt to build the rich failure doc, falling back to 'Nothing' when no
 -- declaration could be read for any location.
 richDoc :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> IO (Maybe (Doc Ann))
+richDoc message notes loc diff
+  -- Journals carrying an in-band 'Failure' note (stateful reports) don't fit
+  -- the source-splicing model: their structure is @Step N@ annotations, not
+  -- drawn-value declarations. Degrade to the shared structured layout so the
+  -- plain and rich renderers agree.
+  | any (\n -> n.kind == Failure) notes =
+      pure (Just (failureDoc message notes loc diff))
 richDoc message notes loc diff = do
   let (footers, inline) = partition (\n -> n.kind == Footnote) notes
       inputs = [(fmap spanFromSrcLoc n.loc, n.text) | n <- inline]
@@ -226,27 +241,55 @@ reportDoc report = case report.result of
         failureDoc message notes loc diff
       ]
 
--- | Headline message, then (indented) the diff (if any), the source
--- location, and the journal in order, footnotes last.
+-- | Render the failure body.
+--
+-- Ordinary reports: the headline message, then (indented) the diff (if any),
+-- the source location, and the journal in order, footnotes last.
+--
+-- Reports whose journal contains a 'Failure' note (stateful reports): the
+-- failure is rendered __in-band__ at its step and the top-level headline\/
+-- diff\/location block is suppressed, since the 'Failure' note already carries
+-- them. Each note is indented by its 'Note'@.depth@ so draws nest under the
+-- step that made them. The report renderers prepend @"failed after N tests"@
+-- as the summary headline; 'renderFailure' does not (yet) supply one in this
+-- mode, so 'PropertyFailed'@.displayException@ currently has no headline.
 failureDoc :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Doc Ann
-failureDoc message notes loc diff =
-  PP.vsep (PP.annotate MessageAnn (PP.pretty message) : fmap (PP.indent 2) details)
+failureDoc message notes loc diff
+  | inBand = PP.vsep journalDocs
+  | otherwise =
+      PP.vsep (PP.annotate MessageAnn (PP.pretty message) : topBlock <> journalDocs)
   where
-    details :: [Doc Ann]
-    details = diffLines <> locLine <> snd (mapAccumL noteDoc 1 (inline <> footers))
+    inBand :: Bool
+    inBand = any (\n -> n.kind == Failure) notes
+    topBlock :: [Doc Ann]
+    topBlock = fmap (PP.indent 2) (diffLines <> locLine)
     diffLines :: [Doc Ann]
     diffLines = maybe [] (\d -> [diffDoc d]) diff
     locLine :: [Doc Ann]
     locLine = maybe [] (\l -> [PP.annotate LocAnn ("at" <+> locDoc l)]) loc
     (footers, inline) = partition (\n -> n.kind == Footnote) notes
+    journalDocs :: [Doc Ann]
+    journalDocs = snd (mapAccumL noteDoc 1 (inline <> footers))
     noteDoc :: Int -> Note -> (Int, Doc Ann)
-    noteDoc i n = case n.kind of
-      Drawn ->
-        ( i + 1,
-          PP.annotate DrawnAnn ("forAll" <+> PP.pretty i <+> "=" <+> PP.align (PP.pretty n.text))
-        )
-      Annotation -> (i, PP.annotate NoteAnn (PP.pretty n.text))
-      Footnote -> (i, PP.annotate NoteAnn (PP.pretty n.text))
+    noteDoc i n =
+      let base = (n.depth + 1) * 2
+       in case n.kind of
+            Drawn ->
+              ( i + 1,
+                PP.indent base (PP.annotate DrawnAnn ("forAll" <+> PP.pretty i <+> "=" <+> PP.align (PP.pretty n.text)))
+              )
+            Annotation -> (i, PP.indent base (PP.annotate NoteAnn (PP.pretty n.text)))
+            Footnote -> (i, PP.indent base (PP.annotate NoteAnn (PP.pretty n.text)))
+            Failure -> (i, failureNoteDoc base n)
+
+-- | Render an in-band 'Failure' note: a marked headline at the note's depth,
+-- the structured diff (if any) indented under it, then the source location.
+failureNoteDoc :: Int -> Note -> Doc Ann
+failureNoteDoc base n =
+  PP.vsep $
+    PP.indent base (PP.annotate MessageAnn ("✗" <+> PP.pretty n.text))
+      : fmap (PP.indent (base + 4)) (maybe [] (\d -> [diffDoc d]) n.diff)
+        <> fmap (PP.indent (base + 2)) (maybe [] (\l -> [PP.annotate LocAnn ("at" <+> locDoc l)]) n.loc)
 
 diffDoc :: Diff -> Doc Ann
 diffDoc = PP.vsep . fmap lineDiffDoc

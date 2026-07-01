@@ -12,6 +12,8 @@ module Hegel.Property.Internal
 
     -- * Notes
     note,
+    noteFailure,
+    nested,
     annotate,
     annotateShow,
     footnote,
@@ -35,7 +37,7 @@ import Control.Exception (SomeException, fromException)
 import Control.Exception qualified as E
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Class (MonadTrans (..))
-import Control.Monad.Trans.Reader (ReaderT (..), ask)
+import Control.Monad.Trans.Reader (ReaderT (..), ask, local)
 import Data.Foldable (toList)
 import Data.Sequence ((|>))
 import Data.Sequence qualified as Seq
@@ -54,7 +56,10 @@ import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
 -- | The per-test-case environment a property runs against.
 data Env = Env
   { testCase :: !TestCase,
-    journal :: !(Note -> IO ())
+    journal :: !(Note -> IO ()),
+    -- | Ambient nesting level stamped onto each journaled 'Note'; raised by
+    -- 'nested'.
+    noteDepth :: !Int
   }
 
 -- | A property: test logic interleaved with generator draws against a live
@@ -98,9 +103,28 @@ askEnv = PropertyT ask
 -- 'footnote', for library-internal callers that need to control the recorded
 -- 'SrcLoc' (or omit it) explicitly.
 note :: (MonadIO m) => NoteKind -> Maybe SrcLoc -> Text -> PropertyT m ()
-note kind loc text = PropertyT do
+note kind loc text = journalNote kind loc Nothing text
+
+-- | Journal a 'Failure': an assertion's message, source location, and diff,
+-- to be rendered in-band in the report.
+--
+-- See 'Hegel.Report.Failure'.
+noteFailure :: (MonadIO m) => Maybe SrcLoc -> Maybe Diff -> Text -> PropertyT m ()
+noteFailure loc diff text = journalNote Failure loc diff text
+
+-- | The sole 'Note' construction site: stamp the ambient 'noteDepth' onto the
+-- note and hand it to the journal.
+journalNote :: (MonadIO m) => NoteKind -> Maybe SrcLoc -> Maybe Diff -> Text -> PropertyT m ()
+journalNote kind loc diff text = PropertyT do
   env <- ask
-  liftIO (env.journal Note {kind, text, loc})
+  liftIO (env.journal Note {kind, text, loc, diff, depth = env.noteDepth})
+
+-- | Run a property with its journaled notes recorded one level deeper.
+--
+-- 'Hegel.Stateful' uses this to nest a rule\/invariant's draws under the step
+-- that produced them. Purely a reporting concern: draw behaviour is unchanged.
+nested :: PropertyT m a -> PropertyT m a
+nested (PropertyT r) = PropertyT (local (\e -> e {noteDepth = e.noteDepth + 1}) r)
 
 -- | Draw a value from a generator mid-test.
 --
@@ -173,7 +197,7 @@ runPropertyT env (PropertyT r) = runReaderT r env
 -- via 'observeProperty' on the engine's minimal counterexample.
 propertyAction :: Property () -> TestCase -> IO ()
 propertyAction prop tc =
-  runPropertyT Env {testCase = tc, journal = \_ -> pure ()} prop
+  runPropertyT Env {testCase = tc, journal = \_ -> pure (), noteDepth = 0} prop
 
 -- | Run a property against a test case with a recording journal, returning
 -- how the run ended together with the journal contents.
@@ -181,7 +205,7 @@ observeProperty :: TestCase -> Property () -> IO (Either SomeException (), [Note
 observeProperty tc prop = do
   j <- newIORef Seq.empty
   let record n = modifyIORef' j (|> n)
-  eRes <- tryProperty (runPropertyT Env {testCase = tc, journal = record} prop)
+  eRes <- tryProperty (runPropertyT Env {testCase = tc, journal = record, noteDepth = 0} prop)
   notes <- toList <$> readIORef j
   pure (eRes, notes)
 

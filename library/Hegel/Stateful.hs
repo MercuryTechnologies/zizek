@@ -43,8 +43,9 @@
 -- * @StateT s (PropertyT m)@ rules adapt with
 --   @\\s -> execStateT myStateRule s :: s -> PropertyT m s@.
 --
--- * Report indentation (Rust's @child(2)@) is cosmetic and out of scope for
---   v1; notes appear flat in the counterexample report.
+-- * The counterexample report nests each step's draws under its @Step N@
+--   header (Rust's @child(2)@) and renders the failure in-band at the step
+--   that produced it.
 module Hegel.Stateful
   ( -- * Specification
     Rule (..),
@@ -62,14 +63,17 @@ import Data.Function ((&))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Gen qualified as Gen
-import Hegel.Internal.Control (ControlSignal (..), MalformedTest (..), catchControl)
+import Hegel.Internal.Control (ControlSignal (..), MalformedTest (..), catchControl, onFailure)
 import Hegel.Internal.DataSource (newStateMachine, stateMachineNextRule)
 import Hegel.Property.Internal
   ( Env (..),
     PropertyT,
     askEnv,
+    failureDetails,
     forAllSilent,
+    nested,
     note,
+    noteFailure,
   )
 import Hegel.Report (NoteKind (Annotation))
 import UnliftIO (MonadUnliftIO, throwIO, withRunInIO)
@@ -125,11 +129,28 @@ run machine = do
 
   env <- askEnv
   let tc = env.testCase
-      checkInvariants s = forM_ machine.invariants \invariant -> invariant.check s
+
+      -- Journal a real failure as an in-band 'Failure' note, then re-throw so
+      -- the runner still sees the counterexample and drives shrinking.
+      -- 'onFailure' passes control signals and async exceptions through
+      -- untouched (see its haddock); do not replace it with a bare
+      -- @catch \@SomeException@, which would swallow discard\/stop signals.
+      withFailureNote :: forall a. PropertyT m a -> PropertyT m a
+      withFailureNote act =
+        withRunInIO \runInIO ->
+          runInIO act `onFailure` \e ->
+            let (message, loc, diff) = failureDetails e
+             in runInIO (noteFailure loc diff message)
+
+      -- Each invariant's draws (and any failure) report one level below the
+      -- step header, via 'nested'.
+      checkInvariants s =
+        forM_ machine.invariants \invariant ->
+          nested (withFailureNote (invariant.check s))
 
   machineId <- liftIO (newStateMachine tc (map (.name) machine.rules) (map (.name) machine.invariants))
 
-  s0 <- machine.initial
+  s0 <- withFailureNote machine.initial
   stepNote "Initial invariant check."
   checkInvariants s0
 
@@ -156,11 +177,12 @@ run machine = do
                           <> " rules. This should be impossible; please report it as a libhegel bug."
                       )
             stepNote ("Step " <> T.pack (show (attempts + 1)) <> ": " <> rule.name)
-            -- Only control signals are caught here; a real failure propagates
+            -- Only control signals are caught here; a real failure is
+            -- journaled in-band (via 'withFailureNote') and then propagates
             -- out to the runner as the counterexample.
             verdict <-
               withRunInIO \runInIO ->
-                (Right <$> runInIO (rule.apply s))
+                (Right <$> runInIO (nested (withFailureNote (rule.apply s))))
                   `catchControl` (pure . Left)
             case verdict of
               Right s' -> do

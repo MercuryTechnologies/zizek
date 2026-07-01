@@ -26,9 +26,22 @@ aLoc =
     }
 
 drawn, annotation, footer :: Text -> Note
-drawn t = Note {kind = Drawn, text = t, loc = Nothing}
-annotation t = Note {kind = Annotation, text = t, loc = Nothing}
-footer t = Note {kind = Footnote, text = t, loc = Nothing}
+drawn t = Note {kind = Drawn, text = t, loc = Nothing, diff = Nothing, depth = 0}
+annotation t = Note {kind = Annotation, text = t, loc = Nothing, diff = Nothing, depth = 0}
+footer t = Note {kind = Footnote, text = t, loc = Nothing, diff = Nothing, depth = 0}
+
+-- | A step header (loc-less annotation) at top level, as emitted by
+-- 'Hegel.Stateful'.
+step :: Text -> Note
+step t = Note {kind = Annotation, text = t, loc = Nothing, diff = Nothing, depth = 0}
+
+-- | A draw nested under a step (depth 1).
+nestedDrawn :: Text -> Note
+nestedDrawn t = Note {kind = Drawn, text = t, loc = Nothing, diff = Nothing, depth = 1}
+
+-- | An in-band failure nested under a step (depth 1).
+failureAt :: Text -> Maybe Diff -> Maybe SrcLoc -> Note
+failureAt t d l = Note {kind = Failure, text = t, loc = l, diff = d, depth = 1}
 
 -- | The 'SrcLoc' of the call site, so tests can point a note at a line that
 -- really exists in this file without hardcoding line numbers.
@@ -90,6 +103,64 @@ spec = do
                      "  forAll 1 = some value"
                    ]
 
+    it "nests a stateful journal and renders the failure in-band (=== diff)" $ do
+      -- The top-level message\/loc\/diff are populated (as they are for every
+      -- counterexample) but must be *suppressed* in favour of the in-band
+      -- 'Failure' note, so they do not appear twice.
+      let result =
+            Counterexample
+              { message = "=== failed",
+                notes =
+                  [ step "Initial invariant check.",
+                    step "Step 1: push",
+                    nestedDrawn "0",
+                    step "Step 2: push",
+                    nestedDrawn "1",
+                    step "Step 3: check_palindrome",
+                    failureAt
+                      "=== failed"
+                      (Just [LineRemoved "Stack [ 1 , 0 ]", LineAdded "Stack [ 0 , 1 ]"])
+                      (Just aLoc)
+                  ],
+                loc = Just aLoc,
+                diff = Just [LineRemoved "Stack [ 1 , 0 ]", LineAdded "Stack [ 0 , 1 ]"]
+              }
+          report = Report {result, stats = Stats {valid = 5038, invalid = 0}}
+      T.lines (renderReport report)
+        `shouldBe` [ "failed after 5038 tests",
+                     "  Initial invariant check.",
+                     "  Step 1: push",
+                     "    forAll 1 = 0",
+                     "  Step 2: push",
+                     "    forAll 2 = 1",
+                     "  Step 3: check_palindrome",
+                     "    ✗ === failed",
+                     "        - Stack [ 1 , 0 ]",
+                     "        + Stack [ 0 , 1 ]",
+                     "      at tests/Spec.hs:42"
+                   ]
+
+    it "renders a stateful assert failure in-band (no diff)" $ do
+      let result =
+            Counterexample
+              { message = "counter stays small",
+                notes =
+                  [ step "Initial invariant check.",
+                    step "Step 1: increment",
+                    failureAt "counter stays small" Nothing (Just aLoc)
+                  ],
+                loc = Just aLoc,
+                diff = Nothing
+              }
+          report = Report {result, stats = Stats {valid = 11, invalid = 0}}
+      T.lines (renderReport report)
+        `shouldBe` [ "failed after 11 tests",
+                     "  Initial invariant check.",
+                     "  Step 1: increment",
+                     "    ✗ counter stays small",
+                     "      at tests/Spec.hs:42"
+                   ]
+
     it "renders gave-up and aborted verdicts" $ do
       renderReport Report {result = GaveUp "no valid examples", stats = Stats {valid = 0, invalid = 7}}
         `shouldBe` "gave up after 0 tests (7 discarded): no valid examples"
@@ -125,7 +196,7 @@ spec = do
           result =
             Counterexample
               { message = "boom",
-                notes = [Note {kind = Drawn, text = "42", loc = Just loc'}],
+                notes = [Note {kind = Drawn, text = "42", loc = Just loc', diff = Nothing, depth = 0}],
                 loc = Nothing,
                 diff = Nothing
               }
@@ -134,6 +205,24 @@ spec = do
       -- The note's location sits inside the `spec` declaration of this very
       -- file, so the source listing should include the marked line.
       "splice-marker" `T.isInfixOf` rich `shouldBe` True
+
+    it "degrades to the structured layout for a Failure-bearing journal" $ do
+      -- Stateful reports carry an in-band 'Failure' note; the rich renderer
+      -- must reuse the plain structured layout rather than attempt to splice
+      -- source, so rich and plain agree byte-for-byte.
+      let result =
+            Counterexample
+              { message = "counter stays small",
+                notes =
+                  [ step "Step 1: increment",
+                    failureAt "counter stays small" Nothing (Just aLoc)
+                  ],
+                loc = Just aLoc,
+                diff = Nothing
+              }
+          report = Report {result, stats = Stats {valid = 4, invalid = 0}}
+      rich <- renderReportRich report
+      rich `shouldBe` renderReport report
 
     it "degrades to plain renderReport when the source file is missing" $ do
       let loc' =
@@ -149,7 +238,7 @@ spec = do
           result =
             Counterexample
               { message = "boom",
-                notes = [Note {kind = Drawn, text = "42", loc = Just loc'}],
+                notes = [Note {kind = Drawn, text = "42", loc = Just loc', diff = Nothing, depth = 0}],
                 loc = Nothing,
                 diff = Nothing
               }

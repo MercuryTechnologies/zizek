@@ -159,6 +159,26 @@ statefulSpec = describe "Machine" do
         annotations `shouldSatisfy` all (isNothing . (.loc))
       other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
+  it "journals the failing assertion in-band as a nested Failure note" do
+    -- End-to-end: the caught failure is journaled in-band and still re-thrown,
+    -- so the runner reports a counterexample.
+    let machine =
+          Stateful.Machine
+            { initial = pure (Counter 0),
+              rules = [increment],
+              invariants = [neverAboveFive]
+            }
+    report <- check defaultSettings (Stateful.run machine)
+    case report.result of
+      Counterexample {notes} ->
+        case [n | n <- notes, n.kind == Failure] of
+          [f] -> do
+            f.text `shouldBe` "counter does not exceed 5"
+            f.depth `shouldBe` 1
+            f.loc `shouldSatisfy` (not . isNothing)
+          fs -> expectationFailure ("expected exactly one Failure note, got: " <> show (length fs))
+      other -> expectationFailure ("expected Counterexample, got: " <> show other)
+
   it "value-drawing counterexample reproduces on replay" do
     -- Regression guard for choice-sequence alignment: with multiple rules that
     -- draw values, the counterexample only reproduces if replay stays byte-
