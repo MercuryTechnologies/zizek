@@ -129,7 +129,7 @@ spec = do
       x === x + 1
     case report.result of
       Counterexample {message, diff} -> do
-        message `shouldBe` "=== failed"
+        message `shouldBe` "=== failed, values are not equal"
         -- Structural diff: two integers are one-liners so they diff as
         -- a removed/added pair, not a structural field diff.
         diff `shouldBe` Just [LineRemoved "0", LineAdded "1"]

@@ -12,6 +12,7 @@ import Hegel.Report.Source
     Line (..),
     applyContext,
     mergeDeclarations,
+    mergeFileDeclarations,
     ppDeclaration,
   )
 import Hegel.Report.Span (LineNo (..))
@@ -158,6 +159,48 @@ spec = do
         [m] -> Map.size m.declarationSource `shouldBe` 3
         _ -> expectationFailure "expected exactly one merged declaration"
 
+    it "stacks same-line docs in first-seen order" $ do
+      -- The per-rule stateful layout stacks one value per step under a single
+      -- drawing line; merging must preserve journal order or the steps would
+      -- render descending.
+      let withDoc txt decl =
+            decl
+              { declarationSource =
+                  Map.adjust
+                    (\l -> l {lineAnnotation = (StyleAnnotation, [(StyleAnnotation, PP.pretty (txt :: String))])})
+                    1
+                    decl.declarationSource
+              }
+          d1 = withDoc "first-doc" (mkDecl "f.hs" 1 "foo" [(1, "foo = 1")])
+          d2 = withDoc "second-doc" (mkDecl "f.hs" 1 "foo" [(1, "foo = 1")])
+      case mergeDeclarations [d1, d2] of
+        [m] -> do
+          let out = T.pack (render (ppDeclaration m))
+              posOf t = T.length (fst (T.breakOn t out))
+          posOf "first-doc" < posOf "second-doc" `shouldBe` True
+        _ -> expectationFailure "expected exactly one merged declaration"
+
+  describe "mergeFileDeclarations" $ do
+    it "unions same-file declarations into one listing with a ⋮ gap" $ do
+      let d1 = mkDecl "f.hs" 1 "foo" [(1, "foo = 1")]
+          d2 = mkDecl "f.hs" 5 "bar" [(5, "bar = 2")]
+          merged = mergeFileDeclarations (mergeDeclarations [d1, d2])
+      length merged `shouldBe` 1
+      case merged of
+        [m] -> do
+          let out = T.pack (render (ppDeclaration m))
+          -- One header, both sources, the gap elided.
+          T.count "┏━━" out `shouldBe` 1
+          "foo = 1" `T.isInfixOf` out `shouldBe` True
+          "bar = 2" `T.isInfixOf` out `shouldBe` True
+          "⋮" `T.isInfixOf` out `shouldBe` True
+        _ -> expectationFailure "expected exactly one merged listing"
+
+    it "keeps declarations from different files separate" $ do
+      let d1 = mkDecl "f.hs" 1 "foo" [(1, "foo = 1")]
+          d2 = mkDecl "g.hs" 1 "bar" [(1, "bar = 2")]
+      length (mergeFileDeclarations (mergeDeclarations [d1, d2])) `shouldBe` 2
+
   describe "ppDeclaration" $ do
     it "includes the ┏━━ header line" $ do
       let decl = mkDecl "Example.hs" 1 "foo" [(1, "foo = 42")]
@@ -188,10 +231,13 @@ spec = do
           hIdx `shouldBe` sIdx
         _ -> expectationFailure "expected at least two lines in ppDeclaration output"
 
-    it "emits ⋮ for omitted lines when context is limited" $ do
+    it "emits ⋮ for interior gaps, but not for a leading gap" $ do
       let mkLine n@(LineNo i) = (n, "line " <> show i)
           decl0 = mkDecl "F.hs" 1 "foo" (map mkLine [1 .. (10 :: LineNo)])
-          -- Mark line 8 as interesting so lines 1-5 get dropped.
-          decl = markInteresting 8 decl0
-          output = render (ppDeclaration (applyContext (Context 2) decl))
-      "⋮" `T.isInfixOf` T.pack output `shouldBe` True
+          -- Only line 8 interesting: lines 1-5 form a leading gap, implied
+          -- by the first rendered line number rather than marked.
+          leading = applyContext (Context 2) (markInteresting 8 decl0)
+          -- Lines 2 and 8 interesting: line 5 is an interior gap.
+          interior = applyContext (Context 2) (markInteresting 8 (markInteresting 2 decl0))
+      T.count "⋮" (T.pack (render (ppDeclaration leading))) `shouldBe` 0
+      T.count "⋮" (T.pack (render (ppDeclaration interior))) `shouldBe` 1

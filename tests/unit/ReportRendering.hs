@@ -7,10 +7,12 @@ import Data.List (isInfixOf)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Tree (Forest, Tree (..), flatten)
 import GHC.Stack (SrcLoc (..), callStack, getCallStack)
 import Hegel.Assertion (AssertionFailure (..), (/==), (===))
 import Hegel.Diff (Diff, LineDiff (..), diffShown)
 import Hegel.Report
+import Hegel.Report.Journal (groupByDepth, numberDraws)
 import Test.Hspec
 
 aLoc :: SrcLoc
@@ -79,16 +81,16 @@ spec = do
         `shouldBe` [ "failed after 12 tests (1 discarded)",
                      "sum stays small",
                      "  at tests/Spec.hs:42",
-                     "  forAll 1 = 50",
+                     "  Draw 1: 50",
                      "  drew the first addend",
-                     "  forAll 2 = 51",
+                     "  Draw 2: 51",
                      "  seen at the end"
                    ]
 
-    it "renders a diff block before the journal" $ do
+    it "renders a diff block, led by its legend, before the journal" $ do
       let result =
             Counterexample
-              { message = "=== failed",
+              { message = "=== failed, values are not equal",
                 notes = [drawn "some value"],
                 loc = Just aLoc,
                 diff = Just [LineRemoved "old", LineAdded "new"]
@@ -96,11 +98,12 @@ spec = do
           report = Report {result, stats = Stats {valid = 5, invalid = 0}}
       T.lines (renderReport report)
         `shouldBe` [ "failed after 5 tests",
-                     "=== failed",
+                     "=== failed, values are not equal",
+                     "  (- lhs) (+ rhs)",
                      "  - old",
                      "  + new",
                      "  at tests/Spec.hs:42",
-                     "  forAll 1 = some value"
+                     "  Draw 1: some value"
                    ]
 
     it "nests a stateful journal and renders the failure in-band (=== diff)" $ do
@@ -109,7 +112,7 @@ spec = do
       -- 'Failure' note, so they do not appear twice.
       let result =
             Counterexample
-              { message = "=== failed",
+              { message = "=== failed, values are not equal",
                 notes =
                   [ step "Initial invariant check.",
                     step "Step 1: push",
@@ -118,7 +121,7 @@ spec = do
                     nestedDrawn "1",
                     step "Step 3: check_palindrome",
                     failureAt
-                      "=== failed"
+                      "=== failed, values are not equal"
                       (Just [LineRemoved "Stack [ 1 , 0 ]", LineAdded "Stack [ 0 , 1 ]"])
                       (Just aLoc)
                   ],
@@ -130,11 +133,12 @@ spec = do
         `shouldBe` [ "failed after 5038 tests",
                      "  Initial invariant check.",
                      "  Step 1: push",
-                     "    forAll 1 = 0",
+                     "    Draw 1: 0",
                      "  Step 2: push",
-                     "    forAll 2 = 1",
+                     "    Draw 1: 1",
                      "  Step 3: check_palindrome",
-                     "    ✗ === failed",
+                     "    ✗ === failed, values are not equal",
+                     "        (- lhs) (+ rhs)",
                      "        - Stack [ 1 , 0 ]",
                      "        + Stack [ 0 , 1 ]",
                      "      at tests/Spec.hs:42"
@@ -161,6 +165,53 @@ spec = do
                      "      at tests/Spec.hs:42"
                    ]
 
+    it "hangs a multi-line drawn value under its own start column" $ do
+      -- Pins the PP.align behaviour inside a nested step indent ahead of the
+      -- tree-renderer refactor: continuation lines hang under the value's
+      -- first column, not the note's indent column.
+      let result =
+            Counterexample
+              { message = "boom",
+                notes =
+                  [ step "Step 1: push",
+                    Note {kind = Drawn, text = "Stack\n[ 1 ]", loc = Nothing, diff = Nothing, depth = 1}
+                  ],
+                loc = Nothing,
+                diff = Nothing
+              }
+          report = Report {result, stats = Stats {valid = 1, invalid = 0}}
+      T.lines (renderReport report)
+        `shouldBe` [ "failed after 1 tests",
+                     "boom",
+                     "  Step 1: push",
+                     "    Draw 1: Stack",
+                     "            [ 1 ]"
+                   ]
+
+    it "renders orphan depth jumps at their stamped depth" $ do
+      -- Nothing guarantees contiguous depths in a journal; pin the absolute
+      -- (depth + 1) * 2 indent for a 0→2 jump ahead of the tree-renderer
+      -- refactor, whose relative indents must telescope to the same columns.
+      let result =
+            Counterexample
+              { message = "boom",
+                notes =
+                  [ step "Step 1: push",
+                    Note {kind = Annotation, text = "deep note", loc = Nothing, diff = Nothing, depth = 2},
+                    Note {kind = Failure, text = "boom", loc = Just aLoc, diff = Nothing, depth = 2}
+                  ],
+                loc = Just aLoc,
+                diff = Nothing
+              }
+          report = Report {result, stats = Stats {valid = 1, invalid = 0}}
+      T.lines (renderReport report)
+        `shouldBe` [ "failed after 1 tests",
+                     "  Step 1: push",
+                     "      deep note",
+                     "      ✗ boom",
+                     "        at tests/Spec.hs:42"
+                   ]
+
     it "hoists a nested footnote to a fixed indent, dropping its depth" $ do
       -- 'footnote' is reachable inside a stateful rule body, so it can carry a
       -- nonzero depth. Hoisting already discards its position; it must discard
@@ -179,7 +230,7 @@ spec = do
       T.lines (renderReport report)
         `shouldBe` [ "failed after 1 tests",
                      "boom",
-                     "  forAll 1 = 1",
+                     "  Draw 1: 1",
                      "  nested footer"
                    ]
 
@@ -188,6 +239,53 @@ spec = do
         `shouldBe` "gave up after 0 tests (7 discarded): no valid examples"
       renderReport (aborted (UnhealthyInput "filter too much"))
         `shouldBe` "aborted: health check failed: filter too much"
+
+  describe "Hegel.Report.Journal" $ do
+    -- Compare on note text: 'Note' has no 'Eq', and text is unique per test.
+    let shape :: Forest Note -> Forest Text
+        shape = fmap (fmap (.text))
+        at :: Int -> Text -> Note
+        at d t = Note {kind = Annotation, text = t, loc = Nothing, diff = Nothing, depth = d}
+
+    it "keeps a flat depth-0 journal as sibling roots" $ do
+      shape (groupByDepth [drawn "a", annotation "b", drawn "c"])
+        `shouldBe` [Node "a" [], Node "b" [], Node "c" []]
+
+    it "nests notes under the nearest preceding shallower note" $ do
+      let ns = [step "s1", nestedDrawn "a", nestedDrawn "b", step "s2", nestedDrawn "c"]
+      shape (groupByDepth ns)
+        `shouldBe` [ Node "s1" [Node "a" [], Node "b" []],
+                     Node "s2" [Node "c" []]
+                   ]
+
+    it "pops back out to a shallower sibling after a nested run" $ do
+      let ns = [at 0 "root", at 1 "a", at 2 "a.1", at 1 "b"]
+      shape (groupByDepth ns)
+        `shouldBe` [Node "root" [Node "a" [Node "a.1" []], Node "b" []]]
+
+    it "attaches an orphan depth jump under the nearest shallower note" $ do
+      shape (groupByDepth [at 0 "s1", at 2 "deep"])
+        `shouldBe` [Node "s1" [Node "deep" []]]
+
+    it "preserves journal order under pre-order flattening" $ do
+      let ns = [at 0 "a", at 1 "b", at 2 "c", at 1 "d", at 0 "e", at 2 "f"]
+      concatMap flatten (shape (groupByDepth ns)) `shouldBe` fmap (.text) ns
+
+    it "numbers draws among their siblings, 1-based, skipping non-draws" $ do
+      -- The counter restarts per step (so the same forAll keeps its index
+      -- across firings); top-level draws — the flat non-stateful journal —
+      -- share one counter.
+      let ns =
+            [ step "s1",
+              nestedDrawn "x",
+              nestedDrawn "x2",
+              step "s2",
+              nestedDrawn "y",
+              drawn "z",
+              drawn "z2"
+            ]
+      concatMap (flatten . fmap fst) (numberDraws (groupByDepth ns))
+        `shouldBe` [Nothing, Just 1, Just 2, Nothing, Just 1, Just 1, Just 2]
 
   describe "renderValue" $ do
     it "pretty-prints parseable Show output" $ do
@@ -321,7 +419,7 @@ spec = do
     it "(===) puts the diff in the diff field, not the message" $ do
       (Lines ["a", "b", "c"] === Lines ["a", "X", "c"])
         `shouldThrow` \AssertionFailure {message, diff} ->
-          message == "=== failed"
+          message == "=== failed, values are not equal"
             && diff
               == Just
                 [ LineSame "<<a>>",

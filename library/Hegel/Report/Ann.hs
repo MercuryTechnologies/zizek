@@ -12,7 +12,7 @@ module Hegel.Report.Ann
     docToAnsi,
 
     -- * Shared layout helpers
-    lineDiffDoc,
+    diffDocs,
   )
 where
 
@@ -69,8 +69,9 @@ data Ann
     AnnotationGutter
   | -- | Inlined annotation value text.
     AnnotationValue
-  | -- | @^^^@ arrows under the failing expression.
-    FailureArrows
+  | -- | A marker pointing at the failure: the @^^^@ arrows under a failing
+    -- expression in spliced source, or the @✗@ on an in-band failure note.
+    FailureMark
   | -- | @│ @ gutter for inlined failure message \/ diff.
     FailureGutter
   | -- | Inlined failure message text.
@@ -87,14 +88,26 @@ docToAnsi =
     . PP.layoutPretty PP.defaultLayoutOptions
     . PP.reAnnotate annToAnsi
 
--- | Render one diff line with its @  @\/@- @\/@+ @ prefix and semantic
--- annotation.  Shared by the plain failure layout in "Hegel.Report" and the
--- source-inlined diff in "Hegel.Report.Source".
+-- | Render a diff, one 'Doc' per line: the legend first, then each diff line
+-- with its @  @\/@- @\/@+ @ prefix and semantic annotation.  Shared by the
+-- plain failure layout in "Hegel.Report" and the source-inlined diff in
+-- "Hegel.Report.Source".
+diffDocs :: [LineDiff] -> [Doc Ann]
+diffDocs d = diffLegend : fmap lineDiffDoc d
+
 lineDiffDoc :: LineDiff -> Doc Ann
 lineDiffDoc = \case
   LineSame t -> PP.annotate DiffSame ("  " <> PP.pretty t)
   LineRemoved t -> PP.annotate DiffRemoved ("- " <> PP.pretty t)
   LineAdded t -> PP.annotate DiffAdded ("+ " <> PP.pretty t)
+
+-- | Legend tying the diff markers to the @(===)@ operands: @(- lhs) (+ rhs)@,
+-- each token coloured to match the diff lines it keys (hedgehog's header
+-- convention). An interleaved diff doesn't otherwise say which operand a
+-- @-@ line came from.
+diffLegend :: Doc Ann
+diffLegend =
+  "(" <> PP.annotate DiffRemoved "- lhs" <> ") (" <> PP.annotate DiffAdded "+ rhs" <> ")"
 
 annToAnsi :: Ann -> AnsiStyle
 annToAnsi = \case
@@ -115,6 +128,6 @@ annToAnsi = \case
   StyledSource StyleFailure -> PP.Terminal.color PP.Terminal.Red <> PP.Terminal.bold
   AnnotationGutter -> PP.Terminal.colorDull PP.Terminal.Magenta
   AnnotationValue -> PP.Terminal.colorDull PP.Terminal.Magenta
-  FailureArrows -> PP.Terminal.color PP.Terminal.Red
+  FailureMark -> PP.Terminal.color PP.Terminal.Red
   FailureGutter -> mempty
   FailureMessage -> mempty

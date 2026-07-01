@@ -17,11 +17,13 @@ module Hegel.Report.Source
   ( -- * Core types
     Line (..),
     Declaration (..),
+    Annotation,
     Context (..),
 
     -- * Building annotated declarations
     lookupDeclarationSpan,
     ppFailedInput,
+    ppInlinedValue,
     ppFailureLocation,
 
     -- * Rendering
@@ -29,6 +31,7 @@ module Hegel.Report.Source
 
     -- * Utilities
     mergeDeclarations,
+    mergeFileDeclarations,
     applyContext,
     defaultContext,
   )
@@ -36,12 +39,14 @@ where
 
 import Data.Bifunctor (first, second)
 import Data.Char qualified as Char
+import Data.Function (on)
+import Data.List qualified as List
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Diff (Diff)
-import Hegel.Report.Ann (Ann (..), Style (..), lineDiffDoc)
+import Hegel.Report.Ann (Ann (..), Style (..), diffDocs)
 import Hegel.Report.Discovery (Declarations, Pos (..), Position (..), lookupDeclaration)
 import Hegel.Report.Span (ColumnNo (..), LineNo (..), Span (..))
 import Prettyprinter (Doc, (<+>))
@@ -133,17 +138,33 @@ lastLineSpan sloc decl =
 
 -- * ppFailedInput
 
--- | The @forAll N =@ fallback, used when no source is available.
+-- | The @Draw N:@ fallback, used when no source is available.
 ppFallbackInput :: Int -> Text -> Doc Ann
 ppFallbackInput ix val =
   PP.vsep
-    [ PP.pretty ("forAll " <> show ix <> " ="),
+    [ PP.pretty ("Draw " <> show ix <> ":"),
       PP.indent 2 . PP.vsep . fmap (PP.annotate AnnotationValue . PP.pretty) $
         lines (T.unpack val)
     ]
 
+-- | Splice gutter-prefixed value lines after a 'Span'\'s last source line,
+-- styling the covered lines 'StyleAnnotation'. Callers supply pre-annotated
+-- line docs, so a caller may prefix its own label (e.g. a step number).
+-- Returns @'Nothing'@ if no source is available.
+ppInlinedValue ::
+  Declarations ->
+  [Doc Ann] ->
+  Span ->
+  Maybe (Declaration Annotation)
+ppInlinedValue cache valLines sloc = do
+  (decl, (startCol, _)) <- lookupStyledDeclaration cache sloc
+  let ppValLine d =
+        PP.indent startCol (PP.annotate AnnotationGutter "│ " <> d)
+      valDocs = fmap ((StyleAnnotation,) . ppValLine) valLines
+  pure (spliceDocs StyleAnnotation valDocs sloc decl)
+
 -- | Try to produce a source-inlined declaration for one drawn/annotated note.
--- Returns @'Left'@ with the @forAll N =@ fallback when no source is available.
+-- Returns @'Left'@ with the @Draw N:@ fallback when no source is available.
 ppFailedInput ::
   Declarations ->
   Int ->
@@ -152,13 +173,11 @@ ppFailedInput ::
 ppFailedInput cache ix (mspan, val) =
   maybe (Left (ppFallbackInput ix val)) Right do
     sloc <- mspan
-    (decl, (startCol, _)) <- lookupStyledDeclaration cache sloc
-    let ppValLine s =
-          PP.indent startCol $
-            PP.annotate AnnotationGutter "│ "
-              <> PP.annotate AnnotationValue (PP.pretty s)
-        valDocs = fmap ((StyleAnnotation,) . ppValLine) (lines (T.unpack val))
-    pure (spliceDocs StyleAnnotation valDocs sloc decl)
+    let valLines =
+          fmap
+            (PP.annotate AnnotationValue . PP.pretty)
+            (lines (T.unpack val))
+    ppInlinedValue cache valLines sloc
 
 -- * ppFailureLocation
 
@@ -176,11 +195,16 @@ ppFailureLocation cache msgs mdiff sloc = do
   (decl, (startCol, endCol)) <- lookupStyledDeclaration cache sloc
   let arrowDoc =
         PP.indent startCol $
-          PP.annotate FailureArrows (PP.pretty (replicate (endCol - startCol) '^'))
+          PP.annotate FailureMark (PP.pretty (replicate (endCol - startCol) '^'))
       inline x = PP.indent startCol (PP.annotate FailureGutter "│ " <> x)
       msgDocs = fmap (inline . PP.annotate FailureMessage) msgs
-      diffDocs = foldMap (fmap (inline . lineDiffDoc)) mdiff
-      docs = fmap (StyleFailure,) (arrowDoc : msgDocs <> diffDocs)
+      diffLines = foldMap (fmap inline . diffDocs) mdiff
+      -- A grep-able @at file:line@, last — the listing's gutter carries the
+      -- same information, but not in the copyable form.
+      locLine =
+        inline . PP.annotate LocAnn $
+          "at" <+> PP.pretty sloc.spanFile <> ":" <> PP.pretty sloc.spanStartLine.unLineNo
+      docs = fmap (StyleFailure,) (arrowDoc : msgDocs <> diffLines <> [locLine])
   pure (spliceDocs StyleFailure docs sloc decl)
 
 -- * Shared lookup\/splice machinery
@@ -248,9 +272,14 @@ ppDeclaration decl
     addEllipsis doc = PP.pretty ("⋮" :: String) <> PP.hardline <> doc
 
     -- A line is omitted when it belongs to the declaration (at or after its
-    -- true starting line, not merely the first line that survived context
-    -- trimming) but is absent from the source map.
-    isOmittedLine n = n >= decl.declarationLine && Map.notMember n decl.declarationSource
+    -- true starting line) but is absent from the source map. Elision is only
+    -- marked __between__ rendered lines: a leading gap (e.g. a trimmed type
+    -- signature) is already implied by the first line number, so no @⋮@ is
+    -- emitted above it.
+    isOmittedLine n =
+      n >= decl.declarationLine
+        && Map.notMember n decl.declarationSource
+        && maybe False ((< n) . fst) (Map.lookupMin decl.declarationSource)
 
     ppAnnot :: (Style, Doc Ann) -> Doc Ann
     ppAnnot (style, doc) =
@@ -277,12 +306,25 @@ mergeLine l1 l2 =
   l1 {lineAnnotation = l1.lineAnnotation <> l2.lineAnnotation}
 
 -- | Merge a list of declarations, combining those that share the same file and
--- starting line.
+-- starting line. Docs attached to the same line stack in first-seen order
+-- (@fromListWith@ applies its function as @f new old@, hence the 'flip').
 mergeDeclarations :: [Declaration Annotation] -> [Declaration Annotation]
 mergeDeclarations =
   Map.elems
-    . Map.fromListWith mergeDeclaration
+    . Map.fromListWith (flip mergeDeclaration)
     . fmap (\d -> ((d.declarationFile, d.declarationLine), d))
+
+-- | Union declarations from the same file into a single listing, so one
+-- @┏━━ file ━━━@ header covers them all; the line-number gap between two
+-- declarations renders as the existing @⋮@ elision. Expects its input sorted
+-- by file then start line, as 'mergeDeclarations' produces.
+mergeFileDeclarations :: [Declaration Annotation] -> [Declaration Annotation]
+mergeFileDeclarations = fmap (foldr1 union') . List.groupBy ((==) `on` (.declarationFile))
+  where
+    -- Keeps the leftmost (earliest) declaration's start line and name; the
+    -- line maps are disjoint, so the per-line merge never actually fires.
+    union' d1 d2 =
+      d1 {declarationSource = Map.unionWith mergeLine d1.declarationSource d2.declarationSource}
 
 -- * Context limiting
 

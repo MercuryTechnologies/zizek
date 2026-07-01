@@ -121,8 +121,11 @@ library
     Hegel.Report
     Hegel.Report.Ann
     Hegel.Report.Discovery
+    Hegel.Report.Journal
+    Hegel.Report.Note
     Hegel.Report.Source
     Hegel.Report.Span
+    Hegel.Report.Stateful
     Hegel.Runner
     Hegel.Settings
     Hegel.Stateful
@@ -294,6 +297,16 @@ executable test-stateful
   main-is: Main.hs
   build-depends:
     zizek
+
+-- Manual eyeballing harness for stateful report rendering (plain vs rich).
+-- Not run by CI; `cabal run demo-stateful-rich` from the repo root.
+executable demo-stateful-rich
+  import: conformance
+  hs-source-dirs: tests/demo/stateful-rich
+  main-is: Main.hs
+  build-depends:
+    containers ^>=0.7,
+    zizek,
 
 test-suite unit
   import: library

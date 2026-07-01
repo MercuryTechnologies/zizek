@@ -8,7 +8,7 @@ module Hegel.Report
     aborted,
     throwOnFailure,
 
-    -- * Notes
+    -- * Notes (re-exported from "Hegel.Report.Note")
     Note (..),
     NoteKind (..),
 
@@ -30,18 +30,21 @@ where
 
 import Control.Exception (Exception (displayException), SomeException, throwIO)
 import Data.Either (partitionEithers)
-import Data.List (mapAccumL, partition)
+import Data.List (partition)
 import Data.Maybe (catMaybes, maybeToList)
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Stack (SrcLoc (..))
 import Hegel.Diff (Diff)
-import Hegel.Report.Ann (Ann (..), docToAnsi, docToText, lineDiffDoc)
+import Hegel.Report.Ann (Ann (..), diffDocs, docToAnsi, docToText)
 import Hegel.Report.Discovery (loadDeclarations)
+import Hegel.Report.Journal (journalDocs, locDoc)
+import Hegel.Report.Note (Note (..), NoteKind (..), hasInBandFailure)
 import Hegel.Report.Source
   ( applyContext,
     defaultContext,
     mergeDeclarations,
+    mergeFileDeclarations,
     ppDeclaration,
     ppFailedInput,
     ppFailureLocation,
@@ -119,33 +122,6 @@ throwOnFailure report = case report.result of
   Aborted (Errored exc) -> throwIO exc
   Aborted (UnhealthyInput msg) -> fail ("Health check failed: " <> show msg)
 
--- | The kind of a journaled 'Note'.
-data NoteKind
-  = -- | A value drawn during the test (a @forAll@-style draw).
-    Drawn
-  | -- | Context attached mid-test (an @annotate@-style call).
-    Annotation
-  | -- | Context rendered after the report body (a @footnote@-style call).
-    Footnote
-  | -- | A caught failure journaled in-band at the point it occurred (used by
-    -- stateful tests to attach the failure to its step).
-    Failure
-  deriving stock (Show, Eq)
-
--- | One entry in a failure report's journal: rendered text plus the call
--- site that produced it, when known.
-data Note = Note
-  { kind :: NoteKind,
-    text :: Text,
-    loc :: Maybe SrcLoc,
-    -- | Structured diff, when this note is a 'Failure' from '(===)'.
-    diff :: Maybe Diff,
-    -- | Nesting level (0 = top level). Draws made inside a stateful step are
-    -- journaled one level deeper than the step header itself.
-    depth :: !Int
-  }
-  deriving stock (Show)
-
 -- * Pure rendering (always succeeds, no IO)
 
 -- | Render a report as plain text.
@@ -222,12 +198,12 @@ richDoc message notes loc diff = do
       mFailureDecl =
         ppFailureLocation decls (fmap PP.pretty (T.lines message)) diff
           =<< mFailureSpan
-      allDecls = mergeDeclarations (maybeToList mFailureDecl <> idecls)
+      allDecls = mergeFileDeclarations (mergeDeclarations (maybeToList mFailureDecl <> idecls))
       declDocs = fmap (ppDeclaration . applyContext defaultContext) allDecls
       footerDocs = [PP.annotate NoteAnn (PP.pretty n.text) | n <- footers]
       sections = [PP.vsep ds | ds <- [args, declDocs, footerDocs], not (null ds)]
   -- Degrade to the plain renderer unless at least one declaration rendered;
-  -- the @forAll N =@ fallback docs in 'args' only supplement a source
+  -- the @Draw N:@ fallback docs in 'args' only supplement a source
   -- listing, they don't constitute one.
   pure
     if null allDecls
@@ -248,12 +224,6 @@ reportDoc report = case report.result of
         failureDoc message notes loc diff
       ]
 
--- | Does this journal carry an in-band 'Failure' note (a stateful report)?
--- If so, 'failureDoc' and 'richDoc' switch to the in-band layout described
--- on 'failureDoc'.
-hasInBandFailure :: [Note] -> Bool
-hasInBandFailure = any (\n -> n.kind == Failure)
-
 -- | The headline @message@ line of a failure report.
 headlineDoc :: Text -> Doc Ann
 headlineDoc = PP.annotate MessageAnn . PP.pretty
@@ -267,13 +237,12 @@ headlineDoc = PP.annotate MessageAnn . PP.pretty
 -- failure is rendered __in-band__ at its step and the top-level headline\/
 -- diff\/location block is suppressed, since the 'Failure' note already
 -- carries them. The report renderers substitute @"failed after N tests"@ as
--- the headline; 'renderFailure' restores the message. Each note is indented
--- by its 'Note'@.depth@ so draws nest under the step that made them.
+-- the headline; 'renderFailure' restores the message.
 failureDoc :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Doc Ann
 failureDoc message notes loc diff
-  | hasInBandFailure notes = PP.vsep journalDocs
+  | hasInBandFailure notes = PP.vsep (journalDocs notes)
   | otherwise =
-      PP.vsep (headlineDoc message : topBlock <> journalDocs)
+      PP.vsep (headlineDoc message : topBlock <> journalDocs notes)
   where
     topBlock :: [Doc Ann]
     topBlock = fmap (PP.indent 2) (diffLines <> locLine)
@@ -281,43 +250,15 @@ failureDoc message notes loc diff
     diffLines = maybe [] (\d -> [diffDoc d]) diff
     locLine :: [Doc Ann]
     locLine = maybe [] (\l -> [PP.annotate LocAnn ("at" <+> locDoc l)]) loc
-    (footers, inline) = partition (\n -> n.kind == Footnote) notes
-    journalDocs :: [Doc Ann]
-    journalDocs = snd (mapAccumL noteDoc 1 (inline <> footers))
-    noteDoc :: Int -> Note -> (Int, Doc Ann)
-    noteDoc i n =
-      let base = (n.depth + 1) * 2
-       in case n.kind of
-            Drawn ->
-              ( i + 1,
-                PP.indent base (PP.annotate DrawnAnn ("forAll" <+> PP.pretty i <+> "=" <+> PP.align (PP.pretty n.text)))
-              )
-            Annotation -> (i, PP.indent base (PP.annotate NoteAnn (PP.pretty n.text)))
-            -- Footnotes are hoisted to the end regardless of position, so they
-            -- reset to a fixed indent rather than nesting under the last step.
-            Footnote -> (i, PP.indent 2 (PP.annotate NoteAnn (PP.pretty n.text)))
-            Failure -> (i, failureNoteDoc base n)
-
--- | Render an in-band 'Failure' note: a marked headline at the note's depth,
--- the structured diff (if any) indented under it, then the source location.
-failureNoteDoc :: Int -> Note -> Doc Ann
-failureNoteDoc base n =
-  PP.vsep $
-    PP.indent base (PP.annotate MessageAnn ("✗" <+> PP.pretty n.text))
-      : fmap (PP.indent (base + 4)) (maybe [] (\d -> [diffDoc d]) n.diff)
-        <> fmap (PP.indent (base + 2)) (maybe [] (\l -> [PP.annotate LocAnn ("at" <+> locDoc l)]) n.loc)
 
 diffDoc :: Diff -> Doc Ann
-diffDoc = PP.vsep . fmap lineDiffDoc
+diffDoc = PP.vsep . diffDocs
 
 statsDoc :: Stats -> Doc Ann
 statsDoc stats
   | stats.invalid == 0 = PP.pretty stats.valid <+> "tests"
   | otherwise =
       PP.pretty stats.valid <+> "tests" <+> PP.parens (PP.pretty stats.invalid <+> "discarded")
-
-locDoc :: SrcLoc -> Doc Ann
-locDoc sl = PP.pretty sl.srcLocFile <> ":" <> PP.pretty sl.srcLocStartLine
 
 -- * Exceptions
 

@@ -78,7 +78,7 @@ x === y
       withFrozenCallStack $
         throwIO
           AssertionFailure
-            { message = "=== failed",
+            { message = "=== failed, values are not equal",
               callStack = Stack.callStack,
               diff =
                 Just
