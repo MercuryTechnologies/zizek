@@ -160,7 +160,14 @@ renderReportAnsi = docToAnsi . reportDoc
 -- | Render the failure section alone (headline message, diff, location,
 -- journal). 'PropertyFailed' and 'renderReport' share this layout.
 renderFailure :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Text
-renderFailure message notes loc diff = docToText (failureDoc message notes loc diff)
+renderFailure message notes loc diff = docToText body
+  where
+    -- In-band journals suppress the headline in 'failureDoc'; the report
+    -- renderers substitute @"failed after N tests"@, but 'PropertyFailed''s
+    -- 'displayException' has no such summary, so restore the headline here.
+    body
+      | hasInBandFailure notes = PP.vsep [headlineDoc message, failureDoc message notes loc diff]
+      | otherwise = failureDoc message notes loc diff
 
 -- | Render a value via its 'Show' instance, pretty-printed multi-line when
 -- the output parses as a value AST, the raw 'show' string otherwise. The
@@ -202,7 +209,7 @@ richDoc message notes loc diff
   -- the source-splicing model: their structure is @Step N@ annotations, not
   -- drawn-value declarations. Degrade to the shared structured layout so the
   -- plain and rich renderers agree.
-  | any (\n -> n.kind == Failure) notes =
+  | hasInBandFailure notes =
       pure (Just (failureDoc message notes loc diff))
 richDoc message notes loc diff = do
   let (footers, inline) = partition (\n -> n.kind == Footnote) notes
@@ -241,6 +248,16 @@ reportDoc report = case report.result of
         failureDoc message notes loc diff
       ]
 
+-- | Does this journal carry an in-band 'Failure' note (a stateful report)?
+-- If so, 'failureDoc' and 'richDoc' switch to the in-band layout described
+-- on 'failureDoc'.
+hasInBandFailure :: [Note] -> Bool
+hasInBandFailure = any (\n -> n.kind == Failure)
+
+-- | The headline @message@ line of a failure report.
+headlineDoc :: Text -> Doc Ann
+headlineDoc = PP.annotate MessageAnn . PP.pretty
+
 -- | Render the failure body.
 --
 -- Ordinary reports: the headline message, then (indented) the diff (if any),
@@ -248,19 +265,16 @@ reportDoc report = case report.result of
 --
 -- Reports whose journal contains a 'Failure' note (stateful reports): the
 -- failure is rendered __in-band__ at its step and the top-level headline\/
--- diff\/location block is suppressed, since the 'Failure' note already carries
--- them. Each note is indented by its 'Note'@.depth@ so draws nest under the
--- step that made them. The report renderers prepend @"failed after N tests"@
--- as the summary headline; 'renderFailure' does not (yet) supply one in this
--- mode, so 'PropertyFailed'@.displayException@ currently has no headline.
+-- diff\/location block is suppressed, since the 'Failure' note already
+-- carries them. The report renderers substitute @"failed after N tests"@ as
+-- the headline; 'renderFailure' restores the message. Each note is indented
+-- by its 'Note'@.depth@ so draws nest under the step that made them.
 failureDoc :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Doc Ann
 failureDoc message notes loc diff
-  | inBand = PP.vsep journalDocs
+  | hasInBandFailure notes = PP.vsep journalDocs
   | otherwise =
-      PP.vsep (PP.annotate MessageAnn (PP.pretty message) : topBlock <> journalDocs)
+      PP.vsep (headlineDoc message : topBlock <> journalDocs)
   where
-    inBand :: Bool
-    inBand = any (\n -> n.kind == Failure) notes
     topBlock :: [Doc Ann]
     topBlock = fmap (PP.indent 2) (diffLines <> locLine)
     diffLines :: [Doc Ann]
@@ -279,7 +293,9 @@ failureDoc message notes loc diff
                 PP.indent base (PP.annotate DrawnAnn ("forAll" <+> PP.pretty i <+> "=" <+> PP.align (PP.pretty n.text)))
               )
             Annotation -> (i, PP.indent base (PP.annotate NoteAnn (PP.pretty n.text)))
-            Footnote -> (i, PP.indent base (PP.annotate NoteAnn (PP.pretty n.text)))
+            -- Footnotes are hoisted to the end regardless of position, so they
+            -- reset to a fixed indent rather than nesting under the last step.
+            Footnote -> (i, PP.indent 2 (PP.annotate NoteAnn (PP.pretty n.text)))
             Failure -> (i, failureNoteDoc base n)
 
 -- | Render an in-band 'Failure' note: a marked headline at the note's depth,

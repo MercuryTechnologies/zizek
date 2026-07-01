@@ -7,7 +7,7 @@ import Data.List (isInfixOf)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import GHC.Stack (HasCallStack, SrcLoc (..), callStack, getCallStack)
+import GHC.Stack (SrcLoc (..), callStack, getCallStack)
 import Hegel.Assertion (AssertionFailure (..), (/==), (===))
 import Hegel.Diff (Diff, LineDiff (..), diffShown)
 import Hegel.Report
@@ -161,6 +161,28 @@ spec = do
                      "      at tests/Spec.hs:42"
                    ]
 
+    it "hoists a nested footnote to a fixed indent, dropping its depth" $ do
+      -- 'footnote' is reachable inside a stateful rule body, so it can carry a
+      -- nonzero depth. Hoisting already discards its position; it must discard
+      -- its depth too, rather than render "nested" under the last step.
+      let result =
+            Counterexample
+              { message = "boom",
+                notes =
+                  [ drawn "1",
+                    Note {kind = Footnote, text = "nested footer", loc = Nothing, diff = Nothing, depth = 1}
+                  ],
+                loc = Nothing,
+                diff = Nothing
+              }
+          report = Report {result, stats = Stats {valid = 1, invalid = 0}}
+      T.lines (renderReport report)
+        `shouldBe` [ "failed after 1 tests",
+                     "boom",
+                     "  forAll 1 = 1",
+                     "  nested footer"
+                   ]
+
     it "renders gave-up and aborted verdicts" $ do
       renderReport Report {result = GaveUp "no valid examples", stats = Stats {valid = 0, invalid = 7}}
         `shouldBe` "gave up after 0 tests (7 discarded): no valid examples"
@@ -251,6 +273,23 @@ spec = do
           exc = PropertyFailed {message = "boom", notes, loc = Just aLoc, diff = Nothing}
       T.pack (displayException exc)
         `shouldBe` renderFailure "property failed: boom" notes (Just aLoc) Nothing
+
+    it "displayException keeps the headline for a Failure-bearing journal" $ do
+      -- The in-band layout suppresses the top-level message; the report
+      -- renderers replace it with "failed after N tests", but
+      -- 'displayException' has no such summary, so it must supply the
+      -- "property failed: …" headline itself.
+      let notes =
+            [ step "Step 1: increment",
+              failureAt "counter stays small" Nothing (Just aLoc)
+            ]
+          exc = PropertyFailed {message = "counter stays small", notes, loc = Just aLoc, diff = Nothing}
+      T.lines (T.pack (displayException exc))
+        `shouldBe` [ "property failed: counter stays small",
+                     "  Step 1: increment",
+                     "    ✗ counter stays small",
+                     "      at tests/Spec.hs:42"
+                   ]
 
     it "displayException includes the diff when present" $ do
       let exc =
