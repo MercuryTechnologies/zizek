@@ -308,6 +308,7 @@ test-suite unit
   -- cabal-gild: discover tests/unit --exclude=tests/unit/Main.hs
   other-modules:
     BasicProperties
+    ControlSignals
     DatabaseReplay
     GeneratorSchemas
     Integrations

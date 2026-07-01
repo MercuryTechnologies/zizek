@@ -1,6 +1,7 @@
 module Main (main) where
 
 import BasicProperties qualified
+import ControlSignals qualified
 import DatabaseReplay qualified
 import GeneratorSchemas qualified
 import Integrations qualified
@@ -15,6 +16,7 @@ import Test.Tasty.Hspec (testSpec)
 
 main :: IO ()
 main = do
+  controlSignals <- testSpec "control signals" ControlSignals.spec
   rendering <- testSpec "report rendering" ReportRendering.spec
   sourceRendering <- testSpec "source rendering" SourceRendering.spec
   integrations <- testSpec "framework integrations" Integrations.spec
@@ -28,7 +30,8 @@ main = do
   defaultMain
     ( testGroup
         "zizek:unit"
-        [ rendering,
+        [ controlSignals,
+          rendering,
           sourceRendering,
           integrations,
           Integrations.tastyTree,

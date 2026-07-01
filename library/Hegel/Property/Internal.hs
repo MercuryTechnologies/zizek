@@ -45,11 +45,10 @@ import GHC.Stack (HasCallStack, SrcLoc, callStack, withFrozenCallStack)
 import Hegel.Assertion (AssertionFailure (..), callSite)
 import Hegel.Diff (Diff)
 import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
-import Hegel.Internal.Control (isControlSignal)
+import Hegel.Internal.Control (isControlSignal, isFailure)
 import Hegel.Internal.TestCase (TestCase)
 import Hegel.Report (Note (..), NoteKind (..), renderValue)
 import UnliftIO (MonadUnliftIO)
-import UnliftIO.Exception (isSyncException)
 import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
 
 -- | The per-test-case environment a property runs against.
@@ -189,6 +188,9 @@ observeProperty tc prop = do
 -- NOTE: This function _needs_ to use 'Control.Exception.throwIO' so that
 -- all non-Hegel async exceptions are rethrown _as_ async exceptions (and not
 -- re-wrapped in a synchronous exception wrapper by safe-exceptions).
+--
+-- The canonical home of this discipline is 'Hegel.Internal.Control'
+-- ('isFailure'\/'Hegel.Internal.Control.onFailure').
 
 -- | Like 'UnliftIO.Exception.tryAny', but additionally catches Hegel's
 -- control signals ('Hegel.Internal.TestCase.AssumeRejected',
@@ -201,7 +203,7 @@ tryProperty act =
   E.try act >>= \res -> case res of
     Right a -> pure (Right a)
     Left e
-      | isControlSignal e || isSyncException e -> pure (Left e)
+      | isControlSignal e || isFailure e -> pure (Left e)
       -- Base 'E.throwIO' to preserve the exception's async flavor on rethrow.
       | otherwise -> E.throwIO e
 

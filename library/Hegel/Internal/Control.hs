@@ -17,6 +17,8 @@ module Hegel.Internal.Control
     isControlSignal,
     ControlSignal (..),
     catchControl,
+    isFailure,
+    onFailure,
   )
 where
 
@@ -26,11 +28,15 @@ import Control.Exception
     SomeException,
     asyncExceptionFromException,
     asyncExceptionToException,
+    catch,
     catches,
+    throwIO,
   )
+import Control.Monad (when)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
+import UnliftIO.Exception (isSyncException)
 
 -- | Thrown when the engine signals that the current test case should be
 -- abandoned (choice budget exhausted).
@@ -100,3 +106,40 @@ catchControl act h =
     `catches` [ Handler \AssumeRejected -> h Assume,
                 Handler \TestStopped -> h Stop
               ]
+
+-- | Is this exception a /failure/: a synchronous exception that is not one of
+-- Hegel's control signals?
+--
+-- These are exactly the exceptions the runner classifies as Interesting (a
+-- counterexample).
+--
+-- Note that 'MalformedTest' also satisfies this predicate: callers adding
+-- hooks to failures for reporting purposes may act on it harmlessly, since
+-- aborted runs never render a journal.
+isFailure :: SomeException -> Bool
+isFailure e = isSyncException e && not (isControlSignal e)
+
+-- | Like 'Control.Exception.onException', but the hook sees the exception and
+-- fires only for failures (per 'isFailure').
+--
+-- The exception is /always/ rethrown, via 'throwIO' to preserve sync vs. async
+-- classification, so control signals and genuine async exceptions propagate
+-- untouched past the hook.
+--
+-- Compose 'onFailure' __inside__ 'catchControl':
+--
+-- > (act `onFailure` hook) `catchControl` handler
+--
+-- ...so that control signals pass through the hook untouched and are still
+-- discriminated against within 'catchControl'.
+--
+-- __NOTE__: The hook must not throw; an exception escaping the hook would
+-- replace the original failure.
+onFailure :: IO a -> (SomeException -> IO ()) -> IO a
+onFailure act hook =
+  -- Base 'catch'/'throwIO': unliftio combinators rethrow async exceptions
+  -- before a handler could run, and base 'throwIO' preserves the
+  -- 'asyncExceptionToException' wrapping on rethrow.
+  act `catch` \(e :: SomeException) -> do
+    when (isFailure e) (hook e)
+    throwIO e
