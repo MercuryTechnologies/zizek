@@ -3,6 +3,7 @@ module Hegel.Property.Internal
     PropertyT (..),
     Property,
     Env (..),
+    Journal (..),
     hoist,
 
     -- * Draws
@@ -53,10 +54,22 @@ import Hegel.Report (Note (..), NoteKind (..), renderValue)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
 
+-- | Whether the current run records its journal.
+--
+-- Ordinary cases (including every shrink replay) run 'Silent'; only the
+-- final reconstruction replay ('observeProperty') runs 'Recording'. The
+-- distinction is load-bearing for performance: under 'Silent',
+-- 'journalNote' never constructs the 'Note' at all, so its 'Text' and
+-- 'SrcLoc' arguments stay unevaluated thunks — rendering work for the
+-- journal is paid once per failure, not once per step of every case.
+data Journal
+  = Silent
+  | Recording !(Note -> IO ())
+
 -- | The per-test-case environment a property runs against.
 data Env = Env
   { testCase :: !TestCase,
-    journal :: !(Note -> IO ()),
+    journal :: !Journal,
     -- | Ambient nesting level stamped onto each journaled 'Note'; raised by
     -- 'nested'.
     noteDepth :: !Int
@@ -114,10 +127,15 @@ noteFailure loc diff = journalNote (Failure diff) loc
 
 -- | The sole 'Note' construction site: stamp the ambient 'noteDepth' onto the
 -- note and hand it to the journal.
+--
+-- Under 'Silent' the 'Note' is never constructed, so @loc@ and @text@ are
+-- never forced (the strict 'Note' fields would otherwise evaluate them).
 journalNote :: (MonadIO m) => NoteKind -> Maybe SrcLoc -> Text -> PropertyT m ()
 journalNote kind loc text = PropertyT do
   env <- ask
-  liftIO (env.journal Note {kind, text, loc, depth = env.noteDepth})
+  case env.journal of
+    Silent -> pure ()
+    Recording sink -> liftIO (sink Note {kind, text, loc, depth = env.noteDepth})
 {-# INLINEABLE journalNote #-}
 
 -- | Run a property with its journaled notes recorded one level deeper.
@@ -208,7 +226,7 @@ runPropertyT env (PropertyT r) = runReaderT r env
 -- via 'observeProperty' on the engine's minimal counterexample.
 propertyAction :: Property () -> TestCase -> IO ()
 propertyAction prop tc =
-  runPropertyT Env {testCase = tc, journal = \_ -> pure (), noteDepth = 0} prop
+  runPropertyT Env {testCase = tc, journal = Silent, noteDepth = 0} prop
 
 -- | Run a property against a test case with a recording journal, returning
 -- how the run ended together with the journal contents.
@@ -216,7 +234,7 @@ observeProperty :: TestCase -> Property () -> IO (Either SomeException (), [Note
 observeProperty tc prop = do
   j <- newIORef Seq.empty
   let record n = modifyIORef' j (|> n)
-  eRes <- tryProperty (runPropertyT Env {testCase = tc, journal = record, noteDepth = 0} prop)
+  eRes <- tryProperty (runPropertyT Env {testCase = tc, journal = Recording record, noteDepth = 0} prop)
   notes <- toList <$> readIORef j
   pure (eRes, notes)
 

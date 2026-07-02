@@ -14,7 +14,7 @@
 -- harness, not a test. Only usage errors exit nonzero.
 module Main (main) where
 
-import Control.Exception (displayException)
+import Control.Exception (displayException, evaluate)
 import Control.Monad (replicateM_, void)
 import Data.Function ((&))
 import Data.List qualified as List
@@ -29,7 +29,7 @@ import Hegel.Gen qualified as Gen
 import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Phase (Phase (..))
 import Hegel.Property (Property, forAll, forAllSilent)
-import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..))
+import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), renderReport, renderReportRichAnsi)
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..), defaultSettings)
 import Hegel.Stateful qualified as Stateful
@@ -108,14 +108,25 @@ runScenario scenario opts = do
             suppressHealthCheck =
               [FilterTooMuch, TooSlow, TestCasesTooLarge, LargeInitialTestCase]
           }
-  report <- check settings scenario.property
-  T.putStrLn (summary scenario settings report)
+  case scenario.work of
+    Check prop -> do
+      report <- check settings prop
+      T.putStrLn (summary scenario settings.testCases report)
+    RenderLoop render -> do
+      -- Fixed find run (100 cases, full shrink) so every capture renders the
+      -- identical counterexample; only the render loop below is the workload.
+      report <- check settings {testCases = 100} (Stateful.run (Warehouse.machine Warehouse.Buggy))
+      let iterations = fromMaybe scenario.defaultCases opts.cases
+      replicateM_ iterations do
+        rendered <- render report
+        void (evaluate (T.length rendered))
+      T.putStrLn (summary scenario iterations report)
 
-summary :: Scenario -> Settings -> Report -> Text
-summary scenario settings report =
+summary :: Scenario -> Int -> Report -> Text
+summary scenario cases report =
   T.unwords
     [ T.pack scenario.name <> ":",
-      "cases=" <> tshow settings.testCases,
+      "cases=" <> tshow cases,
       "valid=" <> tshow report.stats.valid,
       "invalid=" <> tshow report.stats.invalid,
       "result=" <> resultTag report.result
@@ -141,8 +152,18 @@ data Scenario = Scenario
   { name :: String,
     defaultCases :: Int,
     blurb :: String,
-    property :: Property ()
+    work :: Work
   }
+
+-- | What a scenario does with its case budget.
+data Work
+  = -- | An ordinary property run; the case count is 'testCases'.
+    Check (Property ())
+  | -- | Find the buggy warehouse counterexample once (fixed find run, full
+    -- shrink), then render its report; the case count is the number of
+    -- render iterations. Rendering happens once per failure in real use —
+    -- the loop makes a per-failure latency cost profileable.
+    RenderLoop (Report -> IO Text)
 
 describeScenario :: Scenario -> String
 describeScenario s =
@@ -155,15 +176,17 @@ describeScenario s =
 
 scenarios :: [Scenario]
 scenarios =
-  [ Scenario "overhead" 10000 "one full-range int draw per case; per-case round-trip floor" overheadProperty,
-    Scenario "scalars" 1000 "100 small int draws per case; per-draw round-trip cost" scalarsProperty,
-    Scenario "collections" 500 "one list-of-text + one map draw per case; per-byte CBOR cost" collectionsProperty,
-    Scenario "stateful-simple" 2000 "passing one-rule counter machine; per-step overhead" (Stateful.run counterMachine),
-    Scenario "warehouse" 1000 "passing warehouse machine; realistic mixed stateful workload" (Stateful.run (Warehouse.machine Warehouse.Fixed)),
-    Scenario "shrink" 100 "buggy warehouse machine; find + shrink + replay (pair with --no-shrink)" (Stateful.run (Warehouse.machine Warehouse.Buggy)),
-    Scenario "warehouse-heavy" 300 "24-SKU warehouse w/ audit-log thunk chains + fat annotations" (Stateful.run Stress.heavyMachine),
-    Scenario "gen-churn" 2000 "fresh dependent generator per draw; pre-encoding worst case" Stress.churnProperty,
-    Scenario "gen-hoard" 20 "10k generators alive as a CAF; cached-encoding retention" Stress.hoardProperty
+  [ Scenario "overhead" 10000 "one full-range int draw per case; per-case round-trip floor" (Check overheadProperty),
+    Scenario "scalars" 1000 "100 small int draws per case; per-draw round-trip cost" (Check scalarsProperty),
+    Scenario "collections" 500 "one list-of-text + one map draw per case; per-byte CBOR cost" (Check collectionsProperty),
+    Scenario "stateful-simple" 2000 "passing one-rule counter machine; per-step overhead" (Check (Stateful.run counterMachine)),
+    Scenario "warehouse" 1000 "passing warehouse machine; realistic mixed stateful workload" (Check (Stateful.run (Warehouse.machine Warehouse.Fixed))),
+    Scenario "shrink" 100 "buggy warehouse machine; find + shrink + replay (pair with --no-shrink)" (Check (Stateful.run (Warehouse.machine Warehouse.Buggy))),
+    Scenario "warehouse-heavy" 300 "24-SKU warehouse w/ audit-log thunk chains + fat annotations" (Check (Stateful.run Stress.heavyMachine)),
+    Scenario "gen-churn" 2000 "fresh dependent generator per draw; pre-encoding worst case" (Check Stress.churnProperty),
+    Scenario "gen-hoard" 20 "10k generators alive as a CAF; cached-encoding retention" (Check Stress.hoardProperty),
+    Scenario "render-plain" 200 "render the buggy warehouse counterexample (plain renderer)" (RenderLoop (pure . renderReport)),
+    Scenario "render-rich" 100 "render it rich (source discovery, splicing, Timeline layout)" (RenderLoop renderReportRichAnsi)
   ]
 
 smallInt :: Gen Int

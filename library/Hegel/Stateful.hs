@@ -67,6 +67,7 @@ import Hegel.Internal.Control (ControlSignal (..), MalformedTest (..), catchCont
 import Hegel.Internal.DataSource (newStateMachine, stateMachineNextRule)
 import Hegel.Property.Internal
   ( Env (..),
+    Journal (..),
     PropertyT,
     askEnv,
     failureDetails,
@@ -136,12 +137,19 @@ run machine = do
       -- 'onFailure' passes control signals and async exceptions through
       -- untouched (see its haddock); do not replace it with a bare
       -- @catch \@SomeException@, which would swallow discard\/stop signals.
+      --
+      -- Under 'Silent' the bracket is skipped entirely: the failure note
+      -- would go nowhere and the failure propagates to the runner either
+      -- way, so only the 'Recording' reconstruction replay pays for the
+      -- per-step catch machinery.
       withFailureNote :: forall a. PropertyT m a -> PropertyT m a
-      withFailureNote act =
-        withRunInIO \runInIO ->
-          runInIO act `onFailure` \e ->
-            let (message, loc, diff) = failureDetails e
-             in runInIO (noteFailure loc diff message)
+      withFailureNote = case env.journal of
+        Silent -> id
+        Recording _ -> \act ->
+          withRunInIO \runInIO ->
+            runInIO act `onFailure` \e ->
+              let (message, loc, diff) = failureDetails e
+               in runInIO (noteFailure loc diff message)
 
       -- Each invariant's draws (and any failure) report one level below the
       -- step header, via 'nested'.

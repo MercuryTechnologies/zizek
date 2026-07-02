@@ -21,7 +21,7 @@
 -- in do-notation.
 module Hegel.Gen
   ( -- * Core types
-    BasicGenerator (..),
+    BasicGenerator (schema, parse),
     TestCase,
 
     -- * Builder classes
@@ -203,7 +203,7 @@ import Hegel.Gen.Integer
   )
 import Hegel.Gen.Internal
   ( AssumeRejected (..),
-    BasicGenerator (..),
+    BasicGenerator (parse, schema),
     UnexpectedResponse (..),
     assume,
     defer,

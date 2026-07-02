@@ -4,7 +4,10 @@
 module Hegel.Gen.Internal
   ( -- * Generator type
     Gen (..),
-    BasicGenerator (..),
+    -- 'BasicGenerator''s raw constructor (and its 'encoded' cache) stays
+    -- unexported: 'basicGenerator' is the only construction path, so the
+    -- cached encoding can never drift from the schema.
+    BasicGenerator (schema, parse),
     BasicSchema (..),
     basic,
     basicGenerator,
