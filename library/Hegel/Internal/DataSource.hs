@@ -11,6 +11,7 @@
 module Hegel.Internal.DataSource
   ( -- * Generation
     generate,
+    generateEncoded,
     primitiveBoolean,
 
     -- * Collections
@@ -38,6 +39,7 @@ import CBOR.Decode qualified as CD
 import CBOR.Encode qualified as CE
 import CBOR.Value (Value)
 import Control.Exception (throwIO)
+import Data.ByteString (ByteString)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Word (Word64)
@@ -61,9 +63,15 @@ import Witch qualified
 -- Throws 'TestStopped' when the choice budget is exhausted, or 'AssumeRejected'
 -- when the engine signals that the current case should be discarded.
 generate :: TestCase -> Value -> IO Value
-generate tc schema = do
+generate tc schema = generateEncoded tc (CE.encode schema)
+
+-- | 'generate' with the schema already CBOR-encoded — the hot path for
+-- 'Hegel.Gen.Internal.BasicGenerator' draws, which cache their encoding at
+-- construction so repeated draws skip the encode entirely.
+generateEncoded :: TestCase -> ByteString -> IO Value
+generateEncoded tc schemaBytes = do
   resultBytes <-
-    FFI.generate tc.ctx tc.ptr (CE.encode schema)
+    FFI.generate tc.ctx tc.ptr schemaBytes
       `catch` \e@(HegelError {code}) -> case code of
         HEGEL_E_STOP_TEST -> throwIO TestStopped
         HEGEL_E_ASSUME -> throwIO AssumeRejected
