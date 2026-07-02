@@ -25,6 +25,7 @@ where
 import Control.Exception
   ( Exception (..),
     Handler (..),
+    NoBacktrace (..),
     SomeException,
     asyncExceptionFromException,
     asyncExceptionToException,
@@ -50,6 +51,10 @@ instance Exception TestStopped where
   toException = asyncExceptionToException
   fromException = asyncExceptionFromException
 
+  -- Suppress backtrace collection: thrown on every budget stop; nothing is
+  -- ever rendered from it.
+  backtraceDesired _ = False
+
 -- | Thrown when a test case is deliberately discarded, either via
 -- 'Hegel.Property.assume' or 'Hegel.Property.discard', or by an exhausted
 -- 'Hegel.Gen.filtered'\/'Hegel.Gen.mapMaybe' retry budget.
@@ -59,6 +64,10 @@ data AssumeRejected = AssumeRejected
 instance Exception AssumeRejected where
   toException = asyncExceptionToException
   fromException = asyncExceptionFromException
+
+  -- Suppress backtrace collection: thrown on every discard; nothing is ever
+  -- rendered from it.
+  backtraceDesired _ = False
 
 -- | Thrown when a test is structurally invalid — a precondition on the test
 -- /definition/ rather than a property failure (for example, a stateful
@@ -141,6 +150,11 @@ onFailure act hook =
   -- Base 'catch'/'throwIO': unliftio combinators rethrow async exceptions
   -- before a handler could run, and base 'throwIO' preserves the
   -- 'asyncExceptionToException' wrapping on rethrow.
+  --
+  -- Suppress backtrace collection ('NoBacktrace'): rethrown on every caught
+  -- control signal; 'backtraceDesired' on the concrete signal types is
+  -- bypassed here because the async 'SomeAsyncException' wrapper answers for
+  -- them ('True') on a 'SomeException' rethrow.
   act `catch` \(e :: SomeException) -> do
     when (isFailure e) (hook e)
-    throwIO e
+    throwIO (NoBacktrace e)

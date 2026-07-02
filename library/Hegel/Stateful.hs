@@ -104,6 +104,7 @@ data Invariant s m = Invariant
 -- would then try to splice as if it were the user's test source.
 stepNote :: (MonadIO m) => Text -> PropertyT m ()
 stepNote = note Annotation Nothing
+{-# INLINE stepNote #-}
 
 -- | A complete stateful test specification.
 data Machine s m = Machine
@@ -203,3 +204,5 @@ run machine = do
         attemptBudget
           | succeeded == 0 = max (10 * stepCap) 1000
           | otherwise = 10 * stepCap
+{-# INLINEABLE run #-}
+{-# SPECIALIZE run :: Machine s IO -> PropertyT IO () #-}

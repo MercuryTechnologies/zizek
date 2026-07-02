@@ -191,6 +191,7 @@ module Hegel.Internal.FFI
     generate,
     Slot,
     newSlot,
+    withSlot,
     failureReproductionBlob,
     withTestCaseFromBlob,
   )
@@ -198,7 +199,7 @@ where
 
 #include <hegel.h>
 
-import Control.Exception (Exception, bracket, throwIO)
+import Control.Exception (Exception (..), bracket, throwIO)
 import Control.Monad (void)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
@@ -251,7 +252,11 @@ data HegelError = HegelError
   }
   deriving stock (Show)
 
-instance Exception HegelError
+instance Exception HegelError where
+  -- Suppress backtrace collection: thrown on every stop/discard (the
+  -- control-flow codes arrive here first); the rendered diagnostic is the
+  -- engine's message.
+  backtraceDesired _ = False
 
 -- $errorcodes
 --
@@ -973,19 +978,26 @@ withTestCaseFromBlob ctx s blob action =
         else lastErrorMessage ctx >>= \msg -> throwIO HegelError {code = rc, message = msg}
     release tc = void (hegel_test_case_free ctx tc)
 
--- | Reusable pinned block that 'generate''s replies return through: the
--- first word receives the engine's borrowed value pointer, the second the
--- value length. Allocated once per test case
--- ('Hegel.Internal.TestCase.mkTestCase') and reused across every draw — the
--- draw path is hot enough that two fresh 'alloca's per call dominated
--- generation profiles.
+-- | Reusable pinned block that a test case's per-call replies return
+-- through: 'generate' uses both words (the engine's borrowed value pointer,
+-- then the value length); the single-word out-params (rule indices,
+-- collection/pool ids, primitive booleans) use the first, via 'withSlot'.
+-- Allocated once per test case ('Hegel.Internal.TestCase.mkTestCase') and
+-- reused across every call — the draw path is hot enough that fresh
+-- 'alloca's per call dominated generation profiles.
 --
--- Draws on one test case never overlap, so a single slot per case is safe.
+-- Calls on one test case never overlap, so a single slot per case is safe.
 newtype Slot = Slot (ForeignPtr Word8)
 
 -- | Allocate a 'Slot'. Pinned and GC-managed; no finalizer needed.
 newSlot :: IO Slot
 newSlot = Slot <$> mallocForeignPtrBytes (2 * wordBytes)
+
+-- | Use the slot as a single out-parameter. The pointee must fit one slot
+-- word — every libhegel out-param is pointer-, @size_t@-, @int64_t@-, or
+-- @bool@-sized, so this holds throughout.
+withSlot :: Slot -> (Ptr a -> IO b) -> IO b
+withSlot (Slot slot) k = withForeignPtr slot (k . castPtr)
 
 -- | Byte size of each 'Slot' word: a pointer, and a @size_t@ ('CSize')
 -- length — one machine word either way.
