@@ -71,7 +71,7 @@ generate tc schema = generateEncoded tc (CE.encode schema)
 generateEncoded :: TestCase -> ByteString -> IO Value
 generateEncoded tc schemaBytes = do
   resultBytes <-
-    FFI.generate tc.ctx tc.ptr schemaBytes
+    FFI.generate tc.ctx tc.ptr tc.slot schemaBytes
       `catch` \e@(HegelError {code}) -> case code of
         HEGEL_E_STOP_TEST -> throwIO TestStopped
         HEGEL_E_ASSUME -> throwIO AssumeRejected
