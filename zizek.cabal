@@ -111,6 +111,7 @@ library
     Hegel.Internal.Control
     Hegel.Internal.DataSource
     Hegel.Internal.DatabaseKey
+    Hegel.Internal.Event
     Hegel.Internal.FFI
     Hegel.Internal.Schema
     Hegel.Internal.TestCase
@@ -121,13 +122,21 @@ library
     Hegel.Property.Internal
     Hegel.Report
     Hegel.Report.Ann
+    Hegel.Report.Blame
     Hegel.Report.Discovery
     Hegel.Report.Encoding
+    Hegel.Report.Glyph
     Hegel.Report.Journal
+    Hegel.Report.Ledger
     Hegel.Report.Note
+    Hegel.Report.Phrase
     Hegel.Report.Source
     Hegel.Report.Span
     Hegel.Report.Stateful
+    Hegel.Report.Style
+    Hegel.Report.Trace
+    Hegel.Report.Trajectory
+    Hegel.Report.Verdict
     Hegel.Runner
     Hegel.Settings
     Hegel.Stateful
@@ -302,10 +311,10 @@ executable test-stateful
 
 -- Gallery of deliberately-failing stateful machines, each stressing one
 -- rendering decision of the rich report renderer; for manual eyeballing.
--- Not run by CI; `cabal run stateful-report-gallery` from the repo root.
-executable stateful-report-gallery
+-- Not run by CI; `just gallery` from the repo root.
+executable gallery
   import: conformance
-  hs-source-dirs: examples/stateful-report-gallery
+  hs-source-dirs: examples/gallery
   main-is: Main.hs
   build-depends:
     containers ^>=0.7,
@@ -323,6 +332,7 @@ executable profile-hegel
   hs-source-dirs: tests/profile
   main-is: Main.hs
   other-modules:
+    Handles
     Stress
     Warehouse
 
@@ -348,11 +358,15 @@ test-suite unit
     GeneratorSchemas
     Integrations
     KeyedProperties
+    LedgerRendering
+    PoolEvents
     PropertyChecks
     ReportRendering
     SourceRendering
     StandardGenerators
     Stateful
+    TraceFixtures
+    TraceIR
 
   build-depends:
     hspec ^>=2.11,
