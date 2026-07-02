@@ -117,3 +117,7 @@ profile-time-compare:
 check-coverage:
   @echo "check-coverage: not yet implemented — add hpc-codecov to flake.nix devShell and wire up here"
   @exit 1
+
+# Render the failure-report gallery (plain splice → stateful → trajectory → composed ledger; eyeball harness)
+gallery:
+    cabal run gallery
