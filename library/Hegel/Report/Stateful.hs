@@ -1,8 +1,8 @@
 -- | Source-spliced rendering of stateful (step-structured) failure journals:
--- two 'Layout's over the same journal, under evaluation against real
--- failures via the @demo-stateful-rich@ harness — not yet wired into
--- 'Hegel.Report.renderReportRich'. See the doc-rendering plan referenced in
--- @notes\/01-stateful-test-reporting.md@.
+-- two 'Layout's over the same journal. 'Timeline' backs
+-- 'Hegel.Report.renderReportRich' for step journals; 'Aggregate' is under
+-- evaluation against real failures via the @demo-stateful-rich@ harness. See
+-- the doc-rendering plan referenced in @notes\/01-stateful-test-reporting.md@.
 module Hegel.Report.Stateful
   ( Layout (..),
     statefulDoc,
@@ -15,13 +15,15 @@ import Data.Char qualified as Char
 import Data.Either (partitionEithers)
 import Data.List (partition)
 import Data.Maybe (isJust)
+import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Tree (Tree (..), flatten)
 import GHC.Stack (SrcLoc (..))
-import Hegel.Report.Ann (Ann (..))
+import Hegel.Diff (Diff)
+import Hegel.Report.Ann (Ann (..), diffDocs)
 import Hegel.Report.Discovery (Declarations)
-import Hegel.Report.Journal (groupByDepth, noteLineDoc, numberDraws)
-import Hegel.Report.Note (Note (..), NoteKind (..), hasInBandFailure)
+import Hegel.Report.Journal (groupByDepth, locDoc, noteLineDoc, numberDraws)
+import Hegel.Report.Note (Note (..), NoteKind (..), hasInBandFailure, isFailureNote)
 import Hegel.Report.Source
   ( Annotation,
     Declaration,
@@ -64,21 +66,37 @@ noteFiles notes = [l.srcLocFile | n <- notes, Just l <- [n.loc]]
 isStepJournal :: [Note] -> Bool
 isStepJournal notes = hasInBandFailure notes || any (\n -> n.depth > 0) notes
 
--- | Render a step-structured journal under the given 'Layout'. Pure; the
+-- | Render a step-structured failure under the given 'Layout'. Pure; the
 -- caller loads 'Declarations' once (see 'noteFiles'). Notes that cannot be
 -- spliced — no location, unreadable source, or excluded by the layout —
--- fall back to their structured journal line, per-note.
-statefulDoc :: Layout -> Declarations -> [Note] -> Doc Ann
-statefulDoc layout decls notes = case layout of
-  Timeline -> PP.vsep (fmap (groupDoc decls) groups <> footerDocs)
-  Aggregate -> aggregateDoc decls groups footerDocs
+-- fall back to their structured journal line, per-note; when nothing at all
+-- splices, the output equals the plain structured layout.
+--
+-- Mirrors 'Hegel.Report.failureDoc''s branches: a journal carrying an
+-- in-band 'Failure' suppresses the top-level headline\/diff\/location block
+-- (the 'Failure' note carries them); a 'Failure'-less step journal (e.g. an
+-- exception mid-loop) keeps them.
+statefulDoc :: Layout -> Declarations -> Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Doc Ann
+statefulDoc layout decls message notes loc diff
+  | hasInBandFailure notes = body
+  | otherwise = PP.vsep (PP.annotate MessageAnn (PP.pretty message) : topBlock <> [body])
   where
+    body = case layout of
+      Timeline -> PP.vsep (fmap (groupDoc decls) groups <> footerDocs)
+      Aggregate -> aggregateDoc decls groups footerDocs
     (groups, footers) = toGroups notes
     footerDocs = [PP.indent 2 (PP.annotate NoteAnn (PP.pretty n.text)) | n <- footers]
+    topBlock :: [Doc Ann]
+    topBlock =
+      fmap
+        (PP.indent 2)
+        ( maybe [] (\d -> [PP.vsep (diffDocs d)]) diff
+            <> maybe [] (\l -> [PP.annotate LocAnn ("at" <+> locDoc l)]) loc
+        )
 
 -- | Does this group's subtree carry the in-band 'Failure'?
 groupHasFailure :: Group -> Bool
-groupHasFailure g = any (\(_, n) -> n.kind == Failure) (g.root : g.body)
+groupHasFailure g = any (isFailureNote . snd) (g.root : g.body)
 
 -- | One depth-0 subtree of the journal: a step header (or bare top-level
 -- note) plus its flattened body, draw numbers pre-assigned journal-wide so
@@ -115,7 +133,7 @@ groupDoc decls g = PP.vsep (anchored <> listings)
     -- failure on the spine: suffix the group's first structured line
     -- (normally the step header) with the mark.
     anchored
-      | or [n.kind == Failure | (n, Right _) <- results],
+      | or [isFailureNote n | (n, Right _) <- results],
         d : ds <- structured =
           (d <+> PP.annotate FailureMark "✗") : ds
       | otherwise = structured
@@ -150,7 +168,7 @@ aggregateDoc decls groups footerDocs =
     -- Suffix only for failures in the body: a 'Failure' root renders its own
     -- ✗ block via 'fallbackLine' already.
     headerLine g
-      | any (\(_, n) -> n.kind == Failure) g.body =
+      | any (isFailureNote . snd) g.body =
           fallbackLine g.root <+> PP.annotate FailureMark "✗"
       | otherwise = fallbackLine g.root
 
@@ -184,8 +202,8 @@ spliceNote decls mlabel x@(_, n) =
     sl <- n.loc
     let sp = spanFromSrcLoc sl
     case n.kind of
-      Failure ->
-        ppFailureLocation decls (labelFirst (fmap PP.pretty (T.lines n.text))) n.diff sp
+      Failure diff ->
+        ppFailureLocation decls (labelFirst (fmap PP.pretty (T.lines n.text))) diff sp
       _ ->
         ppInlinedValue decls (labelFirst (fmap (PP.annotate AnnotationValue . PP.pretty) (T.lines n.text))) sp
   where

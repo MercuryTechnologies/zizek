@@ -27,8 +27,8 @@ Minimum supported GHC version is 9.10 (enforced in CI and `zizek.cabal`). If you
 - `library/Hegel/Property.hs` — Property monad public API: `PropertyT`/`Property`, `forAll`/`forAllWith`/`forAllSilent`, `annotate`/`footnote`, `assume`/`discard`, `check`/`check_`, `assert`/`failure`, `(===)`/`(/==)`. Internals in `library/Hegel/Property/Internal.hs`
 - `library/Hegel/Stateful.hs` — stateful (model-based) testing: `Machine`/`Rule`/`Invariant` and `run`, layered on `PropertyT` (see Stateful Testing below)
 - `library/Hegel/Pool.hs` — engine-managed pools of values for stateful rules to draw from; an empty-pool draw discards the case
-- `library/Hegel/Report.hs` — `Report`/`Result`/`Note`/`Stats` plus the plain/ANSI renderers: what a property run produces
-- `library/Hegel/Report/*.hs` — the rich source-splicing renderer: `Ann` (annotations/styles), `Discovery` (declaration lookup), `Source` (splicing/layout), `Span`
+- `library/Hegel/Report.hs` — `Report`/`Result`/`Stats` plus the plain/ANSI renderers: what a property run produces
+- `library/Hegel/Report/*.hs` — the rich source-splicing renderer: `Ann` (annotations/styles), `Discovery` (declaration lookup), `Source` (splicing/layout), `Span`, `Note` (journal entries), `Journal` (depth regrouping + structured journal rendering), `Stateful` (step-journal splicing: `Timeline`/`Aggregate` layouts; eyeball via `cabal run demo-stateful-rich`)
 - `library/Hegel/Diff.hs` — structural and line-level diffs backing `(===)` failures
 - `library/Hegel/Assertion.hs` — `assert`/`failure` (`MonadIO`-polymorphic, call-stack-aware), failure-origin formatting
 - `library/Hegel/Hspec.hs`, `library/Hegel/Tasty.hs` — framework integrations with automatic database keying (see Framework Integrations below)

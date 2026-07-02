@@ -6,8 +6,8 @@
 -- Run with @cabal run demo-stateful-rich@ from the repo root (source
 -- splicing resolves @srcLocFile@ relative to the working directory). Each
 -- scenario prints PLAIN ('renderReport') and both rich layouts via
--- 'statefulDoc', bypassing the report renderers (which still degrade until
--- 'Timeline' is wired in).
+-- 'statefulDoc' directly — 'renderReportRich' shows only the wired-in
+-- 'Timeline'.
 --
 -- The scenarios exercise the layout decisions:
 --
@@ -76,11 +76,11 @@ showReport title report = do
   T.putStrLn "-- PLAIN (renderReport) --"
   T.putStrLn (renderReport report)
   case report.result of
-    Counterexample {notes} -> do
+    Counterexample {message, notes, loc, diff} -> do
       decls <- loadDeclarations (noteFiles notes)
       let rich name layout = do
             T.putStrLn ("-- " <> name <> " --")
-            T.putStrLn (docToAnsi (statefulDoc layout decls notes))
+            T.putStrLn (docToAnsi (statefulDoc layout decls message notes loc diff))
       rich "RICH-TIMELINE (chronological spine, failing step spliced)" Timeline
       rich "RICH-AGGREGATE (every step's values aggregated onto the machine's source)" Aggregate
     _ -> T.putStrLn "(no counterexample)"
@@ -224,8 +224,10 @@ data Warehouse = Warehouse
   }
   deriving stock (Show)
 
+-- | Two SKUs, not more: the bug needs two same-SKU orders, and each extra
+-- SKU multiplies the engine's search for that conjunction.
 skus :: [Text]
-skus = ["apple", "banana", "cherry"]
+skus = ["apple", "banana"]
 
 -- | Adjust a per-SKU tally, dropping entries at (or below) zero.
 tally :: Text -> Int -> Map Text Int -> Map Text Int
@@ -235,7 +237,7 @@ restock :: Stateful.Rule Warehouse IO
 restock =
   Stateful.Rule "restock" \w -> do
     sku <- forAll (Gen.element skus)
-    qty <- forAll (Gen.int & Gen.min 1 & Gen.max 20 & Gen.build)
+    qty <- forAll (Gen.int & Gen.min 5 & Gen.max 10 & Gen.build)
     pure w {stock = tally sku qty w.stock}
 
 -- | Reserve stock for a new order; only as much as is unreserved.
@@ -243,7 +245,7 @@ placeOrder :: Stateful.Rule Warehouse IO
 placeOrder =
   Stateful.Rule "place_order" \w -> do
     sku <- forAll (Gen.element skus)
-    qty <- forAll (Gen.int & Gen.min 1 & Gen.max 5 & Gen.build)
+    qty <- forAll (Gen.int & Gen.min 1 & Gen.max 3 & Gen.build)
     let available =
           Map.findWithDefault 0 sku w.stock - Map.findWithDefault 0 sku w.reserved
     assume (qty <= available)
@@ -338,16 +340,16 @@ syntheticReport = Report {result, stats = Stats {valid = 7, invalid = 0}}
   where
     realLoc = hereLoc -- scenario 6 splices this line
     fakeLoc = SrcLoc "zizek" "Main" "no/such/file.hs" 1 1 1 9
-    note kind text loc diff depth = Note {kind, text, loc, diff, depth}
+    note kind text loc depth = Note {kind, text, loc, depth}
     result =
       Counterexample
         { message = "synthetic failure",
           notes =
-            [ note Annotation "Step 1: real_loc" Nothing Nothing 0,
-              note Drawn "42" (Just realLoc) Nothing 1,
-              note Annotation "Step 2: fake_loc" Nothing Nothing 0,
-              note Drawn "\"unspliceable\"" (Just fakeLoc) Nothing 1,
-              note Failure "synthetic failure" (Just realLoc) Nothing 1
+            [ note Annotation "Step 1: real_loc" Nothing 0,
+              note Drawn "42" (Just realLoc) 1,
+              note Annotation "Step 2: fake_loc" Nothing 0,
+              note Drawn "\"unspliceable\"" (Just fakeLoc) 1,
+              note (Failure Nothing) "synthetic failure" (Just realLoc) 1
             ],
           loc = Just realLoc,
           diff = Nothing

@@ -21,6 +21,7 @@ import Data.List (partition)
 import Data.Traversable (mapAccumL)
 import Data.Tree (Forest, Tree (..))
 import GHC.Stack (SrcLoc (..))
+import Hegel.Diff (Diff)
 import Hegel.Report.Ann (Ann (..), diffDocs)
 import Hegel.Report.Note (Note (..), NoteKind (..))
 import Prettyprinter (Doc, (<+>))
@@ -104,7 +105,7 @@ noteLineDoc (mIx, n) = case mIx of
   -- An index means a 'Drawn' note: only draws are numbered.
   Just i -> PP.annotate DrawnAnn ("Draw" <+> PP.pretty i <> ":" <+> PP.align (PP.pretty n.text))
   Nothing -> case n.kind of
-    Failure -> failureNoteDoc n
+    Failure diff -> failureNoteDoc diff n
     -- 'Annotation'; 'Footnote' and unnumbered 'Drawn' are unreachable
     -- (footnotes are hoisted before grouping, draws always numbered).
     _ -> PP.annotate NoteAnn (PP.pretty n.text)
@@ -113,11 +114,11 @@ noteLineDoc (mIx, n) = case mIx of
 -- (if any) indented under it, then the source location. Rendered at the
 -- note's tree position, so the offsets are relative: @+4@ for the diff (one
 -- nesting level plus two to clear the @✗ @ marker), @+2@ for the location.
-failureNoteDoc :: Note -> Doc Ann
-failureNoteDoc n =
+failureNoteDoc :: Maybe Diff -> Note -> Doc Ann
+failureNoteDoc diff n =
   PP.vsep $
     (PP.annotate FailureMark "✗" <+> PP.annotate MessageAnn (PP.pretty n.text))
-      : fmap (PP.indent 4) (maybe [] (\d -> [PP.vsep (diffDocs d)]) n.diff)
+      : fmap (PP.indent 4) (maybe [] (\d -> [PP.vsep (diffDocs d)]) diff)
         <> fmap (PP.indent 2) (maybe [] (\l -> [PP.annotate LocAnn ("at" <+> locDoc l)]) n.loc)
 
 -- | @file:line@ of a source location.

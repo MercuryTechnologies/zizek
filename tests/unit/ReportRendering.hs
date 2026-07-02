@@ -28,22 +28,22 @@ aLoc =
     }
 
 drawn, annotation, footer :: Text -> Note
-drawn t = Note {kind = Drawn, text = t, loc = Nothing, diff = Nothing, depth = 0}
-annotation t = Note {kind = Annotation, text = t, loc = Nothing, diff = Nothing, depth = 0}
-footer t = Note {kind = Footnote, text = t, loc = Nothing, diff = Nothing, depth = 0}
+drawn t = Note {kind = Drawn, text = t, loc = Nothing, depth = 0}
+annotation t = Note {kind = Annotation, text = t, loc = Nothing, depth = 0}
+footer t = Note {kind = Footnote, text = t, loc = Nothing, depth = 0}
 
 -- | A step header (loc-less annotation) at top level, as emitted by
 -- 'Hegel.Stateful'.
 step :: Text -> Note
-step t = Note {kind = Annotation, text = t, loc = Nothing, diff = Nothing, depth = 0}
+step t = Note {kind = Annotation, text = t, loc = Nothing, depth = 0}
 
 -- | A draw nested under a step (depth 1).
 nestedDrawn :: Text -> Note
-nestedDrawn t = Note {kind = Drawn, text = t, loc = Nothing, diff = Nothing, depth = 1}
+nestedDrawn t = Note {kind = Drawn, text = t, loc = Nothing, depth = 1}
 
 -- | An in-band failure nested under a step (depth 1).
 failureAt :: Text -> Maybe Diff -> Maybe SrcLoc -> Note
-failureAt t d l = Note {kind = Failure, text = t, loc = l, diff = d, depth = 1}
+failureAt t d l = Note {kind = Failure d, text = t, loc = l, depth = 1}
 
 -- | The 'SrcLoc' of the call site, so tests can point a note at a line that
 -- really exists in this file without hardcoding line numbers.
@@ -174,7 +174,7 @@ spec = do
               { message = "boom",
                 notes =
                   [ step "Step 1: push",
-                    Note {kind = Drawn, text = "Stack\n[ 1 ]", loc = Nothing, diff = Nothing, depth = 1}
+                    Note {kind = Drawn, text = "Stack\n[ 1 ]", loc = Nothing, depth = 1}
                   ],
                 loc = Nothing,
                 diff = Nothing
@@ -197,8 +197,8 @@ spec = do
               { message = "boom",
                 notes =
                   [ step "Step 1: push",
-                    Note {kind = Annotation, text = "deep note", loc = Nothing, diff = Nothing, depth = 2},
-                    Note {kind = Failure, text = "boom", loc = Just aLoc, diff = Nothing, depth = 2}
+                    Note {kind = Annotation, text = "deep note", loc = Nothing, depth = 2},
+                    Note {kind = Failure Nothing, text = "boom", loc = Just aLoc, depth = 2}
                   ],
                 loc = Just aLoc,
                 diff = Nothing
@@ -221,7 +221,7 @@ spec = do
               { message = "boom",
                 notes =
                   [ drawn "1",
-                    Note {kind = Footnote, text = "nested footer", loc = Nothing, diff = Nothing, depth = 1}
+                    Note {kind = Footnote, text = "nested footer", loc = Nothing, depth = 1}
                   ],
                 loc = Nothing,
                 diff = Nothing
@@ -245,7 +245,7 @@ spec = do
     let shape :: Forest Note -> Forest Text
         shape = fmap (fmap (.text))
         at :: Int -> Text -> Note
-        at d t = Note {kind = Annotation, text = t, loc = Nothing, diff = Nothing, depth = d}
+        at d t = Note {kind = Annotation, text = t, loc = Nothing, depth = d}
 
     it "keeps a flat depth-0 journal as sibling roots" $ do
       shape (groupByDepth [drawn "a", annotation "b", drawn "c"])
@@ -315,7 +315,7 @@ spec = do
           result =
             Counterexample
               { message = "boom",
-                notes = [Note {kind = Drawn, text = "42", loc = Just loc', diff = Nothing, depth = 0}],
+                notes = [Note {kind = Drawn, text = "42", loc = Just loc', depth = 0}],
                 loc = Nothing,
                 diff = Nothing
               }
@@ -325,10 +325,11 @@ spec = do
       -- file, so the source listing should include the marked line.
       "splice-marker" `T.isInfixOf` rich `shouldBe` True
 
-    it "degrades to the structured layout for a Failure-bearing journal" $ do
-      -- Stateful reports carry an in-band 'Failure' note; the rich renderer
-      -- must reuse the plain structured layout rather than attempt to splice
-      -- source, so rich and plain agree byte-for-byte.
+    it "falls back to the plain structured layout when nothing splices" $ do
+      -- The stateful rich path falls back per-note; with every location
+      -- unreadable (aLoc names a file that doesn't exist) the output must
+      -- equal the plain layout byte-for-byte — the old degrade guarantee
+      -- surviving as the degenerate case.
       let result =
             Counterexample
               { message = "counter stays small",
@@ -342,6 +343,49 @@ spec = do
           report = Report {result, stats = Stats {valid = 4, invalid = 0}}
       rich <- renderReportRich report
       rich `shouldBe` renderReport report
+
+    it "splices the failing step's notes into their source" $ do
+      let drawLoc = hereLoc -- stateful-splice-marker-draw
+          failLoc = hereLoc -- stateful-splice-marker-fail
+          result =
+            Counterexample
+              { message = "boom",
+                notes =
+                  [ step "Step 1: rule_a",
+                    Note {kind = Drawn, text = "42", loc = Just drawLoc, depth = 1},
+                    Note {kind = Failure Nothing, text = "boom", loc = Just failLoc, depth = 1}
+                  ],
+                loc = Just failLoc,
+                diff = Nothing
+              }
+          report = Report {result, stats = Stats {valid = 3, invalid = 0}}
+      rich <- renderReportRich report
+      -- The step header stays on the spine; the draw and the failure splice
+      -- into this very declaration, under one listing header.
+      ("Step 1: rule_a" `T.isInfixOf` rich) `shouldBe` True
+      ("stateful-splice-marker-draw" `T.isInfixOf` rich) `shouldBe` True
+      ("stateful-splice-marker-fail" `T.isInfixOf` rich) `shouldBe` True
+      T.count "┏━━" rich `shouldBe` 1
+
+    it "mixes spliced and structured notes in the failing step (per-note fallback)" $ do
+      let goodLoc = hereLoc -- stateful-mix-marker
+          badLoc = aLoc -- names a file that does not exist
+          result =
+            Counterexample
+              { message = "boom",
+                notes =
+                  [ step "Step 1: mixed",
+                    Note {kind = Drawn, text = "7", loc = Just badLoc, depth = 1},
+                    Note {kind = Failure Nothing, text = "boom", loc = Just goodLoc, depth = 1}
+                  ],
+                loc = Just goodLoc,
+                diff = Nothing
+              }
+          report = Report {result, stats = Stats {valid = 3, invalid = 0}}
+      rich <- renderReportRich report
+      -- The failure splices; the unreadable draw keeps its structured line.
+      ("stateful-mix-marker" `T.isInfixOf` rich) `shouldBe` True
+      ("Draw 1: 7" `T.isInfixOf` rich) `shouldBe` True
 
     it "degrades to plain renderReport when the source file is missing" $ do
       let loc' =
@@ -357,7 +401,7 @@ spec = do
           result =
             Counterexample
               { message = "boom",
-                notes = [Note {kind = Drawn, text = "42", loc = Just loc', diff = Nothing, depth = 0}],
+                notes = [Note {kind = Drawn, text = "42", loc = Just loc', depth = 0}],
                 loc = Nothing,
                 diff = Nothing
               }

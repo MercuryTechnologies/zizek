@@ -6,13 +6,14 @@ import Data.Function ((&))
 import Data.Maybe (isNothing)
 import Data.Set (Set)
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Hegel (Gen)
 import Hegel.Gen qualified as Gen
 import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, assume, forAll, forAllSilent)
 import Hegel.Property.Internal (Env (..), askEnv)
-import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..))
+import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), isFailureNote, renderReportRich)
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
@@ -171,13 +172,29 @@ statefulSpec = describe "Machine" do
     report <- check defaultSettings (Stateful.run machine)
     case report.result of
       Counterexample {notes} ->
-        case [n | n <- notes, n.kind == Failure] of
+        case filter isFailureNote notes of
           [f] -> do
             f.text `shouldBe` "counter does not exceed 5"
             f.depth `shouldBe` 1
             f.loc `shouldSatisfy` (not . isNothing)
           fs -> expectationFailure ("expected exactly one Failure note, got: " <> show (length fs))
       other -> expectationFailure ("expected Counterexample, got: " <> show other)
+
+  it "rich report splices the failing invariant's source" do
+    -- End-to-end through 'renderReportRich': the failing step's notes splice
+    -- into this file's declarations (requires cwd = repo root, as under
+    -- `just test`).
+    let machine =
+          Stateful.Machine
+            { initial = pure (Counter 0),
+              rules = [increment],
+              invariants = [neverAboveFive]
+            }
+    report <- check defaultSettings (Stateful.run machine)
+    rich <- renderReportRich report
+    -- The invariant's assert line (in 'neverAboveFive') is spliced.
+    ("assert (n <= 5)" `T.isInfixOf` rich) `shouldBe` True
+    ("┏━━ tests/unit/Stateful.hs" `T.isInfixOf` rich) `shouldBe` True
 
   it "value-drawing counterexample reproduces on replay" do
     -- Regression guard for choice-sequence alignment: with multiple rules that

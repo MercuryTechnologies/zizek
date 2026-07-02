@@ -11,6 +11,7 @@ module Hegel.Report
     -- * Notes (re-exported from "Hegel.Report.Note")
     Note (..),
     NoteKind (..),
+    isFailureNote,
 
     -- * Rendering
     renderReport,
@@ -39,7 +40,7 @@ import Hegel.Diff (Diff)
 import Hegel.Report.Ann (Ann (..), diffDocs, docToAnsi, docToText)
 import Hegel.Report.Discovery (loadDeclarations)
 import Hegel.Report.Journal (journalDocs, locDoc)
-import Hegel.Report.Note (Note (..), NoteKind (..), hasInBandFailure)
+import Hegel.Report.Note (Note (..), NoteKind (..), hasInBandFailure, isFailureNote)
 import Hegel.Report.Source
   ( applyContext,
     defaultContext,
@@ -50,6 +51,7 @@ import Hegel.Report.Source
     ppFailureLocation,
   )
 import Hegel.Report.Span (Span (..), spanFromSrcLoc)
+import Hegel.Report.Stateful (Layout (Timeline), isStepJournal, noteFiles, statefulDoc)
 import Prettyprinter (Doc, (<+>))
 import Prettyprinter qualified as PP
 import Text.Show.Pretty qualified as Pretty
@@ -181,12 +183,14 @@ renderReportRichWith plain toText report = case report.result of
 -- declaration could be read for any location.
 richDoc :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> IO (Maybe (Doc Ann))
 richDoc message notes loc diff
-  -- Journals carrying an in-band 'Failure' note (stateful reports) don't fit
-  -- the source-splicing model: their structure is @Step N@ annotations, not
-  -- drawn-value declarations. Degrade to the shared structured layout so the
-  -- plain and rich renderers agree.
-  | hasInBandFailure notes =
-      pure (Just (failureDoc message notes loc diff))
+  -- Step-structured journals (stateful reports) render via the 'Timeline'
+  -- layout: the failing step's notes spliced into their source, every other
+  -- step as the structured spine. Each note falls back to its structured
+  -- line when its source can't be read, so with nothing spliceable this
+  -- equals the plain layout.
+  | isStepJournal notes = do
+      decls <- loadDeclarations (noteFiles notes)
+      pure (Just (statefulDoc Timeline decls message notes loc diff))
 richDoc message notes loc diff = do
   let (footers, inline) = partition (\n -> n.kind == Footnote) notes
       inputs = [(fmap spanFromSrcLoc n.loc, n.text) | n <- inline]

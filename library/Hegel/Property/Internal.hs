@@ -100,21 +100,21 @@ askEnv = PropertyT ask
 -- 'footnote', for library-internal callers that need to control the recorded
 -- 'SrcLoc' (or omit it) explicitly.
 note :: (MonadIO m) => NoteKind -> Maybe SrcLoc -> Text -> PropertyT m ()
-note kind loc text = journalNote kind loc Nothing text
+note = journalNote
 
 -- | Journal a 'Failure': an assertion's message, source location, and diff,
 -- to be rendered in-band in the report.
 --
 -- See 'Hegel.Report.Failure'.
 noteFailure :: (MonadIO m) => Maybe SrcLoc -> Maybe Diff -> Text -> PropertyT m ()
-noteFailure loc diff text = journalNote Failure loc diff text
+noteFailure loc diff = journalNote (Failure diff) loc
 
 -- | The sole 'Note' construction site: stamp the ambient 'noteDepth' onto the
 -- note and hand it to the journal.
-journalNote :: (MonadIO m) => NoteKind -> Maybe SrcLoc -> Maybe Diff -> Text -> PropertyT m ()
-journalNote kind loc diff text = PropertyT do
+journalNote :: (MonadIO m) => NoteKind -> Maybe SrcLoc -> Text -> PropertyT m ()
+journalNote kind loc text = PropertyT do
   env <- ask
-  liftIO (env.journal Note {kind, text, loc, diff, depth = env.noteDepth})
+  liftIO (env.journal Note {kind, text, loc, depth = env.noteDepth})
 
 -- | Run a property with its journaled notes recorded one level deeper.
 --
