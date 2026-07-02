@@ -308,6 +308,25 @@ executable demo-stateful-rich
     containers ^>=0.7,
     zizek,
 
+-- Profiling scenarios: deterministic, named workloads isolating the
+-- Haskell-side hot paths (see notes/decisions/profiling-harness.md).
+-- `cabal run profile-hegel -- --list` for the scenario list; driven by
+-- `just profile-run` / `just profile-space` / `just profile-time`.
+executable profile-hegel
+  import: conformance
+  -- -N1 (overriding conformance's -N): the scenarios are single-threaded, and
+  -- parallel GC would only add nondeterministic noise to profiles & timings.
+  ghc-options: -with-rtsopts=-N1
+  hs-source-dirs: tests/profile
+  main-is: Main.hs
+  other-modules:
+    Stress
+    Warehouse
+
+  build-depends:
+    containers ^>=0.7,
+    zizek,
+
 test-suite unit
   import: library
   type: exitcode-stdio-1.0

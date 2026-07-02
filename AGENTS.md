@@ -16,6 +16,10 @@ just check-format                                    # check formatting without 
 just docs                                            # build API docs via haddock
 just check-conformance                               # run python conformance tests (builds binaries, then runs pytest tests/conformance/)
 just check-coverage                                  # STUB: check coverage (add hpc-codecov to flake.nix first)
+just profile-run <scenario>                          # smoke-run a profiling scenario on the dev build
+just profile-space <scenario>                        # capture .prof/heap/eventlog into profiles/O<n>/ (prof_opt=0 for -O0)
+just profile-time                                    # hyperfine wall-clock of all scenarios on the default -O1 build
+just profile-time-compare                            # per-scenario -O1 vs -O0 A/B into profiles/compare/
 cabal test zizek:unit --test-options='--pattern "name"'  # run a single test (tasty --pattern glob)
 ```
 
@@ -125,10 +129,12 @@ Spans (`start_span`/`stop_span`) group related generation calls so the engine ca
 - `tests/unit/` — the `unit` cabal suite (tasty wrapping hspec specs): generators, schemas, property checks, report/source rendering, control signals, stateful, database replay, framework integrations
 - `tests/ffi/` — the `ffi` cabal suite: wire-level checks, plus a closed-world guard (`cbits/wire_enum_guard.c`, compiled with `-Werror=switch-enum`) that fails the build if `libhegel` adds an enum variant
 - `tests/conformance/` — Haskell binaries (one per generator category, plus `stateful` and `origin-deduplication`) invoked by the Python runner in `tests/conformance/pytest/test_conformance.py`, which validates generators produce values matching their declared constraints. Built binaries are symlinked into `tests/conformance/pytest/bin/`
+- `tests/profile/` — the `profile-hegel` executable: deterministic named workloads for profiling the Haskell-side hot paths, driven by the `just profile-*` recipes. Not a test suite — a completed run always exits 0. Scenario table and interpretation guide: `notes/decisions/profiling-harness.md`
 
 ## Miscellaneous Conventions
 
 - Use jujutsu (`jj`) for version control.
+- **Prototype loose, land tight**: while a workflow's design is still moving, driving `cabal` (or other tools) by hand is fine. Once it solidifies, fold the surviving invocations into `scripts/` + `justfile` recipes — the justfile is the discoverable surface, and one-off invocations in a transcript force the next session (human or agent) to rediscover them.
 - **Exception discipline**: Hegel's control signals (`AssumeRejected`, `TestStopped`) are async exceptions precisely so user catch-alls pass them through. Never hand-roll a `catch @SomeException` (or a base `try @SomeException`) around code that draws or asserts — it would swallow the discard/stop signals and corrupt the run. Use `Hegel.Internal.Control` (`catchControl`, `onFailure`, `tryProperty`) instead.
 - Design work is planned in `notes/` (e.g. `notes/01-stateful-test-reporting.md`). Read the relevant note before starting work it covers, and keep it current as decisions change.
 - `references/hegel-rust/` vendors the Rust/C engine reference (`hegel-c/include/hegel.h`, `src/stateful.rs`, …). It is the ground truth for engine semantics when Haskell-side documentation and behavior disagree.

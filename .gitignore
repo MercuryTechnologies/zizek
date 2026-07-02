@@ -12,8 +12,13 @@ result
 dist-newstyle/*
 cabal/*
 
-# GHC profiling artifacts
-**/*.prof*
+# GHC profiling artifacts (narrower than `*.prof*`, which would also swallow
+# cabal.project.profiling)
+**/*.prof
+**/*.prof.*
+
+# captured profiles (scripts/profile-*.sh output)
+profiles/
 
 # local claude settings
 .claude/settings.local.json
@@ -30,5 +35,3 @@ tests/conformance/pytest/bin/*
 # python bytecode cache
 __pycache__/
 
-# misc docs
-notes/*

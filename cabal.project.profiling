@@ -1,0 +1,16 @@
+-- Profiling build: `just profile-space` builds with this project file into
+-- dist-newstyle/prof. Inherit packages + wireform source-repository-packages
+-- from the base project so this file can't drift out of sync.
+import: cabal.project
+
+-- -O1, deliberately: zizek is a library that runs inside its consumers' test
+-- suites, and cabal builds those at -O1 by default, so this is the code users
+-- actually execute. To profile un-optimized code instead (e.g. when chasing
+-- something -O1 rewrites away), override at the call site:
+--   just prof_opt=0 profile-space <scenario>
+optimization: 1
+profiling: True
+
+-- Insert cost centres after optimization (-fprof-late) so the .prof
+-- attributes time/allocation accurately without perturbing the optimizer.
+profiling-detail: late-toplevel
