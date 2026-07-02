@@ -298,11 +298,12 @@ executable test-stateful
   build-depends:
     zizek
 
--- Manual eyeballing harness for stateful report rendering (plain vs rich).
--- Not run by CI; `cabal run demo-stateful-rich` from the repo root.
-executable demo-stateful-rich
+-- Gallery of deliberately-failing stateful machines, each stressing one
+-- rendering decision of the rich report renderer; for manual eyeballing.
+-- Not run by CI; `cabal run stateful-report-gallery` from the repo root.
+executable stateful-report-gallery
   import: conformance
-  hs-source-dirs: tests/demo/stateful-rich
+  hs-source-dirs: examples/stateful-report-gallery
   main-is: Main.hs
   build-depends:
     containers ^>=0.7,

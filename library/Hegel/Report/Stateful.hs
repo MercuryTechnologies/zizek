@@ -1,7 +1,7 @@
 -- | Source-spliced rendering of stateful (step-structured) failure journals:
 -- the structured timeline spine, with the failing step's notes spliced into
 -- their source declarations. Backs 'Hegel.Report.renderReportRich' for step
--- journals; eyeball via the @demo-stateful-rich@ harness. Layout rationale
+-- journals; eyeball via the @stateful-report-gallery@ example. Layout rationale
 -- (and the deleted @Aggregate@ alternative) is recorded in
 -- @notes\/decisions\/stateful-reporting.md@.
 module Hegel.Report.Stateful

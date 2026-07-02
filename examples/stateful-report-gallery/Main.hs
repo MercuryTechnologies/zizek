@@ -1,10 +1,9 @@
--- | Manual demo: failing stateful machines rendered through the plain
--- renderer and the rich stateful renderer, side by side, to eyeball the
--- rendering against real failures.
+-- | A gallery of deliberately-failing stateful machines rendered through the
+-- wired-in rich ANSI renderer ('renderReportRichAnsi') — the report a user
+-- actually sees on failure. Each scenario stresses one rendering decision.
 --
--- Run with @cabal run demo-stateful-rich@ from the repo root (source
--- splicing resolves @srcLocFile@ relative to the working directory). Each
--- scenario prints PLAIN ('renderReport') and RICH via 'statefulDoc'.
+-- Run with @cabal run stateful-report-gallery@ from the repo root (source
+-- splicing resolves @srcLocFile@ relative to the working directory).
 --
 -- The scenarios exercise the rendering decisions:
 --
@@ -20,7 +19,8 @@
 --      structures (stock, a denormalized reservation cache, and a pending
 --      order table), cross-structure consistency invariants, and a bug
 --      whose minimal counterexample interleaves three distinct rules; the
---      least contrived end-to-end rendering exercise
+--      least contrived exercise of the rich renderer on a realistic
+--      failure
 --
 -- Always exits 0; this is an eyeballing harness, not an assertion.
 module Main (main) where
@@ -29,7 +29,6 @@ import Data.Function ((&))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
-import Data.Text qualified as T
 import Data.Text.IO qualified as T
 import GHC.Stack (HasCallStack, SrcLoc (..), callStack, getCallStack)
 import Hegel.Assertion (assert)
@@ -41,12 +40,9 @@ import Hegel.Report
     Report (..),
     Result (..),
     Stats (..),
-    renderReport,
+    renderReportRichAnsi,
     renderValue,
   )
-import Hegel.Report.Ann (docToAnsi)
-import Hegel.Report.Discovery (loadDeclarations)
-import Hegel.Report.Stateful (noteFiles, statefulDoc)
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
@@ -64,18 +60,17 @@ main = do
 runScenario :: Text -> Property () -> IO ()
 runScenario title prop = showReport title =<< check defaultSettings prop
 
--- | Print one report through the plain and rich renderers.
+-- | Print one report through the wired rich ANSI renderer.
 showReport :: Text -> Report -> IO ()
 showReport title report = do
   T.putStrLn ("\n━━━━━ scenario " <> title <> " ━━━━━")
-  T.putStrLn "-- PLAIN (renderReport) --"
-  T.putStrLn (renderReport report)
-  case report.result of
-    Counterexample {message, notes, loc, diff} -> do
-      decls <- loadDeclarations (noteFiles notes)
-      T.putStrLn "-- RICH (chronological spine, failing step spliced) --"
-      T.putStrLn (docToAnsi (statefulDoc decls message notes loc diff))
-    _ -> T.putStrLn "(no counterexample)"
+  T.putStrLn =<< renderReportRichAnsi report
+
+-- | Naive count-with-noun pluralization for demo messages:
+-- @pluralize 1 "apple" = "1 apple"@, @pluralize 3 "apple" = "3 apples"@.
+pluralize :: Int -> Text -> Text
+pluralize 1 noun = "1 " <> noun
+pluralize n noun = renderValue n <> " " <> noun <> "s"
 
 -- * Scenario 1: multi-rule machine failing via '(===)'
 
@@ -168,7 +163,7 @@ tick = Stateful.Rule "tick" \n -> pure (n + 1)
 staysUnderSeven :: Stateful.Invariant Int IO
 staysUnderSeven =
   Stateful.Invariant "stays_under_seven" \n ->
-    assert (n < 7) ("ticked " <> T.pack (show n) <> " times, expected fewer than 7")
+    assert (n < 7) ("ticked " <> pluralize n "time" <> ", expected fewer than 7")
 
 tickerMachine :: Stateful.Machine Int IO
 tickerMachine =
@@ -182,7 +177,7 @@ tickerMachine =
 
 -- | Rules, invariant, and machine record all inline: declaration discovery
 -- attributes every splice to this single (large) declaration, stressing
--- context trimming and, for the per-rule layout, the single merged listing.
+-- context trimming.
 inlineMachine :: Stateful.Machine Int IO
 inlineMachine =
   Stateful.Machine
@@ -241,7 +236,7 @@ placeOrder =
     let available =
           Map.findWithDefault 0 sku w.stock - Map.findWithDefault 0 sku w.reserved
     assume (qty <= available)
-    annotate ("order #" <> renderValue w.nextOrder <> " reserves " <> renderValue qty <> " " <> sku)
+    annotate ("order #" <> renderValue w.nextOrder <> " reserves " <> pluralize qty sku)
     pure
       w
         { pending = Map.insert w.nextOrder (sku, qty) w.pending,
@@ -256,7 +251,7 @@ fulfillOrder =
     assume (not (Map.null w.pending))
     oid <- forAll (Gen.element (Map.keys w.pending))
     let (sku, qty) = w.pending Map.! oid
-    annotate ("fulfilling order #" <> renderValue oid <> ": " <> renderValue qty <> " " <> sku)
+    annotate ("fulfilling order #" <> renderValue oid <> ": " <> pluralize qty sku)
     pure
       w
         { pending = Map.delete oid w.pending,
@@ -326,7 +321,7 @@ hereLoc = case getCallStack callStack of
 
 -- | A hand-built counterexample: step 1's draw and the failure carry a real
 -- location in this declaration; step 2's draw points at a file that does not
--- exist, so it must fall back to its structured line in every layout.
+-- exist, so it must fall back to its structured line.
 syntheticReport :: Report
 syntheticReport = Report {result, stats = Stats {valid = 7, invalid = 0}}
   where
