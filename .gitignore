@@ -12,8 +12,15 @@ result
 dist-newstyle/*
 cabal/*
 
+# profiling/release builddirs (just profile-space / profile-time)
+dist-newstyle-prof/*
+dist-newstyle-release/*
+
 # GHC profiling artifacts
 **/*.prof*
+
+# captured profiles (scripts/profile-*.sh output)
+profiles/
 
 # local claude settings
 .claude/settings.local.json

@@ -308,6 +308,19 @@ executable demo-stateful-rich
     containers ^>=0.7,
     zizek,
 
+-- Profiling scenarios: deterministic, named workloads isolating the
+-- Haskell-side hot paths (see notes/04-profiling-harness.md).
+-- `cabal run profile-hegel -- --list` for the scenario list; driven by
+-- `just profile-run` / `just profile-space` / `just profile-time`.
+executable profile-hegel
+  import: conformance
+  hs-source-dirs: tests/profile
+  main-is: Main.hs
+  other-modules: Warehouse
+  build-depends:
+    containers ^>=0.7,
+    zizek,
+
 test-suite unit
   import: library
   type: exitcode-stdio-1.0
