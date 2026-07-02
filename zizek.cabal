@@ -111,6 +111,7 @@ library
     Hegel.Internal.Control
     Hegel.Internal.DataSource
     Hegel.Internal.DatabaseKey
+    Hegel.Internal.Event
     Hegel.Internal.FFI
     Hegel.Internal.Schema
     Hegel.Internal.TestCase
@@ -120,12 +121,14 @@ library
     Hegel.Property.Internal
     Hegel.Report
     Hegel.Report.Ann
+    Hegel.Report.Blame
     Hegel.Report.Discovery
     Hegel.Report.Journal
     Hegel.Report.Note
     Hegel.Report.Source
     Hegel.Report.Span
     Hegel.Report.Stateful
+    Hegel.Report.Trace
     Hegel.Runner
     Hegel.Settings
     Hegel.Stateful
@@ -346,11 +349,13 @@ test-suite unit
     GeneratorSchemas
     Integrations
     KeyedProperties
+    PoolEvents
     PropertyChecks
     ReportRendering
     SourceRendering
     StandardGenerators
     Stateful
+    TraceIR
 
   build-depends:
     hspec ^>=2.11,

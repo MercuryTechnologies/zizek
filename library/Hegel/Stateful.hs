@@ -54,6 +54,10 @@ module Hegel.Stateful
 
     -- * Execution
     run,
+
+    -- * Reporting
+    respond,
+    respondShow,
   )
 where
 
@@ -62,6 +66,8 @@ import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Function ((&))
 import Data.Text (Text)
 import Data.Text qualified as T
+import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
+import Hegel.Assertion (callSite)
 import Hegel.Gen qualified as Gen
 import Hegel.Internal.Control (ControlSignal (..), MalformedTest (..), catchControl, onFailure)
 import Hegel.Internal.DataSource (newStateMachine, stateMachineNextRule)
@@ -76,7 +82,7 @@ import Hegel.Property.Internal
     note,
     noteFailure,
   )
-import Hegel.Report (NoteKind (Annotation))
+import Hegel.Report (NoteKind (Annotation, Response, StepHeader), renderValue)
 import UnliftIO (MonadUnliftIO, throwIO, withRunInIO)
 
 -- | A rule applied to the model during a stateful test.
@@ -106,6 +112,30 @@ data Invariant s m = Invariant
 stepNote :: (MonadIO m) => Text -> PropertyT m ()
 stepNote = note Annotation Nothing
 {-# INLINE stepNote #-}
+
+-- | Declare the current rule's result, for the failure report.
+--
+-- The trace ledger renders it as the right-hand side of the step's
+-- @call → response@ line (@read h₁ → Right "a"@); the verdict paragraph
+-- quotes it as the observed actual. A step's /last/ 'respond' wins. Rules
+-- that never call it simply render without a response segment.
+--
+-- @
+-- Stateful.Rule "read" \\s -> do
+--   h <- forAll (Pool.valuesReusable s.handles)
+--   r <- liftIO (readHandle h)
+--   Stateful.respond (T.pack (show r))
+--   r === modelRead s h
+--   pure s
+-- @
+respond :: (HasCallStack, MonadIO m) => Text -> PropertyT m ()
+respond = note Response (callSite callStack)
+{-# INLINE respond #-}
+
+-- | 'respond' a value via its 'Show' instance.
+respondShow :: (HasCallStack, MonadIO m, Show a) => a -> PropertyT m ()
+respondShow = withFrozenCallStack (respond . renderValue)
+{-# INLINE respondShow #-}
 
 -- | A complete stateful test specification.
 data Machine s m = Machine
@@ -185,7 +215,11 @@ run machine = do
                           <> show (length machine.rules)
                           <> " rules. This should be impossible; please report it as a libhegel bug."
                       )
-            stepNote ("Step " <> T.pack (show (attempts + 1)) <> ": " <> rule.name)
+            let stepIndex = attempts + 1
+            note
+              (StepHeader stepIndex rule.name)
+              Nothing
+              ("Step " <> T.pack (show stepIndex) <> ": " <> rule.name)
             -- Only control signals are caught here; a real failure is
             -- journaled in-band (via 'withFailureNote') and then propagates
             -- out to the runner as the counterexample.

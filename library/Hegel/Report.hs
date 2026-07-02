@@ -13,6 +13,12 @@ module Hegel.Report
     NoteKind (..),
     isFailureNote,
 
+    -- * Events (re-exported from "Hegel.Internal.Event")
+    Event (..),
+    EventKind (..),
+    Var (..),
+    Clock (..),
+
     -- * Rendering
     renderReport,
     renderReportAnsi,
@@ -37,6 +43,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Stack (SrcLoc (..))
 import Hegel.Diff (Diff)
+import Hegel.Internal.Event (Clock (..), Event (..), EventKind (..), Var (..))
 import Hegel.Report.Ann (Ann (..), diffDocs, docToAnsi, docToText)
 import Hegel.Report.Discovery (loadDeclarations)
 import Hegel.Report.Journal (journalDocs, locDoc)
@@ -90,6 +97,9 @@ data Result
         message :: Text,
         -- | Journal entries describing the failing case.
         notes :: [Note],
+        -- | Pool events recorded alongside the journal (empty when the case
+        -- used no pools); shares a clock with 'Note.clock'.
+        events :: [Event],
         -- | Source location of the failing assertion, when known.
         loc :: Maybe SrcLoc,
         -- | Structural or line-level diff, when the failure came from '(===)'.

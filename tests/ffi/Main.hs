@@ -29,9 +29,10 @@ import Foreign.C.String (withCString)
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Internal (draw)
 import Hegel.Internal.Control (TestStopped (..))
+import Hegel.Internal.Event qualified as Event
 import Hegel.Internal.FFI
 import Hegel.Internal.Schema qualified as Schema
-import Hegel.Internal.TestCase (Status (..), mkTestCase)
+import Hegel.Internal.TestCase (Handle (..), Status (..), mkTestCase)
 import Hegel.Internal.TestCase qualified as TC
 import Hegel.Property (forEach)
 import Hegel.Runner qualified as Runner
@@ -164,7 +165,7 @@ genMachinerySpec = describe "Gen machinery" $ do
             if tcPtr == nullPtr
               then pure ()
               else do
-                tc <- mkTestCase ctx tcPtr
+                tc <- mkTestCase Event.Silent Handle {ctx, ptr = tcPtr}
                 n <- draw tc gen
                 n `shouldSatisfy` (\x -> x >= 0 && x <= 100)
                 TC.markComplete tc Valid
@@ -181,7 +182,7 @@ genMachinerySpec = describe "Gen machinery" $ do
             if tcPtr == nullPtr
               then pure ()
               else do
-                tc <- mkTestCase ctx tcPtr
+                tc <- mkTestCase Event.Silent Handle {ctx, ptr = tcPtr}
                 eVal <- try @TestStopped (draw tc gen)
                 case eVal of
                   -- Budget exhausted for this shrink probe; mark overrun.
@@ -216,7 +217,7 @@ completionSpec = describe "completion semantics" $
         withRun ctx s $ \run -> do
           tcPtr <- nextTestCase ctx run
           tcPtr `shouldNotBe` nullPtr
-          tc <- mkTestCase ctx tcPtr
+          tc <- mkTestCase Event.Silent Handle {ctx, ptr = tcPtr}
           _ <- draw tc (Gen.bool & Gen.build)
           TC.markComplete tc Valid
           result <- try @HegelError (TC.markComplete tc Valid)

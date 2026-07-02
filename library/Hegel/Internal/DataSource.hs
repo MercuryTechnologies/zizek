@@ -47,9 +47,10 @@ import Foreign (nullPtr, peek, withArray, withMany)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt)
 import Hegel.Internal.CString qualified as CString
 import Hegel.Internal.Control (AssumeRejected (..), TestStopped (..))
+import Hegel.Internal.Event qualified as Event
 import Hegel.Internal.FFI hiding (generate)
 import Hegel.Internal.FFI qualified as FFI (generate)
-import Hegel.Internal.TestCase (TestCase (..))
+import Hegel.Internal.TestCase (Handle (..), TestCase (..))
 import UnliftIO.Exception (catch)
 import Witch qualified
 
@@ -71,7 +72,7 @@ generate tc schema = generateEncoded tc (CE.encode schema)
 generateEncoded :: TestCase -> ByteString -> IO Value
 generateEncoded tc schemaBytes = do
   resultBytes <-
-    FFI.generate tc.ctx tc.ptr tc.slot schemaBytes
+    FFI.generate tc.handle.ctx tc.handle.ptr tc.slot schemaBytes
       `catch` \e@(HegelError {code}) -> case code of
         HEGEL_E_STOP_TEST -> throwIO TestStopped
         HEGEL_E_ASSUME -> throwIO AssumeRejected
@@ -90,7 +91,7 @@ generateEncoded tc schemaBytes = do
 handleReturnCode :: TestCase -> CInt -> IO ()
 handleReturnCode _ HEGEL_E_STOP_TEST = throwIO TestStopped
 handleReturnCode _ HEGEL_E_ASSUME = throwIO AssumeRejected
-handleReturnCode tc rc = throwOnError tc.ctx rc
+handleReturnCode tc rc = throwOnError tc.handle.ctx rc
 
 -- | Draw a single boolean that is 'True' with probability @p@ (clamped to
 -- @[0,1]@ by the engine).
@@ -100,7 +101,7 @@ primitiveBoolean :: TestCase -> Double -> IO Bool
 primitiveBoolean tc p =
   withSlot tc.slot \outValue -> do
     -- has_forced = 0: forced-draw support is unused (see 'hegel_primitive_boolean').
-    hegel_primitive_boolean tc.ctx tc.ptr (CDouble p) (CBool 0) (CBool 0) outValue
+    hegel_primitive_boolean tc.handle.ctx tc.handle.ptr (CDouble p) (CBool 0) (CBool 0) outValue
       >>= handleReturnCode tc
     (/= 0) . (\(CBool b) -> b) <$> peek outValue
 
@@ -112,7 +113,7 @@ primitiveBoolean tc p =
 newCollection :: TestCase -> Int -> Maybe Int -> IO Int
 newCollection tc minSz maxSz =
   withSlot tc.slot \outId -> do
-    hegel_new_collection tc.ctx tc.ptr (fromIntegral minSz) (maybe maxBound fromIntegral maxSz) outId
+    hegel_new_collection tc.handle.ctx tc.handle.ptr (fromIntegral minSz) (maybe maxBound fromIntegral maxSz) outId
       >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
 
@@ -122,7 +123,7 @@ newCollection tc minSz maxSz =
 collectionMore :: TestCase -> Int -> IO Bool
 collectionMore tc cid =
   withSlot tc.slot \outMore -> do
-    hegel_collection_more tc.ctx tc.ptr (fromIntegral cid) outMore >>= handleReturnCode tc
+    hegel_collection_more tc.handle.ctx tc.handle.ptr (fromIntegral cid) outMore >>= handleReturnCode tc
     (/= 0) . (\(CBool b) -> b) <$> peek outMore
 
 -- | Notify the engine that the last element was rejected.
@@ -132,10 +133,10 @@ collectionReject :: TestCase -> Int -> Maybe Text -> IO ()
 collectionReject tc cid mWhy =
   case mWhy of
     Nothing -> do
-      result <- hegel_collection_reject tc.ctx tc.ptr (fromIntegral cid) nullPtr
+      result <- hegel_collection_reject tc.handle.ctx tc.handle.ptr (fromIntegral cid) nullPtr
       handleReturnCode tc result
     Just why -> CString.withText why \p -> do
-      result <- hegel_collection_reject tc.ctx tc.ptr (fromIntegral cid) p
+      result <- hegel_collection_reject tc.handle.ctx tc.handle.ptr (fromIntegral cid) p
       handleReturnCode tc result
 
 -- * Pools
@@ -146,28 +147,43 @@ collectionReject tc cid mWhy =
 newPool :: TestCase -> IO Int
 newPool tc =
   withSlot tc.slot \outId -> do
-    hegel_new_pool tc.ctx tc.ptr outId >>= handleReturnCode tc
+    hegel_new_pool tc.handle.ctx tc.handle.ptr outId >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
 
 -- | Register a new variable in the pool; returns the engine-assigned
 -- variable id.
+--
+-- Records a 'Event.Born' event (this and 'poolGenerate' are the only pool
+-- emission points, so 'Hegel.Pool' needs no event awareness).
 poolAdd :: TestCase -> Int -> IO Int
-poolAdd tc pid =
-  withSlot tc.slot \outId -> do
-    hegel_pool_add tc.ctx tc.ptr (fromIntegral pid) outId >>= handleReturnCode tc
+poolAdd tc pid = do
+  vid <- withSlot tc.slot \outId -> do
+    hegel_pool_add tc.handle.ctx tc.handle.ptr (fromIntegral pid) outId >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
+  Event.emit tc.events \c ->
+    Event.Event {clock = c, var = Event.Var {pool = pid, id = vid}, kind = Event.Born}
+  pure vid
 
 -- | Draw a variable id from the pool.
 --
--- Pass 'True' to consume the variable (remove it from the pool).
+-- Pass 'True' to consume the variable (remove it from the pool). Records a
+-- 'Event.Reused'\/'Event.Consumed' event; a consuming draw is the value's
+-- death (the engine has no @pool_remove@).
 --
 -- Throws 'AssumeRejected' when the pool is empty, discarding the test case.
 poolGenerate :: TestCase -> Int -> Bool -> IO Int
-poolGenerate tc pid consume =
-  withSlot tc.slot \outId -> do
-    hegel_pool_generate tc.ctx tc.ptr (fromIntegral pid) (CBool (if consume then 1 else 0)) outId
+poolGenerate tc pid consume = do
+  vid <- withSlot tc.slot \outId -> do
+    hegel_pool_generate tc.handle.ctx tc.handle.ptr (fromIntegral pid) (CBool (if consume then 1 else 0)) outId
       >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
+  Event.emit tc.events \c ->
+    Event.Event
+      { clock = c,
+        var = Event.Var {pool = pid, id = vid},
+        kind = if consume then Event.Consumed else Event.Reused
+      }
+  pure vid
 
 -- * State machines
 
@@ -184,8 +200,8 @@ newStateMachine tc ruleNames invariantNames =
         withArray invPtrs \invArr ->
           withSlot tc.slot \outId -> do
             hegel_new_state_machine
-              tc.ctx
-              tc.ptr
+              tc.handle.ctx
+              tc.handle.ptr
               rulesArr
               (fromIntegral (length ruleNames))
               invArr
@@ -200,7 +216,7 @@ newStateMachine tc ruleNames invariantNames =
 stateMachineNextRule :: TestCase -> Int -> IO Int
 stateMachineNextRule tc mid =
   withSlot tc.slot \outIdx -> do
-    hegel_state_machine_next_rule tc.ctx tc.ptr (fromIntegral mid) outIdx
+    hegel_state_machine_next_rule tc.handle.ctx tc.handle.ptr (fromIntegral mid) outIdx
       >>= handleReturnCode tc
     fromIntegral <$> (peek outIdx :: IO Int64)
 
@@ -209,15 +225,15 @@ stateMachineNextRule tc mid =
 -- | Open a labeled span.
 startSpan :: TestCase -> Label -> IO ()
 startSpan tc label = do
-  result <- hegel_start_span tc.ctx tc.ptr (Witch.into @Word64 label)
-  throwOnError tc.ctx result
+  result <- hegel_start_span tc.handle.ctx tc.handle.ptr (Witch.into @Word64 label)
+  throwOnError tc.handle.ctx result
 
 -- | Close the most-recently-opened span.
 -- Pass 'True' to mark it discarded.
 stopSpan :: TestCase -> Bool -> IO ()
 stopSpan tc isDiscard = do
-  result <- hegel_stop_span tc.ctx tc.ptr (CBool (if isDiscard then 1 else 0))
-  throwOnError tc.ctx result
+  result <- hegel_stop_span tc.handle.ctx tc.handle.ptr (CBool (if isDiscard then 1 else 0))
+  throwOnError tc.handle.ctx result
 
 -- | Span labels used to group related draws so the engine can shrink them
 -- as a unit. Numeric values match @libhegel@'s constants.

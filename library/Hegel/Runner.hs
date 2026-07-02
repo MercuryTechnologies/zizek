@@ -21,8 +21,9 @@ import Hegel.Database (Database (..))
 import Hegel.HealthCheck (HealthCheck)
 import Hegel.Internal.CString qualified as CString
 import Hegel.Internal.Control (ControlSignal (..), MalformedTest, catchControl, isControlSignal)
+import Hegel.Internal.Event qualified as Event
 import Hegel.Internal.FFI
-import Hegel.Internal.TestCase (Status (..), TestCase, markComplete, mkTestCase)
+import Hegel.Internal.TestCase (Handle (..), Status (..), TestCase, markComplete, mkTestCase)
 import Hegel.Phase (Phase)
 import Hegel.Property.Internal (Property, failureDetails, observeProperty, propertyAction)
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
@@ -226,8 +227,9 @@ readRunError ctx res =
 reconstructProperty :: Ptr HegelContext -> Property () -> Ptr HegelSettings -> ByteString -> IO Result
 reconstructProperty ctx prop s blob =
   withTestCaseFromBlob ctx s blob \tcPtr -> do
-    tc <- mkTestCase ctx tcPtr
-    (eRes, notes) <- observeProperty tc prop
+    log_ <- Event.newLog
+    tc <- mkTestCase log_ Handle {ctx, ptr = tcPtr}
+    (eRes, notes, events) <- observeProperty tc prop
     pure case eRes of
       Left e
         -- A discard or budget stop during replay means the engine's failure
@@ -235,7 +237,7 @@ reconstructProperty ctx prop s blob =
         | isControlSignal e -> diverged
         | otherwise ->
             let (message, loc, diff) = failureDetails e
-             in Counterexample {message, notes, loc, diff}
+             in Counterexample {message, notes, events, loc, diff}
       Right () -> diverged
   where
     diverged =
@@ -290,7 +292,7 @@ runTestCase ctx settings action tcPtr =
   where
     Finalizer finalizer = settings.perCaseFinalizer
     run = do
-      tc <- mkTestCase ctx tcPtr
+      tc <- mkTestCase Event.Silent Handle {ctx, ptr = tcPtr}
       status <-
         -- 'catchControl' catches only Hegel's async control signals via base
         -- 'E.catches'; 'catchAny' (unliftio) then catches all remaining

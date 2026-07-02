@@ -35,7 +35,8 @@ import Hegel.Assertion (assert)
 import Hegel.Gen qualified as Gen
 import Hegel.Property (Property, annotate, assume, forAll, (===))
 import Hegel.Report
-  ( Note (..),
+  ( Clock (..),
+    Note (..),
     NoteKind (..),
     Report (..),
     Result (..),
@@ -327,7 +328,7 @@ syntheticReport = Report {result, stats = Stats {valid = 7, invalid = 0}}
   where
     realLoc = hereLoc -- scenario 6 splices this line
     fakeLoc = SrcLoc "zizek" "Main" "no/such/file.hs" 1 1 1 9
-    note kind text loc depth = Note {kind, text, loc, depth}
+    note kind text loc depth = Note {kind, text, loc, depth, clock = Clock 0}
     result =
       Counterexample
         { message = "synthetic failure",
@@ -338,6 +339,7 @@ syntheticReport = Report {result, stats = Stats {valid = 7, invalid = 0}}
               note Drawn "\"unspliceable\"" (Just fakeLoc) 1,
               note (Failure Nothing) "synthetic failure" (Just realLoc) 1
             ],
+          events = [],
           loc = Just realLoc,
           diff = Nothing
         }

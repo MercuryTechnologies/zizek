@@ -20,11 +20,19 @@ removes it. The bug: `read` on a closed handle returns stale data.
   actually rot CI logs (raw-log downloads render as `[0;91m` soup — the
   glyphs were never the problem). Strip them under `NO_COLOR` /
   `TERM=dumb` / non-tty.
-- **Force UTF-8 on the output handle.** GHC derives handle encoding from
-  the locale; under `LANG=C` (common in minimal containers) writing `●`
-  doesn't mojibake — it **throws** (`hPutChar: invalid character`). A
-  report that crashes while rendering is the worst possible outcome;
-  forcing utf8 turns that into worst-case mangled display downstream.
+- **Never crash on a non-UTF-8 output handle — via ASCII detection, not
+  encoding forcing** *(revised 2026-07-02 during M1)*. GHC derives handle
+  encoding from the locale; under `LANG=C` (common in minimal containers)
+  writing `●` doesn't mojibake — it **throws** (`hPutChar: invalid
+  character`). The original requirement here forced `hSetEncoding h utf8`;
+  a prototype landed and was backed out — mutating the host process's
+  handle encoding from a library is too blunt. Decision: when the output
+  handle's encoding is not UTF-capable, the integrations auto-select the
+  **ascii glyph table** (M3) and the ascii mode escapes non-ASCII user
+  text (annotations, shown values, rule names), giving a 7-bit-clean
+  guarantee; `HEGEL_GLYPHS` overrides in both directions. Accepted
+  interim: until the glyph table lands, reports still crash under
+  `LANG=C` (the pre-existing behavior).
 - **Unicode glyphs are the default everywhere, including CI.** Modern CI
   log viewers are HTML + monospace and render box drawing fine; jj/git set
   the precedent (piping drops color, keeps glyphs). The ascii glyph table
@@ -351,7 +359,11 @@ a *dataset*, Quint's a *session*. Options in that frame:
   failure; report = pure function of it; `hegel-trace show --layout=…
   --revset=…` re-renders offline. Makes layout/direction debates
   non-ship-blocking and turns captured real traces into a renderer
-  regression corpus.
+  regression corpus. (`.hegel-trace` names the *format*; storage location
+  decided at F4 time — preference on record (2026-07-02): a subdirectory
+  of the database dir, e.g. `.hegel/traces/…`, namespaced defensively
+  because `.hegel/` is engine-owned layout; weigh a frontend-agnostic
+  `traces/` against a `zizek/` namespace.)
 - **F5 — time-travel session.** Choice-sequence replay makes a stored
   counterexample steppable (`:step` / `:back` / `:state` / `:why`).
   Farthest out; design F4's format so this stays possible.
@@ -465,6 +477,14 @@ Rules pinned by the stress test:
   lanes-left / rail-right stay disjoint regions, so crossing machinery
   never activates. Rail edges render in the lane color of the value they
   concern.
+- **Rail position (decided 2026-07-02): mid-line** — between the
+  call→response column and the annotations, never hard-right of the
+  annotation text. Tenet 6 decides it (hard-right sandwiches text between
+  two graph regions); mid-line also keeps each justification at its
+  arrowhead — the words-and-geometry fusion is the point — and keeps the
+  annotation column left-aligned and scannable. Cost accepted: the
+  response column gets a width budget; long responses clip with an
+  in-value `⋯`, the full value appearing in the failure block / splice.
 
 ### R4 — the composed report
 
@@ -696,9 +716,31 @@ Hard-won details:
   data" a concrete shape — the artifact is `(trace, blame tree)`.
 - **N2 — empirical citation census.** Per-prefix P(fail) sparkline beside
   the ledger; edges drawn at the jumps. Between O2 and O3 in cost; can
-  stream partial estimates while sampling.
+  stream partial estimates while sampling. Rendering decided
+  (2026-07-02, work itself still deferred): the block-column sparkline
+  (`▁▄█` with `▲ 0.31→0.98` jump labels — mockup F). Lighter variants
+  explored and set aside: measurement-as-citation-label (delta printed
+  dim on the rail annotation), staircase lane (box-drawing line chart),
+  dot strip chart, intensity ramp on step numbers (color-only, so it
+  would need a text channel underneath regardless). Block elements
+  U+2581/2584/2588 need coverage-tier vetting before the glyph tables
+  land.
 - **N3 — four-valued verdict header.** definitely/probably false;
   obligation lanes end in a give-up terminator instead of `✗`.
+  Division of labor pinned (2026-07-02): N3/R2 are **zizek-side** — the
+  obligation API lives on `Machine` (rules declare promises;
+  `Stateful.run` tracks incur/discharge), not in the engine. Bounded
+  obligations (`within N steps`) are fully falsifiable with zero engine
+  changes (an undischarged bound is a definite failure at that step —
+  QuickLTL's numeric-annotation trick); unbounded `eventually` degrades
+  to honest give-up reporting, and only engine-side formula-driven trace
+  extension (QuickLTL required-next) would make its *search* strong —
+  the one piece that must not be planned on. Consequently the IR
+  reserves **no** verdict type: `Blame` is definitionally
+  definitely-false today, and the verdict record (with the open
+  obligation as payload — a nullary `ProbablyFalse` would guess the
+  shape wrong) is introduced together with R2. Decided at checkpoint 2
+  follow-up; the earlier reservation was cut.
 - **N4 — offline trace verbs: motif queries & trace diff.** Peasy's motif
   language (`{a}>{b}>>{c}`: immediate vs eventual succession) and its
   compare/contrast diffing as `hegel-trace` verbs; motifs are R2's
@@ -725,17 +767,90 @@ later spike — the spike is answered), artifact-first (F4 before any new
 renderer — slowest to visible payoff), and a cheap-insight stack (O2 +
 counters, no layout work — defers the flagship). Order of work:
 
-1. **Pool-event journaling** (prerequisite): `PoolInsert` / `PoolDraw` /
-   `PoolRemove` note kinds carrying pool id + engine vid — the vid *is*
-   the value identity; birth names `h₁, h₂, …` are renderer-assigned over
-   vids. Add an explicit `Pool.remove` (today death only happens via
-   `valuesConsumed`). Open design point: pool ops run in `IO` against
-   `TestCase` while the journal capability lives in `PropertyT`'s `Env` —
-   decide where the hook lives before writing code.
-2. **Thin IR** (N1): trace record + blame/Problem tree, versioned.
-   Full CBOR `.hegel-trace` serialization (F4) may lag the in-memory
-   shape, but the schema is sketched now so every renderer is written as
-   a pure function of it.
+1. **Pool-event recording** (prerequisite) — design decided 2026-07-02,
+   **landed** (`Hegel.Internal.Event`; vocabulary reworked at
+   checkpoint 1): a *separate structural event stream* on `TestCase`,
+   not new `NoteKind`s. `Event {clock :: Clock, var :: Var, kind ::
+   EventKind}` with `EventKind = Born | Reused | Consumed` (flat, no
+   draw±consume nesting) and `Var {pool, id}` as a value's first-class
+   identity (ids are only unique per pool; birth names `h₁, h₂, …` are
+   renderer-assigned over `Var`s). `Event.Log = Silent | Recording …`
+   mirrors the journal's `Journal` type; `mkTestCase` takes the `Log`
+   directly (`Event.Silent` live/shrink, `Event.newLog` in the
+   reconstruction replay), zero-cost when silent. `TestCase` itself was
+   restructured at the same checkpoint: the engine pointer pair is now a
+   nested `Handle {ctx, ptr}`, making `TestCase = Handle + per-case run
+   context (Slot, Event.Log)` — the outer name stays `TestCase` because
+   everything draw-facing (`Gen`'s `Draw` closures, `Pool`, `Env`)
+   speaks it, and the env is 1:1 with the case; a full `DrawEnv` split
+   of `Gen` was considered and recorded as the move if per-case context
+   keeps accreting. `journalNote` stamps the same clock onto each
+   `Note.clock`; the render boundary zips the two streams by stamp, so
+   step association comes from ordering and the depth question
+   dissolves — structural events never enter `groupByDepth`.
+   Rationale: `Note` stays user-level vocabulary; the journal capability
+   stays "not draw behaviour" (per the stateful-reporting decision
+   record); appends keep the journal's exception property (complete the
+   moment emitted); the merged stream *is* the seed of the F4 trace
+   record; and `TestCase` already carries per-case mutable context
+   (`slot`), so this is its natural home. Rejected: `PropertyT` wrappers
+   (two-surface API; direct `IO` callers would silently produce braids
+   with missing births), threading the journal + ambient depth into `IO`
+   (duplicates `Env.noteDepth` into the delicate async-exception
+   discipline), and engine-side reconstruction (`hegel.h` exposes only
+   `new_pool`/`pool_add`/`pool_generate` — no event introspection).
+   **Death = consumed draw** (revised during M1): the engine has no
+   `pool_remove` either, so an explicit `Pool.remove` is impossible
+   without an engine API addition — deferred. A consuming draw
+   (`valuesConsumed`) is the only death event, and the event vocabulary
+   is accordingly flat — `Born | Reused | Consumed` (no
+   `Drawn ± consume` nesting, which also avoids a constructor collision
+   with `NoteKind.Drawn`). `◌` means "consumed here"; the flagship
+   use-after-close pattern is modeled with close-as-consuming-draw.
+   `Pool`'s public API is unchanged (emission lives in
+   `DataSource.poolAdd`/`poolGenerate`). Open sub-question: link
+   `forAll`'s `Drawn` note to its pool-draw event by clock adjacency
+   (start here; pinned by a unit test) or by carrying the vid on the note
+   (promote only if the renderer's correlation logic gets fragile).
+2. **Thin IR** (N1) — **landed** (`Hegel.Report.Trace`,
+   `Hegel.Report.Blame`): `Trace.build :: [Note] -> [Event] -> Trace`
+   zips the streams on the shared clock; `Trace {version, steps,
+   lifelines, failure}` with `Step {index, rule, window, notes,
+   response, touches, failed}`, `Touch {var, kind, note}` (draw
+   notes correlated by clock adjacency), and `Lifeline {var, ordinal,
+   bornAt, consumedAt, touchedAt, posthumous}`; the trace-located
+   failure record is `Trace.Failure` (né `FailureInfo`). Step boundaries key on the
+   structural `StepHeader !Int !Text` note kind — promoted at
+   checkpoint 2, since `Trace.build`'s parser was exactly the trigger
+   condition the stateful-reporting decision record set for it
+   (`Note.text` keeps the rendered string, so existing renderers are
+   untouched); everything before the first header is a
+   prelude step (index 0, label `<initial>`), so `build` is total on
+   non-stateful journals. `Blame.analyze :: Trace -> Maybe Blame`
+   produces the blame tree — reshaped from the sketched
+   `Violation | Since` sum to a rose tree
+   `Observation {step, fact, since}` (root = the violating observation,
+   children = the citations most-recent-first, deeper nesting reserved
+   for indirect chains; renamed from `Problem` at checkpoint 2 — the
+   children are evidence, not problems); `Fact = BornAt | TouchedAt |
+   ConsumedAt | HauntedAt` (the mechanical subset; `Fact` chosen over
+   `Edge`/`EdgeKind` as what the tree node observes — `Citation
+   {from, to, fact}` remains the edge; `HauntedAt` = touched after
+   death), `subject :: Var` (non-Maybe; `analyze` is `Nothing` when
+   there is nothing to cite), `diagnosis :: Maybe Phenomenon`
+   (`UseAfterConsume` — F3-lite, Jepsen's taxonomy vocabulary),
+   No verdict type: a `Blame` is definitionally a definite failure, and
+   verdict strength enters the IR with R2's obligation API (see N3).
+   Projections: `Blame.citations` (flattened edges),
+   `Blame.citationClosure :: Blame -> IntSet` (the revset). Full CBOR
+   `.hegel-trace` serialization (F4) still lags; `Trace.version` (= 1)
+   pins the schema. `Stateful.respond`/`respondShow` landed with a new
+   `Response` note kind (existing renderers treat it as an annotation;
+   `Step.response` lifts a step's last one). Pinned by
+   `tests/unit/TraceIR.hs` — including that a synthetic stream *can*
+   express a posthumous touch even though engine pool draws cannot,
+   which keeps the flagship blame path testable ahead of any engine
+   `pool_remove`.
 3. **R3 citation ledger**: Design 1's engine + the citation column/rail —
    exercises the citation-closure revset, elision, rails, and annotations
    without lane allocation. Spec the abstract cell-kind enum + row model
@@ -744,7 +859,22 @@ counters, no layout work — defers the flagship). Order of work:
    Ship unicode and ascii tables together, specced against the coverage
    tiers. Decide default direction (failure-first vs chronological) on
    live traces — mockups A/B below frame the choice. R1 is the same
-   engine with lanes switched on; build it second.
+   engine with lanes switched on; build it second. Also decided at this
+   checkpoint, on real gallery output: the **two-pool reconnection
+   question**. With death = consumed draw, an exercisable
+   use-after-close machine models close as consume-from-open +
+   add-to-closed — two engine `Var`s for one logical handle, so the
+   blame chain reads `read → BornAt(close step)` and
+   `PosthumousTouch`/`UseAfterConsume` never fire on real traces.
+   Options: (a) it already reads fine, do nothing; (b) mechanical
+   handoff heuristic in `Blame` — a step that consumes X and bears Y is
+   a transfer, link the lifelines (the braid's `○─┤` connector,
+   precedented above); (c) a `Pool.transfer`-style API declaring the
+   identity link — note (c) needs **no engine changes**: transfer =
+   `poolGenerate(consume)` on pool A + `poolAdd` on pool B (both existing
+   FFI calls) composed with the link recorded in zizek's own event
+   stream. The IR is unchanged under all three, which is what
+   makes deferring safe.
 4. **Verdict paragraph**: ERL deontic/indicative walk of the same blame
    tree — no longer a feasibility spike.
 5. **Footer**: paste-able replay command opening at the failing step +

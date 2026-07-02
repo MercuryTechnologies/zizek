@@ -112,13 +112,16 @@ the splice's *layout*, and is unaffected by that recomposition.
 - **`isStepJournal`** keys the rich stateful path:
   `hasInBandFailure || any (depth > 0)` — the disjunction covers both a
   `Failure`-less nested journal and a depth-0 failure from `machine.initial`.
-- **`"Step N: "` textual contract**: `Aggregate.stepLabel` parses
-  `Stateful.run`'s header text. Deliberately left textual: its structural
-  replacement (`StepHeader !Int !Text` note kind) lands iff Aggregate
-  survives evaluation, and dies unbuilt otherwise (decided at checkpoint —
-  a speculative constructor buys an add→remove round trip; either change is
-  compiler-guided with zero rendering-pin churn since display text is
-  regenerated identically).
+- **`"Step N: "` header notes — now structural** *(revised 2026-07-02)*:
+  originally a textual contract parsed by `Aggregate.stepLabel`, with the
+  structural `StepHeader !Int !Text` note kind deliberately unbuilt when
+  Aggregate died (no parser consumer remained). The trace IR
+  (`Hegel.Report.Trace.build`, the trace-rendering slice) re-created a
+  parser, which was the recorded trigger condition — `StepHeader` landed
+  then. `Note.text` still carries the rendered `"Step N: rulename"` string,
+  so the plain/Timeline renderers display it via their annotation
+  catch-alls unchanged (zero pin churn, as predicted); `Trace.build` keys
+  on the kind, eliminating the depth-0-annotate false-positive class.
 - **`Failure (Maybe Diff)`**: the diff rides in the note kind; there is no
   partial `Note.diff` field.
 - **Sibling-scoped draw numbering**: `Draw N:` counts within a step's

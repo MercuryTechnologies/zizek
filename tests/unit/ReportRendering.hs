@@ -28,22 +28,22 @@ aLoc =
     }
 
 drawn, annotation, footer :: Text -> Note
-drawn t = Note {kind = Drawn, text = t, loc = Nothing, depth = 0}
-annotation t = Note {kind = Annotation, text = t, loc = Nothing, depth = 0}
-footer t = Note {kind = Footnote, text = t, loc = Nothing, depth = 0}
+drawn t = Note {kind = Drawn, text = t, loc = Nothing, depth = 0, clock = Clock 0}
+annotation t = Note {kind = Annotation, text = t, loc = Nothing, depth = 0, clock = Clock 0}
+footer t = Note {kind = Footnote, text = t, loc = Nothing, depth = 0, clock = Clock 0}
 
 -- | A step header (loc-less annotation) at top level, as emitted by
 -- 'Hegel.Stateful'.
 step :: Text -> Note
-step t = Note {kind = Annotation, text = t, loc = Nothing, depth = 0}
+step t = Note {kind = Annotation, text = t, loc = Nothing, depth = 0, clock = Clock 0}
 
 -- | A draw nested under a step (depth 1).
 nestedDrawn :: Text -> Note
-nestedDrawn t = Note {kind = Drawn, text = t, loc = Nothing, depth = 1}
+nestedDrawn t = Note {kind = Drawn, text = t, loc = Nothing, depth = 1, clock = Clock 0}
 
 -- | An in-band failure nested under a step (depth 1).
 failureAt :: Text -> Maybe Diff -> Maybe SrcLoc -> Note
-failureAt t d l = Note {kind = Failure d, text = t, loc = l, depth = 1}
+failureAt t d l = Note {kind = Failure d, text = t, loc = l, depth = 1, clock = Clock 0}
 
 -- | The 'SrcLoc' of the call site, so tests can point a note at a line that
 -- really exists in this file without hardcoding line numbers.
@@ -66,7 +66,8 @@ spec = do
     it "renders a counterexample with numbered draws, footnotes last" $ do
       let result =
             Counterexample
-              { message = "sum stays small",
+              { events = [],
+                message = "sum stays small",
                 notes =
                   [ footer "seen at the end",
                     drawn "50",
@@ -90,7 +91,8 @@ spec = do
     it "renders a diff block, led by its legend, before the journal" $ do
       let result =
             Counterexample
-              { message = "=== failed, values are not equal",
+              { events = [],
+                message = "=== failed, values are not equal",
                 notes = [drawn "some value"],
                 loc = Just aLoc,
                 diff = Just [LineRemoved "old", LineAdded "new"]
@@ -112,7 +114,8 @@ spec = do
       -- 'Failure' note, so they do not appear twice.
       let result =
             Counterexample
-              { message = "=== failed, values are not equal",
+              { events = [],
+                message = "=== failed, values are not equal",
                 notes =
                   [ step "Initial invariant check.",
                     step "Step 1: push",
@@ -147,7 +150,8 @@ spec = do
     it "renders a stateful assert failure in-band (no diff)" $ do
       let result =
             Counterexample
-              { message = "counter stays small",
+              { events = [],
+                message = "counter stays small",
                 notes =
                   [ step "Initial invariant check.",
                     step "Step 1: increment",
@@ -171,10 +175,11 @@ spec = do
       -- first column, not the note's indent column.
       let result =
             Counterexample
-              { message = "boom",
+              { events = [],
+                message = "boom",
                 notes =
                   [ step "Step 1: push",
-                    Note {kind = Drawn, text = "Stack\n[ 1 ]", loc = Nothing, depth = 1}
+                    Note {kind = Drawn, text = "Stack\n[ 1 ]", loc = Nothing, depth = 1, clock = Clock 0}
                   ],
                 loc = Nothing,
                 diff = Nothing
@@ -194,11 +199,12 @@ spec = do
       -- refactor, whose relative indents must telescope to the same columns.
       let result =
             Counterexample
-              { message = "boom",
+              { events = [],
+                message = "boom",
                 notes =
                   [ step "Step 1: push",
-                    Note {kind = Annotation, text = "deep note", loc = Nothing, depth = 2},
-                    Note {kind = Failure Nothing, text = "boom", loc = Just aLoc, depth = 2}
+                    Note {kind = Annotation, text = "deep note", loc = Nothing, depth = 2, clock = Clock 0},
+                    Note {kind = Failure Nothing, text = "boom", loc = Just aLoc, depth = 2, clock = Clock 0}
                   ],
                 loc = Just aLoc,
                 diff = Nothing
@@ -218,10 +224,11 @@ spec = do
       -- its depth too, rather than render "nested" under the last step.
       let result =
             Counterexample
-              { message = "boom",
+              { events = [],
+                message = "boom",
                 notes =
                   [ drawn "1",
-                    Note {kind = Footnote, text = "nested footer", loc = Nothing, depth = 1}
+                    Note {kind = Footnote, text = "nested footer", loc = Nothing, depth = 1, clock = Clock 0}
                   ],
                 loc = Nothing,
                 diff = Nothing
@@ -245,7 +252,7 @@ spec = do
     let shape :: Forest Note -> Forest Text
         shape = fmap (fmap (.text))
         at :: Int -> Text -> Note
-        at d t = Note {kind = Annotation, text = t, loc = Nothing, depth = d}
+        at d t = Note {kind = Annotation, text = t, loc = Nothing, depth = d, clock = Clock 0}
 
     it "keeps a flat depth-0 journal as sibling roots" $ do
       shape (groupByDepth [drawn "a", annotation "b", drawn "c"])
@@ -298,7 +305,8 @@ spec = do
     it "emits ANSI escape codes for a diff-bearing counterexample" $ do
       let result =
             Counterexample
-              { message = "=== failed",
+              { events = [],
+                message = "=== failed",
                 notes = [],
                 loc = Nothing,
                 diff = Just [LineRemoved "old", LineAdded "new"]
@@ -314,8 +322,9 @@ spec = do
       let loc' = hereLoc -- splice-marker: this line should appear in the rich report
           result =
             Counterexample
-              { message = "boom",
-                notes = [Note {kind = Drawn, text = "42", loc = Just loc', depth = 0}],
+              { events = [],
+                message = "boom",
+                notes = [Note {kind = Drawn, text = "42", loc = Just loc', depth = 0, clock = Clock 0}],
                 loc = Nothing,
                 diff = Nothing
               }
@@ -332,7 +341,8 @@ spec = do
       -- surviving as the degenerate case.
       let result =
             Counterexample
-              { message = "counter stays small",
+              { events = [],
+                message = "counter stays small",
                 notes =
                   [ step "Step 1: increment",
                     failureAt "counter stays small" Nothing (Just aLoc)
@@ -349,11 +359,12 @@ spec = do
           failLoc = hereLoc -- stateful-splice-marker-fail
           result =
             Counterexample
-              { message = "boom",
+              { events = [],
+                message = "boom",
                 notes =
                   [ step "Step 1: rule_a",
-                    Note {kind = Drawn, text = "42", loc = Just drawLoc, depth = 1},
-                    Note {kind = Failure Nothing, text = "boom", loc = Just failLoc, depth = 1}
+                    Note {kind = Drawn, text = "42", loc = Just drawLoc, depth = 1, clock = Clock 0},
+                    Note {kind = Failure Nothing, text = "boom", loc = Just failLoc, depth = 1, clock = Clock 0}
                   ],
                 loc = Just failLoc,
                 diff = Nothing
@@ -372,11 +383,12 @@ spec = do
           badLoc = aLoc -- names a file that does not exist
           result =
             Counterexample
-              { message = "boom",
+              { events = [],
+                message = "boom",
                 notes =
                   [ step "Step 1: mixed",
-                    Note {kind = Drawn, text = "7", loc = Just badLoc, depth = 1},
-                    Note {kind = Failure Nothing, text = "boom", loc = Just goodLoc, depth = 1}
+                    Note {kind = Drawn, text = "7", loc = Just badLoc, depth = 1, clock = Clock 0},
+                    Note {kind = Failure Nothing, text = "boom", loc = Just goodLoc, depth = 1, clock = Clock 0}
                   ],
                 loc = Just goodLoc,
                 diff = Nothing
@@ -400,8 +412,9 @@ spec = do
               }
           result =
             Counterexample
-              { message = "boom",
-                notes = [Note {kind = Drawn, text = "42", loc = Just loc', depth = 0}],
+              { events = [],
+                message = "boom",
+                notes = [Note {kind = Drawn, text = "42", loc = Just loc', depth = 0, clock = Clock 0}],
                 loc = Nothing,
                 diff = Nothing
               }
@@ -451,7 +464,7 @@ spec = do
     it "throws PropertyFailed on a counterexample" $ do
       let report =
             Report
-              { result = Counterexample {message = "boom", notes = [], loc = Nothing, diff = Nothing},
+              { result = Counterexample {message = "boom", notes = [], events = [], loc = Nothing, diff = Nothing},
                 stats = Stats {valid = 1, invalid = 0}
               }
       throwOnFailure report `shouldThrow` \PropertyFailed {message} -> message == "boom"
