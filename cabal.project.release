@@ -1,0 +1,6 @@
+-- Release build: `just profile-time` measures wall-clock on this -O2,
+-- non-profiled configuration (the default project builds -O1) into
+-- dist-newstyle-release.
+import: cabal.project
+
+optimization: 2

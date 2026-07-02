@@ -10,7 +10,7 @@ module Hegel.Assertion
   )
 where
 
-import Control.Exception (Exception (displayException), SomeException (SomeException), fromException)
+import Control.Exception (Exception (..), SomeException (SomeException), fromException)
 import Control.Monad (unless)
 import Control.Monad.IO.Class (MonadIO)
 import Data.Maybe (fromMaybe)
@@ -49,6 +49,10 @@ instance Exception AssertionFailure where
         <> "\n"
         <> T.pack (prettyCallStack f.callStack)
 
+  -- Suppress backtrace collection: thrown once per shrink replay; the
+  -- rendered call stack is the carried 'callStack' field.
+  backtraceDesired _ = False
+
 -- | Fail the current property with a message, capturing the call site.
 --
 -- Sets 'diff' to 'Nothing'; use '(===)' or '(/==)' to capture a 'Diff'.
@@ -61,11 +65,13 @@ failure msg =
           callStack = Stack.callStack,
           diff = Nothing
         }
+{-# INLINEABLE failure #-}
 
 -- | Assert a condition; on 'False', fail with the given message and the
 -- captured call site.
 assert :: (HasCallStack, MonadIO m) => Bool -> Text -> m ()
 assert cond msg = unless cond (withFrozenCallStack (failure msg))
+{-# INLINEABLE assert #-}
 
 infix 4 ===, /==
 
@@ -87,6 +93,7 @@ x === y
                       (diffShown (renderValue x) (renderValue y))
                   )
             }
+{-# INLINEABLE (===) #-}
 
 -- | Assert two values differ.
 (/==) :: (HasCallStack, MonadIO m, Eq a, Show a) => a -> a -> m ()
@@ -95,6 +102,7 @@ x /== y
   | otherwise =
       withFrozenCallStack $
         failure (T.intercalate "\n" ["/== failed, values are equal", renderValue x])
+{-# INLINEABLE (/==) #-}
 
 -- | The innermost call site recorded in a 'CallStack', if any.
 callSite :: CallStack -> Maybe SrcLoc

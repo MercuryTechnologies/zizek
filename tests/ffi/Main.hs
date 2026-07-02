@@ -99,13 +99,14 @@ rawCApiSpec = describe "raw C API" $ do
   it "marks a case INTERESTING without crashing" $ runInBoundThread $ do
     withContext $ \ctx -> withSettings ctx $ \s -> do
       configure ctx s 5
+      slot <- newSlot
       let go :: Ptr HegelRun -> Bool -> IO ()
           go run markFirst = do
             tc <- nextTestCase ctx run
             if tc == nullPtr
               then pure ()
               else do
-                _ <- generate ctx tc (CE.encode (toCBOR Schema.bool))
+                _ <- generate ctx tc slot (CE.encode (toCBOR Schema.bool))
                 if markFirst
                   then do
                     rc <- withCString "smoke:0" $ \p ->
@@ -163,7 +164,7 @@ genMachinerySpec = describe "Gen machinery" $ do
             if tcPtr == nullPtr
               then pure ()
               else do
-                let tc = mkTestCase ctx tcPtr
+                tc <- mkTestCase ctx tcPtr
                 n <- draw tc gen
                 n `shouldSatisfy` (\x -> x >= 0 && x <= 100)
                 TC.markComplete tc Valid
@@ -180,7 +181,7 @@ genMachinerySpec = describe "Gen machinery" $ do
             if tcPtr == nullPtr
               then pure ()
               else do
-                let tc = mkTestCase ctx tcPtr
+                tc <- mkTestCase ctx tcPtr
                 eVal <- try @TestStopped (draw tc gen)
                 case eVal of
                   -- Budget exhausted for this shrink probe; mark overrun.
@@ -215,7 +216,7 @@ completionSpec = describe "completion semantics" $
         withRun ctx s $ \run -> do
           tcPtr <- nextTestCase ctx run
           tcPtr `shouldNotBe` nullPtr
-          let tc = mkTestCase ctx tcPtr
+          tc <- mkTestCase ctx tcPtr
           _ <- draw tc (Gen.bool & Gen.build)
           TC.markComplete tc Valid
           result <- try @HegelError (TC.markComplete tc Valid)
@@ -234,7 +235,8 @@ driveRun ctx schemaBytes run = go
       if tc == nullPtr
         then pure () -- run finished
         else do
-          bs <- generate ctx tc schemaBytes
+          slot <- newSlot
+          bs <- generate ctx tc slot schemaBytes
           case CD.decode bs of
             Left err ->
               expectationFailure ("CBOR decode failed: " <> err)
@@ -257,7 +259,8 @@ driveRun ctx schemaBytes run = go
 -- abstraction over the full test-case lifecycle exists.
 tryDraw :: Ptr HegelContext -> Ptr HegelTestCase -> ByteString -> IO (Maybe ByteString)
 tryDraw ctx tc schema = do
-  result <- try @HegelError (generate ctx tc schema)
+  slot <- newSlot
+  result <- try @HegelError (generate ctx tc slot schema)
   case result of
     Right bs -> pure (Just bs)
     Left HegelError {code = HEGEL_E_STOP_TEST} -> pure Nothing
@@ -290,6 +293,7 @@ asyncTeardownSpec = describe "async teardown" $ do
         configure ctx s 50
         r <- try @SomeException @() $ withRun ctx s \run -> do
           tc <- nextTestCase ctx run
-          _ <- generate ctx tc (CE.encode (toCBOR Schema.bool))
+          slot <- newSlot
+          _ <- generate ctx tc slot (CE.encode (toCBOR Schema.bool))
           throwIO (userError "bail mid-case")
         r `shouldSatisfy` isLeft

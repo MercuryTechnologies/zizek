@@ -33,9 +33,10 @@ docs:
     --haddock-hyperlink-source \
     --haddock-html-location='https://hackage.haskell.org/package/$pkg-$version/docs'
 
-# Drop build artifacts.
+# Drop build artifacts, including the profiling/release builddirs.
 clean:
   cabal clean
+  rm -rf dist-newstyle-prof dist-newstyle-release
 
 # Open a REPL on the library.
 repl:
@@ -74,6 +75,24 @@ check-conformance: _conformance-build
   @pytest tests/conformance/pytest/ -n auto
   @echo "Running standalone conformance binaries…"
   @$(cabal list-bin zizek:test-stateful)
+
+# --- Profiling: see notes/04-profiling-harness.md for the scenario table ---
+# --- and how to interpret the captured profiles.                         ---
+
+# Run one profiling scenario on the plain dev build (smoke test, not for numbers).
+profile-run scenario="warehouse" *args="":
+  cabal run zizek:profile-hegel -- {{scenario}} {{args}}
+
+# Capture .prof / heap / eventlog for one scenario (profiling build, -fprof-late).
+# Note: profiling perturbs timing; use `profile-time` for wall-clock numbers.
+profile-space scenario="warehouse" *args="":
+  cabal build zizek:profile-hegel --project-file cabal.project.profiling --builddir dist-newstyle-prof
+  scripts/profile-space.sh "$(cabal list-bin zizek:profile-hegel --project-file cabal.project.profiling --builddir dist-newstyle-prof)" {{scenario}} {{args}}
+
+# Hyperfine wall-clock comparison of all scenarios on the -O2 non-profiled build.
+profile-time:
+  cabal build zizek:profile-hegel --project-file cabal.project.release --builddir dist-newstyle-release
+  scripts/profile-time.sh "$(cabal list-bin zizek:profile-hegel --project-file cabal.project.release --builddir dist-newstyle-release)"
 
 # --- Stubs: implement when the underlying tooling lands. ---
 

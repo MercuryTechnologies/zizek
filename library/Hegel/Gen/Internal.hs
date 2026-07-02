@@ -4,9 +4,13 @@
 module Hegel.Gen.Internal
   ( -- * Generator type
     Gen (..),
-    BasicGenerator (..),
+    -- 'BasicGenerator''s raw constructor (and its 'encoded' cache) stays
+    -- unexported: 'basicGenerator' is the only construction path, so the
+    -- cached encoding can never drift from the schema.
+    BasicGenerator (schema, parse),
     BasicSchema (..),
     basic,
+    basicGenerator,
     toBasic,
     materialize,
     schemaArity,
@@ -35,8 +39,10 @@ module Hegel.Gen.Internal
 where
 
 import CBOR.Class (ToCBOR (..))
+import CBOR.Encode qualified as CE
 import CBOR.Value (Value (Array, NInt, UInt))
 import Control.Exception (Exception, throwIO)
+import Data.ByteString (ByteString)
 import Data.Sequence (Seq, (<|), (|>))
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
@@ -44,13 +50,14 @@ import Data.Vector qualified as V
 import GHC.Stack (HasCallStack)
 import Hegel.Internal.CBOR (ParseError (..))
 import Hegel.Internal.Control (AssumeRejected (..))
-import Hegel.Internal.DataSource (Label (..), generate, startSpan, stopSpan)
+import Hegel.Internal.DataSource (Label (..), generate, generateEncoded, startSpan, stopSpan)
 import Hegel.Internal.Schema qualified as Schema
 import Hegel.Internal.TestCase (TestCase)
 import Prelude hiding (either, maybe)
 
 -- | A 'Gen' that can be expressed as a single schema request to @hegel@.
--- Construct one with 'basic'.
+-- Construct one with 'basic' (or 'basicGenerator' when composing schemas
+-- directly).
 data BasicGenerator a = BasicGenerator
   { -- | The schema's structure: a scalar wire schema, or a tuple of two or
     -- more parts produced by 'Applicative' composition.
@@ -58,8 +65,21 @@ data BasicGenerator a = BasicGenerator
     -- | Converts the engine's response back to @a@. For a 'Scalar' schema the
     -- input is the raw scalar value; for a 'Tuple' schema it is the response
     -- 'Array' wrapping every flat component.
-    parse :: Value -> Either ParseError a
+    parse :: Value -> Either ParseError a,
+    -- | The materialised 'schema', CBOR-encoded. Deliberately lazy (the
+    -- package default is 'StrictData'): the thunk is built at construction,
+    -- forced on the first draw, and shared by every draw after that —
+    -- re-encoding the schema per draw dominated generation profiles.
+    -- Generators that are never drawn pay nothing.
+    encoded :: ~ByteString
   }
+
+-- | Construct a 'BasicGenerator' from a composed schema, caching its
+-- encoding. All construction goes through here (or 'basic'), so 'encoded'
+-- can never drift from 'schema'.
+basicGenerator :: BasicSchema -> (Value -> Either ParseError a) -> BasicGenerator a
+basicGenerator s p =
+  BasicGenerator {schema = s, parse = p, encoded = CE.encode (materialize s)}
 
 -- | The schema of a 'BasicGenerator'. 'Scalar' is one wire value; 'Tuple' is
 -- the already-flattened component list (always two or more) that 'basicAp'
@@ -97,7 +117,7 @@ materialize (Tuple a b rest) = toCBOR (Schema.tuple (a : b : foldr (:) [] rest))
 --
 -- See 'Hegel.Gen.Bool.bool' for a worked example.
 basic :: (ToCBOR s) => s -> (Value -> Either ParseError a) -> Gen a
-basic s p = Basic (BasicGenerator (Scalar (toCBOR s)) p)
+basic s p = Basic (basicGenerator (Scalar (toCBOR s)) p)
 
 -- | A generator that produces values of type @a@.
 --
@@ -128,7 +148,7 @@ data Gen a where
 
 toBasic :: Gen a -> Maybe (BasicGenerator a)
 toBasic (Basic bg) = Just bg
-toBasic (Pure a) = Just (BasicGenerator (Scalar (toCBOR Schema.unit)) (\_ -> Right a))
+toBasic (Pure a) = Just (basicGenerator (Scalar (toCBOR Schema.unit)) (\_ -> Right a))
 toBasic (Map c _ _) = c
 toBasic (Ap c _ _) = c
 toBasic (OneOf c _) = c
@@ -178,14 +198,14 @@ instance Applicative Gen where
                   a <- ba.parse (sliceFor ba.schema leftArity rightArity arr)
                   pure (f a)
             p v = Left ParseError {expected = T.pack (show n) <> "-element array", got = v}
-        pure (BasicGenerator (bf.schema <> ba.schema) p)
+        pure (basicGenerator (bf.schema <> ba.schema) p)
 
 instance Monad Gen where
   (>>=) = Bind
 
 runBasic :: TestCase -> BasicGenerator a -> IO a
 runBasic tc bg = do
-  raw <- generate tc (materialize bg.schema)
+  raw <- generateEncoded tc bg.encoded
   case bg.parse raw of
     Right a -> pure a
     Left err -> throwIO UnexpectedResponse {sentSchema = materialize bg.schema, received = raw, cause = err}
@@ -368,7 +388,7 @@ oneOf gens = OneOf basicOneOf gens
                     { expected = "0 <= index < " <> T.pack (show n),
                       got = v
                     }
-      pure (BasicGenerator (Scalar sch) p)
+      pure (basicGenerator (Scalar sch) p)
 
     pureVal :: Gen a -> Maybe a
     pureVal (Pure a) = Just a
@@ -392,7 +412,7 @@ oneOf gens = OneOf basicOneOf gens
                       got = idxV
                     }
           p v = Left ParseError {expected = "[index, value] array", got = v}
-      pure (BasicGenerator (Scalar sch) p)
+      pure (basicGenerator (Scalar sch) p)
 
 -- | Generate one of the given values (not uniformly — see the distribution
 -- note on 'oneOf'). The list must be non-empty; passing @[]@ raises an error
@@ -459,10 +479,8 @@ frequency [] = error "Gen.frequency: used with empty list"
 frequency pairs
   | any ((<= 0) . fst) pairs = error "Gen.frequency: all weights must be positive"
   | otherwise = Draw \tc -> do
-      let total = sum (fmap fst pairs)
-          indexSchema = toCBOR (Schema.integer (0 :: Int) (total - 1))
       startSpan tc LabelOneOf
-      raw <- generate tc indexSchema
+      raw <- generateEncoded tc encodedIndexSchema
       i <- case parseIndex raw of
         Right k -> pure k
         Left err -> throwIO UnexpectedResponse {sentSchema = indexSchema, received = raw, cause = err}
@@ -471,6 +489,12 @@ frequency pairs
       stopSpan tc False
       pure v
   where
+    -- Bound outside the Draw closure so the schema (and its encoding) is
+    -- computed once per generator value, not once per draw.
+    total = sum (fmap fst pairs)
+    indexSchema = toCBOR (Schema.integer (0 :: Int) (total - 1))
+    encodedIndexSchema = CE.encode indexSchema
+
     prefixSelect :: Int -> [(Int, Gen a)] -> Gen a
     prefixSelect _ [] = error "Gen.frequency: prefix-sum invariant violated (unreachable)"
     prefixSelect n ((w, g) : rest)

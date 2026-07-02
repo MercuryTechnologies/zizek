@@ -189,6 +189,9 @@ module Hegel.Internal.FFI
     withSettings,
     withRun,
     generate,
+    Slot,
+    newSlot,
+    withSlot,
     failureReproductionBlob,
     withTestCaseFromBlob,
   )
@@ -196,16 +199,17 @@ where
 
 #include <hegel.h>
 
-import Control.Exception (Exception, bracket, throwIO)
+import Control.Exception (Exception (..), bracket, throwIO)
 import Control.Monad (void)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
+import Data.ByteString.Unsafe qualified as BSU
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Word (Word32, Word64, Word8)
-import Foreign (Ptr, alloca, castPtr, nullPtr, peek)
+import Foreign (ForeignPtr, Ptr, alloca, castPtr, mallocForeignPtrBytes, nullPtr, peek, plusPtr, sizeOf, withForeignPtr)
 import Foreign.C.String (CString)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt (..), CSize (..))
 
@@ -248,7 +252,11 @@ data HegelError = HegelError
   }
   deriving stock (Show)
 
-instance Exception HegelError
+instance Exception HegelError where
+  -- Suppress backtrace collection: thrown on every stop/discard (the
+  -- control-flow codes arrive here first); the rendered diagnostic is the
+  -- engine's message.
+  backtraceDesired _ = False
 
 -- $errorcodes
 --
@@ -970,6 +978,32 @@ withTestCaseFromBlob ctx s blob action =
         else lastErrorMessage ctx >>= \msg -> throwIO HegelError {code = rc, message = msg}
     release tc = void (hegel_test_case_free ctx tc)
 
+-- | Reusable pinned block that a test case's per-call replies return
+-- through: 'generate' uses both words (the engine's borrowed value pointer,
+-- then the value length); the single-word out-params (rule indices,
+-- collection/pool ids, primitive booleans) use the first, via 'withSlot'.
+-- Allocated once per test case ('Hegel.Internal.TestCase.mkTestCase') and
+-- reused across every call — the draw path is hot enough that fresh
+-- 'alloca's per call dominated generation profiles.
+--
+-- Calls on one test case never overlap, so a single slot per case is safe.
+newtype Slot = Slot (ForeignPtr Word8)
+
+-- | Allocate a 'Slot'. Pinned and GC-managed; no finalizer needed.
+newSlot :: IO Slot
+newSlot = Slot <$> mallocForeignPtrBytes (2 * wordBytes)
+
+-- | Use the slot as a single out-parameter. The pointee must fit one slot
+-- word — every libhegel out-param is pointer-, @size_t@-, @int64_t@-, or
+-- @bool@-sized, so this holds throughout.
+withSlot :: Slot -> (Ptr a -> IO b) -> IO b
+withSlot (Slot slot) k = withForeignPtr slot (k . castPtr)
+
+-- | Byte size of each 'Slot' word: a pointer, and a @size_t@ ('CSize')
+-- length — one machine word either way.
+wordBytes :: Int
+wordBytes = sizeOf (nullPtr :: Ptr Word8)
+
 -- | Draw one value from a test case using the supplied CBOR-encoded schema,
 -- returning the engine's response as a freshly-copied 'ByteString'.
 --
@@ -979,20 +1013,24 @@ withTestCaseFromBlob ctx s blob action =
 --
 -- Control-flow codes ('HEGEL_E_STOP_TEST', 'HEGEL_E_ASSUME') are converted to
 -- 'HegelError's with the corresponding code so callers can branch on them.
-generate :: Ptr HegelContext -> Ptr HegelTestCase -> ByteString -> IO ByteString
-generate ctx tc schema =
-  BS.useAsCStringLen schema $ \(schemaPtr, schemaLen) ->
-    alloca $ \outPtrPtr ->
-      alloca $ \outLenPtr -> do
-        rc <-
-          hegel_generate
-            ctx
-            tc
-            (castPtr schemaPtr)
-            (fromIntegral schemaLen)
-            outPtrPtr
-            outLenPtr
-        throwOnError ctx rc
-        valuePtr <- peek outPtrPtr
-        valueLen <- peek outLenPtr
-        BS.packCStringLen (castPtr valuePtr, fromIntegral valueLen)
+generate :: Ptr HegelContext -> Ptr HegelTestCase -> Slot -> ByteString -> IO ByteString
+generate ctx tc (Slot slot) schema =
+  -- unsafeUseAsCStringLen is zero-copy (no alloca + memcpy): ByteString
+  -- buffers are pinned, so the pointer stays valid across the safe call, and
+  -- libhegel only reads the schema for the duration of the call.
+  BSU.unsafeUseAsCStringLen schema $ \(schemaPtr, schemaLen) ->
+    withForeignPtr slot $ \base -> do
+      let outPtrPtr = castPtr base :: Ptr (Ptr Word8)
+          outLenPtr = castPtr (base `plusPtr` wordBytes) :: Ptr CSize
+      rc <-
+        hegel_generate
+          ctx
+          tc
+          (castPtr schemaPtr)
+          (fromIntegral schemaLen)
+          outPtrPtr
+          outLenPtr
+      throwOnError ctx rc
+      valuePtr <- peek outPtrPtr
+      valueLen <- peek outLenPtr
+      BS.packCStringLen (castPtr valuePtr, fromIntegral valueLen)

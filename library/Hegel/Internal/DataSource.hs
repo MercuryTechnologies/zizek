@@ -11,6 +11,7 @@
 module Hegel.Internal.DataSource
   ( -- * Generation
     generate,
+    generateEncoded,
     primitiveBoolean,
 
     -- * Collections
@@ -38,10 +39,11 @@ import CBOR.Decode qualified as CD
 import CBOR.Encode qualified as CE
 import CBOR.Value (Value)
 import Control.Exception (throwIO)
+import Data.ByteString (ByteString)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Word (Word64)
-import Foreign (alloca, nullPtr, peek, withArray, withMany)
+import Foreign (nullPtr, peek, withArray, withMany)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt)
 import Hegel.Internal.CString qualified as CString
 import Hegel.Internal.Control (AssumeRejected (..), TestStopped (..))
@@ -61,9 +63,15 @@ import Witch qualified
 -- Throws 'TestStopped' when the choice budget is exhausted, or 'AssumeRejected'
 -- when the engine signals that the current case should be discarded.
 generate :: TestCase -> Value -> IO Value
-generate tc schema = do
+generate tc schema = generateEncoded tc (CE.encode schema)
+
+-- | 'generate' with the schema already CBOR-encoded — the hot path for
+-- 'Hegel.Gen.Internal.BasicGenerator' draws, which cache their encoding at
+-- construction so repeated draws skip the encode entirely.
+generateEncoded :: TestCase -> ByteString -> IO Value
+generateEncoded tc schemaBytes = do
   resultBytes <-
-    FFI.generate tc.ctx tc.ptr (CE.encode schema)
+    FFI.generate tc.ctx tc.ptr tc.slot schemaBytes
       `catch` \e@(HegelError {code}) -> case code of
         HEGEL_E_STOP_TEST -> throwIO TestStopped
         HEGEL_E_ASSUME -> throwIO AssumeRejected
@@ -90,7 +98,7 @@ handleReturnCode tc rc = throwOnError tc.ctx rc
 -- Throws 'TestStopped' on exhaustion.
 primitiveBoolean :: TestCase -> Double -> IO Bool
 primitiveBoolean tc p =
-  alloca \outValue -> do
+  withSlot tc.slot \outValue -> do
     -- has_forced = 0: forced-draw support is unused (see 'hegel_primitive_boolean').
     hegel_primitive_boolean tc.ctx tc.ptr (CDouble p) (CBool 0) (CBool 0) outValue
       >>= handleReturnCode tc
@@ -103,7 +111,7 @@ primitiveBoolean tc p =
 -- Throws 'TestStopped' on exhaustion.
 newCollection :: TestCase -> Int -> Maybe Int -> IO Int
 newCollection tc minSz maxSz =
-  alloca \outId -> do
+  withSlot tc.slot \outId -> do
     hegel_new_collection tc.ctx tc.ptr (fromIntegral minSz) (maybe maxBound fromIntegral maxSz) outId
       >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
@@ -113,7 +121,7 @@ newCollection tc minSz maxSz =
 -- Throws 'TestStopped' on exhaustion.
 collectionMore :: TestCase -> Int -> IO Bool
 collectionMore tc cid =
-  alloca \outMore -> do
+  withSlot tc.slot \outMore -> do
     hegel_collection_more tc.ctx tc.ptr (fromIntegral cid) outMore >>= handleReturnCode tc
     (/= 0) . (\(CBool b) -> b) <$> peek outMore
 
@@ -137,7 +145,7 @@ collectionReject tc cid mWhy =
 -- Throws 'TestStopped' on exhaustion.
 newPool :: TestCase -> IO Int
 newPool tc =
-  alloca \outId -> do
+  withSlot tc.slot \outId -> do
     hegel_new_pool tc.ctx tc.ptr outId >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
 
@@ -145,7 +153,7 @@ newPool tc =
 -- variable id.
 poolAdd :: TestCase -> Int -> IO Int
 poolAdd tc pid =
-  alloca \outId -> do
+  withSlot tc.slot \outId -> do
     hegel_pool_add tc.ctx tc.ptr (fromIntegral pid) outId >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
 
@@ -156,7 +164,7 @@ poolAdd tc pid =
 -- Throws 'AssumeRejected' when the pool is empty, discarding the test case.
 poolGenerate :: TestCase -> Int -> Bool -> IO Int
 poolGenerate tc pid consume =
-  alloca \outId -> do
+  withSlot tc.slot \outId -> do
     hegel_pool_generate tc.ctx tc.ptr (fromIntegral pid) (CBool (if consume then 1 else 0)) outId
       >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
@@ -174,7 +182,7 @@ newStateMachine tc ruleNames invariantNames =
     withMany CString.withText invariantNames \invPtrs ->
       withArray rulePtrs \rulesArr ->
         withArray invPtrs \invArr ->
-          alloca \outId -> do
+          withSlot tc.slot \outId -> do
             hegel_new_state_machine
               tc.ctx
               tc.ptr
@@ -191,7 +199,7 @@ newStateMachine tc ruleNames invariantNames =
 -- Throws 'TestStopped' when the choice budget is exhausted.
 stateMachineNextRule :: TestCase -> Int -> IO Int
 stateMachineNextRule tc mid =
-  alloca \outIdx -> do
+  withSlot tc.slot \outIdx -> do
     hegel_state_machine_next_rule tc.ctx tc.ptr (fromIntegral mid) outIdx
       >>= handleReturnCode tc
     fromIntegral <$> (peek outIdx :: IO Int64)

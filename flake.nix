@@ -52,6 +52,12 @@
                 repomix
                 tokei
                 zlib.dev
+                # profiling & benchmarking tools (just profile-*)
+                hyperfine
+                haskellPackages.eventlog2html
+                haskellPackages.ghc-prof-flamegraph
+                haskellPackages.profiterole
+                haskellPackages.profiteur
                 # python interpreter with hegel-core + conformance test deps
                 python
                 # native libhegel C library + pkg-config for discovery
