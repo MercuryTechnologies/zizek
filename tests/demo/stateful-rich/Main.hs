@@ -1,20 +1,17 @@
 -- | Manual demo: failing stateful machines rendered through the plain
--- renderer and both rich stateful layouts — 'Timeline' (the default-to-be)
--- and 'Aggregate' (the machine-centric view) — kept side by side to
--- evaluate their utility against real failures.
+-- renderer and the rich stateful renderer, side by side, to eyeball the
+-- rendering against real failures.
 --
 -- Run with @cabal run demo-stateful-rich@ from the repo root (source
 -- splicing resolves @srcLocFile@ relative to the working directory). Each
--- scenario prints PLAIN ('renderReport') and both rich layouts via
--- 'statefulDoc' directly — 'renderReportRich' shows only the wired-in
--- 'Timeline'.
+-- scenario prints PLAIN ('renderReport') and RICH via 'statefulDoc'.
 --
--- The scenarios exercise the layout decisions:
+-- The scenarios exercise the rendering decisions:
 --
 --   1. multi-rule machine failing via '(===)' — structural diff in-band
 --   2. failing 'Stateful.Invariant' — the assertion lives outside any rule
 --   3. rule with two draws and an 'annotate' — several notes per step
---   4. long counterexample of identical steps — repetition vs aggregation
+--   4. long counterexample of identical steps — repetition on the spine
 --   5. machine defined inline in one large binding — every splice lands in
 --      the same (big) enclosing declaration
 --   6. synthetic journal mixing a real location with an unreadable one —
@@ -23,8 +20,7 @@
 --      structures (stock, a denormalized reservation cache, and a pending
 --      order table), cross-structure consistency invariants, and a bug
 --      whose minimal counterexample interleaves three distinct rules; the
---      least contrived comparison of the timeline-centric vs
---      definition-centric layouts
+--      least contrived end-to-end rendering exercise
 --
 -- Always exits 0; this is an eyeballing harness, not an assertion.
 module Main (main) where
@@ -50,7 +46,7 @@ import Hegel.Report
   )
 import Hegel.Report.Ann (docToAnsi)
 import Hegel.Report.Discovery (loadDeclarations)
-import Hegel.Report.Stateful (Layout (Aggregate, Timeline), noteFiles, statefulDoc)
+import Hegel.Report.Stateful (noteFiles, statefulDoc)
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
@@ -68,8 +64,7 @@ main = do
 runScenario :: Text -> Property () -> IO ()
 runScenario title prop = showReport title =<< check defaultSettings prop
 
--- | Print one report through the plain renderer and all three prototype
--- layouts.
+-- | Print one report through the plain and rich renderers.
 showReport :: Text -> Report -> IO ()
 showReport title report = do
   T.putStrLn ("\n━━━━━ scenario " <> title <> " ━━━━━")
@@ -78,11 +73,8 @@ showReport title report = do
   case report.result of
     Counterexample {message, notes, loc, diff} -> do
       decls <- loadDeclarations (noteFiles notes)
-      let rich name layout = do
-            T.putStrLn ("-- " <> name <> " --")
-            T.putStrLn (docToAnsi (statefulDoc layout decls message notes loc diff))
-      rich "RICH-TIMELINE (chronological spine, failing step spliced)" Timeline
-      rich "RICH-AGGREGATE (every step's values aggregated onto the machine's source)" Aggregate
+      T.putStrLn "-- RICH (chronological spine, failing step spliced) --"
+      T.putStrLn (docToAnsi (statefulDoc decls message notes loc diff))
     _ -> T.putStrLn "(no counterexample)"
 
 -- * Scenario 1: multi-rule machine failing via '(===)'
