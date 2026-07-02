@@ -607,7 +607,20 @@ foreign import ccall safe "hegel_run_free"
 -- * recording targeting observations
 -- * marking the case complete.
 --
--- All are declared @safe@ because they round-trip to the Rust worker.
+-- All are declared @unsafe@: despite the request/reply framing, they execute
+-- inline on the calling thread (the Rust worker is parked on the completion
+-- ack while the caller drives the case, so the test-case mutex is
+-- uncontended), never call back into Haskell, and never touch disk — database
+-- persistence and shrink bookkeeping happen in the worker's run loop, behind
+-- 'hegel_next_test_case'. The @safe@-call ceremony (capability
+-- release\/reacquire, ~0.1–0.5µs) was a measurable fraction of the ~1.1µs
+-- per-draw floor.
+--
+-- Caveat, accepted: under the urandom backend (explicit 'HEGEL_BACKEND_URANDOM',
+-- or auto-selected inside Antithesis) every entropy-consuming call reads
+-- @\/dev\/urandom@ inside the call, pinning the capability for the syscall
+-- pair. @\/dev\/urandom@ never blocks, the pin is µs-scale, and Antithesis
+-- runs are not latency-sensitive.
 
 -- | Draw one value using a CBOR-encoded schema.
 --
@@ -616,7 +629,7 @@ foreign import ccall safe "hegel_run_free"
 --
 -- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted, in which
 -- case the caller should mark the case 'HEGEL_STATUS_OVERRUN'.
-foreign import ccall safe "hegel_generate"
+foreign import ccall unsafe "hegel_generate"
   hegel_generate
     :: Ptr HegelContext
     -> Ptr HegelTestCase
@@ -628,13 +641,13 @@ foreign import ccall safe "hegel_generate"
 
 -- | Open a labeled span, where the given @label@ is one of the @HEGEL_LABEL_*@
 -- constants.
-foreign import ccall safe "hegel_start_span"
+foreign import ccall unsafe "hegel_start_span"
   hegel_start_span :: Ptr HegelContext -> Ptr HegelTestCase -> Word64 -> IO CInt
 
 -- | Close the most-recently-opened span.
 --
 -- Pass @1@ for @discard@ to mark it rejected (e.g. a filter predicate failed).
-foreign import ccall safe "hegel_stop_span"
+foreign import ccall unsafe "hegel_stop_span"
   hegel_stop_span :: Ptr HegelContext -> Ptr HegelTestCase -> CBool -> IO CInt
 
 -- | Start an engine-managed variable-length collection.
@@ -643,7 +656,7 @@ foreign import ccall safe "hegel_stop_span"
 -- collection ID into @*out_collection_id@.
 --
 -- Pass @maxBound@ for @max_size@ when unbounded.
-foreign import ccall safe "hegel_new_collection"
+foreign import ccall unsafe "hegel_new_collection"
   hegel_new_collection
     :: Ptr HegelContext
     -> Ptr HegelTestCase
@@ -654,7 +667,7 @@ foreign import ccall safe "hegel_new_collection"
 
 -- | Ask whether the engine wants another element; writes the answer into
 -- @*out_more@.
-foreign import ccall safe "hegel_collection_more"
+foreign import ccall unsafe "hegel_collection_more"
   hegel_collection_more
     :: Ptr HegelContext
     -> Ptr HegelTestCase
@@ -665,7 +678,7 @@ foreign import ccall safe "hegel_collection_more"
 -- | Notify the engine the last element was rejected.
 --
 -- @why@ may be @NULL@.
-foreign import ccall safe "hegel_collection_reject"
+foreign import ccall unsafe "hegel_collection_reject"
   hegel_collection_reject
     :: Ptr HegelContext
     -> Ptr HegelTestCase
@@ -675,12 +688,12 @@ foreign import ccall safe "hegel_collection_reject"
 
 -- | Create a new variable pool for stateful testing; writes the pool ID
 -- into @*out_pool_id@.
-foreign import ccall safe "hegel_new_pool"
+foreign import ccall unsafe "hegel_new_pool"
   hegel_new_pool :: Ptr HegelContext -> Ptr HegelTestCase -> Ptr Int64 -> IO CInt
 
 -- | Register a new variable in the pool; writes its ID into
 -- @*out_variable_id@.
-foreign import ccall safe "hegel_pool_add"
+foreign import ccall unsafe "hegel_pool_add"
   hegel_pool_add
     :: Ptr HegelContext
     -> Ptr HegelTestCase
@@ -691,7 +704,7 @@ foreign import ccall safe "hegel_pool_add"
 -- | Draw a variable from the pool.
 --
 -- Returns 'HEGEL_E_STOP_TEST' when the pool is empty.
-foreign import ccall safe "hegel_pool_generate"
+foreign import ccall unsafe "hegel_pool_generate"
   hegel_pool_generate
     :: Ptr HegelContext
     -> Ptr HegelTestCase
@@ -708,7 +721,7 @@ foreign import ccall safe "hegel_pool_generate"
 --
 -- Returns 'HEGEL_E_INVALID_ARG' when @num_rules@ is zero or a name is not
 -- valid UTF-8.
-foreign import ccall safe "hegel_new_state_machine"
+foreign import ccall unsafe "hegel_new_state_machine"
   hegel_new_state_machine
     :: Ptr HegelContext
     -> Ptr HegelTestCase
@@ -723,7 +736,7 @@ foreign import ccall safe "hegel_new_state_machine"
 -- honouring swarm-selected rule restrictions.
 --
 -- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted.
-foreign import ccall safe "hegel_state_machine_next_rule"
+foreign import ccall unsafe "hegel_state_machine_next_rule"
   hegel_state_machine_next_rule
     :: Ptr HegelContext
     -> Ptr HegelTestCase
@@ -738,7 +751,7 @@ foreign import ccall safe "hegel_state_machine_next_rule"
 -- pass @has_forced = 0@.
 --
 -- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted.
-foreign import ccall safe "hegel_primitive_boolean"
+foreign import ccall unsafe "hegel_primitive_boolean"
   hegel_primitive_boolean
     :: Ptr HegelContext
     -> Ptr HegelTestCase
@@ -751,7 +764,7 @@ foreign import ccall safe "hegel_primitive_boolean"
 -- | Record a numeric observation for the targeting phase to hill-climb toward.
 --
 -- @label@ must be non-@NULL@ valid UTF-8.
-foreign import ccall safe "hegel_target"
+foreign import ccall unsafe "hegel_target"
   hegel_target :: Ptr HegelContext -> Ptr HegelTestCase -> CDouble -> CString -> IO CInt
 
 -- | Mark the test case complete.
@@ -762,7 +775,7 @@ foreign import ccall safe "hegel_target"
 --
 -- __NOTE__: @origin@ must be a stable, draw-independent string (e.g. @\"file:line\"@),
 -- so the shrinker can converge towards a target.
-foreign import ccall safe "hegel_mark_complete"
+foreign import ccall unsafe "hegel_mark_complete"
   hegel_mark_complete
     :: Ptr HegelContext
     -> Ptr HegelTestCase
