@@ -49,8 +49,10 @@ import Hegel.Assertion (AssertionFailure (..), callSite)
 import Hegel.Diff (Diff)
 import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
 import Hegel.Internal.Control (isControlSignal, isFailure)
-import Hegel.Internal.TestCase (TestCase)
-import Hegel.Report (Note (..), NoteKind (..), renderValue)
+import Hegel.Internal.Event qualified as Event
+import Hegel.Internal.TestCase (TestCase (..))
+import Hegel.Internal.Tick qualified as Tick
+import Hegel.Report.Note (Note (..), NoteKind (..), renderValue)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
 
@@ -125,17 +127,22 @@ noteFailure :: (MonadIO m) => Maybe SrcLoc -> Maybe Diff -> Text -> PropertyT m 
 noteFailure loc diff = journalNote (Failure diff) loc
 {-# INLINE noteFailure #-}
 
--- | The sole 'Note' construction site: stamp the ambient 'noteDepth' onto the
--- note and hand it to the journal.
+-- | The sole 'Note' construction site: stamp the ambient 'noteDepth' and a
+-- fresh clock from the shared event-stream counter onto the note, and hand it
+-- to the journal.
 --
 -- Under 'Silent' the 'Note' is never constructed, so @loc@ and @text@ are
--- never forced (the strict 'Note' fields would otherwise evaluate them).
+-- never forced (the strict 'Note' fields would otherwise evaluate them) and
+-- the clock is never ticked — the zero-cost property is load-bearing (see
+-- 'Journal').
 journalNote :: (MonadIO m) => NoteKind -> Maybe SrcLoc -> Text -> PropertyT m ()
 journalNote kind loc text = PropertyT do
   env <- ask
   case env.journal of
     Silent -> pure ()
-    Recording sink -> liftIO (sink Note {kind, text, loc, depth = env.noteDepth})
+    Recording sink -> liftIO do
+      clock <- Tick.next env.testCase.recording
+      sink Note {kind, text, loc, depth = env.noteDepth, clock}
 {-# INLINEABLE journalNote #-}
 
 -- | Run a property with its journaled notes recorded one level deeper.
@@ -229,14 +236,17 @@ propertyAction prop tc =
   runPropertyT Env {testCase = tc, journal = Silent, noteDepth = 0} prop
 
 -- | Run a property against a test case with a recording journal, returning
--- how the run ended together with the journal contents.
-observeProperty :: TestCase -> Property () -> IO (Either SomeException (), [Note])
+-- how the run ended together with the journal contents and the test case's
+-- event stream (empty unless @tc@ was built with a recording
+-- 'Hegel.Internal.Tick.Recording').
+observeProperty :: TestCase -> Property () -> IO (Either SomeException (), [Note], [Event.Event])
 observeProperty tc prop = do
   j <- newIORef Seq.empty
   let record n = modifyIORef' j (|> n)
   eRes <- tryProperty (runPropertyT Env {testCase = tc, journal = Recording record, noteDepth = 0} prop)
   notes <- toList <$> readIORef j
-  pure (eRes, notes)
+  events <- Tick.drain tc.events
+  pure (eRes, notes, events)
 
 -- NOTE: This function _needs_ to use 'Control.Exception.throwIO' so that
 -- all non-Hegel async exceptions are rethrown _as_ async exceptions (and not

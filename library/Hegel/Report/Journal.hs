@@ -12,12 +12,12 @@ module Hegel.Report.Journal
 
     -- * Structured rendering
     journalDocs,
+    footnoteDocs,
     noteLineDoc,
     locDoc,
   )
 where
 
-import Data.List (partition)
 import Data.Traversable (mapAccumL)
 import Data.Tree (Forest, Tree (..))
 import GHC.Stack (SrcLoc (..))
@@ -73,9 +73,9 @@ numberDraws = snd . mapAccumL numberTree 1
 -- Footnotes are hoisted to the end at a fixed indent, discarding both their
 -- position and their depth.
 journalDocs :: [Note] -> [Doc Ann]
-journalDocs notes = treeDocs <> footerDocs
+journalDocs notes = treeDocs <> footnoteDocs notes
   where
-    (footers, inline) = partition (\n -> n.kind == Footnote) notes
+    inline = filter (\n -> n.kind /= Footnote) notes
     -- Roots sit at their stamped depth (not a fixed level) so orphan depth
     -- jumps keep the same columns as before the regrouping.
     treeDocs :: [Doc Ann]
@@ -83,8 +83,13 @@ journalDocs notes = treeDocs <> footerDocs
       [ PP.indent ((n.depth + 1) * 2) (noteTreeDoc t)
       | t@(Node (_, n) _) <- numberDraws (groupByDepth inline)
       ]
-    footerDocs :: [Doc Ann]
-    footerDocs = [PP.indent 2 (PP.annotate NoteAnn (PP.pretty n.text)) | n <- footers]
+
+-- | Footnotes ('Footnote' kind) rendered at a fixed indent, in order — hoisted
+-- to the end of a report body, their position and depth discarded. Shared by
+-- 'journalDocs', 'Hegel.Report.Stateful', and 'Hegel.Report'.
+footnoteDocs :: [Note] -> [Doc Ann]
+footnoteDocs notes =
+  [PP.indent 2 (PP.annotate NoteAnn (PP.pretty n.text)) | n <- notes, n.kind == Footnote]
 
 -- | Render one journal subtree: the note itself, then each child subtree
 -- indented by its depth /difference/ (one level = two spaces, so contiguous

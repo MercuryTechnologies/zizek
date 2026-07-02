@@ -1,11 +1,12 @@
 -- | Source-spliced rendering of stateful (step-structured) failure journals:
 -- the structured timeline spine, with the failing step's notes spliced into
 -- their source declarations. Backs 'Hegel.Report.renderReportRich' for step
--- journals; eyeball via the @stateful-report-gallery@ example. Layout rationale
+-- journals; eyeball via the @gallery@ example (`just gallery`). Layout rationale
 -- (and the deleted @Aggregate@ alternative) is recorded in
 -- @notes\/decisions\/stateful-reporting.md@.
 module Hegel.Report.Stateful
   ( statefulDoc,
+    failingGroupDoc,
     noteFiles,
     isStepJournal,
   )
@@ -20,7 +21,7 @@ import GHC.Stack (SrcLoc (..))
 import Hegel.Diff (Diff)
 import Hegel.Report.Ann (Ann (..), diffDocs)
 import Hegel.Report.Discovery (Declarations)
-import Hegel.Report.Journal (groupByDepth, locDoc, noteLineDoc, numberDraws)
+import Hegel.Report.Journal (footnoteDocs, groupByDepth, locDoc, noteLineDoc, numberDraws)
 import Hegel.Report.Note (Note (..), NoteKind (..), hasInBandFailure, isFailureNote)
 import Hegel.Report.Source
   ( Annotation,
@@ -60,14 +61,13 @@ isStepJournal notes = hasInBandFailure notes || any (\n -> n.depth > 0) notes
 -- in-band 'Failure' suppresses the top-level headline\/diff\/location block
 -- (the 'Failure' note carries them); a 'Failure'-less step journal (e.g. an
 -- exception mid-loop) keeps them.
-statefulDoc :: Declarations -> Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Doc Ann
-statefulDoc decls message notes loc diff
+statefulDoc :: Declarations -> Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Maybe (Doc Ann) -> Doc Ann
+statefulDoc decls message notes loc diff lead
   | hasInBandFailure notes = body
   | otherwise = PP.vsep (PP.annotate MessageAnn (PP.pretty message) : topBlock <> [body])
   where
-    body = PP.vsep (fmap (groupDoc decls) groups <> footerDocs)
+    body = PP.vsep (fmap (groupDoc decls lead) groups <> footnoteDocs footers)
     (groups, footers) = toGroups notes
-    footerDocs = [PP.indent 2 (PP.annotate NoteAnn (PP.pretty n.text)) | n <- footers]
     topBlock :: [Doc Ann]
     topBlock =
       fmap
@@ -75,6 +75,15 @@ statefulDoc decls message notes loc diff
         ( maybe [] (\d -> [PP.vsep (diffDocs d)]) diff
             <> maybe [] (\l -> [PP.annotate LocAnn ("at" <+> locDoc l)]) loc
         )
+
+-- | The failing step alone, spliced — the composed trace report's step
+-- splice (the spine carries every other step's story).
+-- 'Nothing' when no group carries the in-band 'Failure'.
+failingGroupDoc :: Declarations -> [Note] -> Maybe (Doc Ann)
+failingGroupDoc decls notes =
+  case [g | g <- fst (toGroups notes), groupHasFailure g] of
+    (g : _) -> Just (groupDoc decls Nothing g)
+    [] -> Nothing
 
 -- | Does this group's subtree carry the in-band 'Failure'?
 groupHasFailure :: Group -> Bool
@@ -98,9 +107,12 @@ toGroups notes = (fmap toGroup (numberDraws (groupByDepth inline)), footers)
 -- header and any unspliced notes (in journal order), then the group's merged
 -- source listings. Only the failure-carrying group splices; all other groups
 -- render exactly as the plain layout.
-groupDoc :: Declarations -> Group -> Doc Ann
-groupDoc decls g = PP.vsep (anchored <> listings)
+groupDoc :: Declarations -> Maybe (Doc Ann) -> Group -> Doc Ann
+groupDoc decls lead g = PP.vsep (anchored <> leadDoc <> listings)
   where
+    -- The lead (degraded reports only) sits under the ✗ header and
+    -- above the source splice, on the failing group alone.
+    leadDoc = if groupHasFailure g then maybe [] (\d -> [PP.indent 4 d]) lead else []
     results =
       [ ( n,
           if groupHasFailure g && isJust n.loc

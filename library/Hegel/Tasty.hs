@@ -19,8 +19,8 @@ import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Database (Database (..))
 import Hegel.Internal.DatabaseKey (propKey)
 import Hegel.Property.Internal (Property)
-import Hegel.Report (Report (..), Result (..), renderReportRich, renderReportRichAnsi)
-import Hegel.Report.Encoding qualified as Encoding
+import Hegel.Report (Report (..), Result (..), renderReportAuto)
+import Hegel.Report.Glyph qualified as Glyph
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..), defaultSettings, withDatabaseKey)
 import System.Environment (lookupEnv)
@@ -38,9 +38,8 @@ instance IsTest HegelTest where
   run opts (HegelTest settings prop) _progress = do
     report <- check settings prop
     useColor <- resolveColor (lookupOption opts)
-    pref <- Encoding.preference stdout
-    let render = if useColor then renderReportRichAnsi else renderReportRich
-    rendered <- T.unpack . Encoding.cleanFor pref <$> render report
+    pref <- Glyph.preference stdout
+    rendered <- T.unpack <$> renderReportAuto useColor pref report
     pure case report.result of
       Ok -> testPassed rendered
       _ -> testFailed rendered

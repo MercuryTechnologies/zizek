@@ -7,10 +7,11 @@ import Hegel.Database (Database (..))
 import Hegel.Gen qualified as Gen
 import Hegel.Phase (Phase (..))
 import Hegel.Property (Property, assert, assume, forAll)
-import Hegel.Report (Report (..), Result (..), Stats (..))
+import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..))
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..), defaultSettings)
 import Test.Hspec
+import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 intR :: (Int, Int) -> Gen Int
@@ -34,6 +35,26 @@ spec = do
       -- With generation disabled, only the stored example can fail it again.
       r2 <- check settings {phases = [Explicit, Reuse, Shrink]} failing
       r2.result `shouldSatisfy` isCounterexample
+
+  it "a failure the reconstruction replay cannot reproduce surfaces as ReplayDiverged" $ do
+    -- Fails exactly once. With shrinking enabled the engine's own replays
+    -- would observe the disagreement and flag a flaky test (UnhealthyInput);
+    -- with the Shrink phase off, the only re-execution is zizek's final
+    -- reconstruction replay — which the engine cannot see — and it passes.
+    flag <- newIORef False
+    let nondeterministic :: Property ()
+        nondeterministic = do
+          _ <- forAll (intR (0, 10))
+          fired <- readIORef flag
+          if fired
+            then pure ()
+            else do
+              writeIORef flag True
+              assert False "fails exactly once (nondeterministic)"
+    r <- check defaultSettings {phases = [Generate]} nondeterministic
+    case r.result of
+      Aborted (ReplayDiverged _) -> pure ()
+      other -> expectationFailure ("expected ReplayDiverged, got: " <> show other)
 
   it "derandomize makes keyed runs deterministic" $ do
     let settings =

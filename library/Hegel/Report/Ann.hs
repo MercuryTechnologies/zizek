@@ -13,6 +13,8 @@ module Hegel.Report.Ann
 
     -- * Shared layout helpers
     diffDocs,
+    lineDiffText,
+    lineDiffAnn,
   )
 where
 
@@ -76,6 +78,23 @@ data Ann
     FailureGutter
   | -- | Inlined failure message text.
     FailureMessage
+  | -- | A value strand's gutter glyph (and its name in text), coloured from the
+    -- shared palette by the value's strand index — glyphs carry state, columns
+    -- carry identity, the colour binds a value's name in prose to its strand
+    -- with zero geometry. (The name 'LaneAnn' is reserved for the future braid,
+    -- where a lane is a concurrent thread; see
+    -- notes/decisions/report-visual-grammar.md.)
+    StrandAnn !Int
+  | -- | A citation-link cell, coloured from the shared palette as the strand of
+    -- the value the edge concerns.
+    LinkAnn !Int
+  | -- | A spine step number (dim).
+    StepNoAnn
+  | -- | A rule's @→ response@ segment on a spine row.
+    ResponseAnn
+  | -- | Elision rows and other droppable spine detail (dim).
+    ElidedAnn
+  deriving stock (Show, Eq)
 
 -- | Render a 'Doc Ann' as plain text, stripping all annotations.
 docToText :: Doc Ann -> Text
@@ -96,10 +115,22 @@ diffDocs :: [LineDiff] -> [Doc Ann]
 diffDocs d = diffLegend : fmap lineDiffDoc d
 
 lineDiffDoc :: LineDiff -> Doc Ann
-lineDiffDoc = \case
-  LineSame t -> PP.annotate DiffSame ("  " <> PP.pretty t)
-  LineRemoved t -> PP.annotate DiffRemoved ("- " <> PP.pretty t)
-  LineAdded t -> PP.annotate DiffAdded ("+ " <> PP.pretty t)
+lineDiffDoc d = PP.annotate (lineDiffAnn d) (PP.pretty (lineDiffText d))
+
+-- | A diff line as prefixed text — the one home of the @  @\/@- @\/@+ @
+-- prefix vocabulary (the spine's detail rows render from this too).
+lineDiffText :: LineDiff -> Text
+lineDiffText = \case
+  LineSame t -> "  " <> t
+  LineRemoved t -> "- " <> t
+  LineAdded t -> "+ " <> t
+
+-- | The annotation matching 'lineDiffText'.
+lineDiffAnn :: LineDiff -> Ann
+lineDiffAnn = \case
+  LineSame _ -> DiffSame
+  LineRemoved _ -> DiffRemoved
+  LineAdded _ -> DiffAdded
 
 -- | Legend tying the diff markers to the @(===)@ operands: @(- lhs) (+ rhs)@,
 -- each token coloured to match the diff lines it keys (hedgehog's header
@@ -131,3 +162,24 @@ annToAnsi = \case
   FailureMark -> PP.Terminal.color PP.Terminal.Red
   FailureGutter -> mempty
   FailureMessage -> mempty
+  StrandAnn n -> paletteColor n
+  LinkAnn n -> paletteColor n
+  -- No SGR-2 faint in prettyprinter-ansi-terminal; dull white is the
+  -- established "dim" approximation (see 'LocAnn').
+  StepNoAnn -> PP.Terminal.colorDull PP.Terminal.White
+  ResponseAnn -> mempty
+  ElidedAnn -> PP.Terminal.colorDull PP.Terminal.White
+
+-- | The shared five-hue identity palette: strand colours today (a value's
+-- identity on the spine), the braid's lane colours later (a thread's identity)
+-- — same palette, both axes. Five theme-safe hues; never red (reserved for
+-- failure), never white\/black\/grey (theme-fragile). Ordering is
+-- colourblind-aware: the deutan confusion pair is deferred to the fifth hue.
+paletteColor :: Int -> AnsiStyle
+paletteColor n =
+  PP.Terminal.color case n `mod` 5 of
+    0 -> PP.Terminal.Cyan
+    1 -> PP.Terminal.Magenta
+    2 -> PP.Terminal.Yellow
+    3 -> PP.Terminal.Blue
+    _ -> PP.Terminal.Green

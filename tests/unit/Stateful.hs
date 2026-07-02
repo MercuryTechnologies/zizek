@@ -155,9 +155,14 @@ statefulSpec = describe "Machine" do
     report <- check defaultSettings (Stateful.run machine)
     case report.result of
       Counterexample {notes} -> do
-        let annotations = [n | n <- notes, n.kind == Annotation]
-        annotations `shouldNotSatisfy` null
-        annotations `shouldSatisfy` all (isNothing . (.loc))
+        let machinery = [n | n <- notes, isMachinery n.kind]
+            isMachinery = \case
+              Annotation -> True
+              StepHeader _ _ -> True
+              _ -> False
+        machinery `shouldNotSatisfy` null
+        [n | n <- machinery, StepHeader _ _ <- [n.kind]] `shouldNotSatisfy` null
+        machinery `shouldSatisfy` all (isNothing . (.loc))
       other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
   it "journals the failing assertion in-band as a nested Failure note" do

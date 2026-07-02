@@ -10,7 +10,7 @@
 --
 -- This module owns the output 'Preference' (the never-crash decision) and the
 -- text-cleaning pass, both independent of any glyph vocabulary. The stateful
--- trace ledger's richer cell glyphs extend 'baseTransliterations' via
+-- trace spine's richer cell glyphs extend 'baseTransliterations' via
 -- 'sevenBitCleanWith'; see "Hegel.Report.Glyph".
 --
 -- Designed for qualified import:
@@ -67,16 +67,16 @@ cleanFor = \case
   PreferUnicode -> id
 
 -- | Make a rendered report 7-bit clean using the base transliteration table:
--- transliterate the glyphs the (non-ledger) renderers are known to emit and
+-- transliterate the glyphs the (non-spine) renderers are known to emit and
 -- @\\xNNNN@-escape only what remains. See 'sevenBitCleanWith'.
 sevenBitClean :: Text -> Text
 sevenBitClean = sevenBitCleanWith baseTransliterations
 
 -- | Make text 7-bit clean against a caller-supplied transliteration table:
 -- keep ASCII as-is, transliterate any char in the table, and @\\xNNNN@-escape
--- every other non-ASCII char (genuinely unknown user text). The ledger passes
--- @'baseTransliterations' <> its cell glyphs@ so chrome and lane glyphs are
--- covered by one pass without turning the chrome into escape soup.
+-- every other non-ASCII char (genuinely unknown user text). The spine passes
+-- @'baseTransliterations' <> its cell glyphs@ so chrome and spine cell glyphs
+-- are covered by one pass without turning the chrome into escape soup.
 sevenBitCleanWith :: Map Char Text -> Text -> Text
 sevenBitCleanWith transliterations = T.concatMap \c ->
   if Char.isAscii c
@@ -85,9 +85,9 @@ sevenBitCleanWith transliterations = T.concatMap \c ->
       Just t -> t
       Nothing -> "\\x" <> T.pack (showHex (Char.ord c) "")
 
--- | The glyphs the base (non-ledger) renderers emit: source-splice borders,
+-- | The glyphs the base (non-spine) renderers emit: source-splice borders,
 -- the in-band failure mark, prose typography, and subscript digits. A
--- hand-maintained list (the one drift risk); the ledger's cell glyphs are
+-- hand-maintained list (the one drift risk); the spine's cell glyphs are
 -- derived from its tables and unioned on top in "Hegel.Report.Glyph".
 baseTransliterations :: Map Char Text
 baseTransliterations =

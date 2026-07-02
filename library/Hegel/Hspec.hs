@@ -37,10 +37,9 @@ import Hegel.Report
     Result (..),
     renderReport,
     renderReportAnsi,
-    renderReportRich,
-    renderReportRichAnsi,
+    renderReportAuto,
   )
-import Hegel.Report.Encoding qualified as Encoding
+import Hegel.Report.Glyph qualified as Glyph
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..), defaultSettings, withDatabaseKey)
 import System.Environment (lookupEnv)
@@ -101,7 +100,7 @@ runProperty :: Settings -> Property () -> IO Hspec.Result
 runProperty settings body = do
   report <- check settings body
   useColor <- shouldUseColor
-  pref <- Encoding.preference stdout
+  pref <- Glyph.preference stdout
   toHspecResult useColor pref report
 
 -- | A property as a keyed hspec example: a drop-in for @it@ that derives a
@@ -205,27 +204,28 @@ shouldUseColor = do
     then pure False
     else hIsTerminalDevice stderr
 
-toHspecResult :: Bool -> Encoding.Preference -> Report -> IO Hspec.Result
+toHspecResult :: Bool -> Glyph.Preference -> Report -> IO Hspec.Result
 toHspecResult useColor pref report = case report.result of
   Ok -> pure (Hspec.Result (T.unpack (clean (render report))) Hspec.Success)
   Counterexample {loc} -> do
     -- The ┏━━ header already shows the file, so there's no need to duplicate
     -- it in hspec's Location slot — but we still fill that slot so hspec can
     -- jump to the right line.
-    rendered <- richRender report
-    pure (failed (hspecLocation <$> loc) (Hspec.Reason (T.unpack (clean rendered))))
+    rendered <- renderReportAuto useColor pref report
+    pure (failed (hspecLocation <$> loc) (Hspec.Reason (T.unpack rendered)))
   GaveUp msg ->
     pure (failed Nothing (Hspec.Reason (T.unpack (clean ("gave up: " <> msg)))))
   Aborted (Errored e) ->
     pure (failed Nothing (Hspec.Error Nothing e))
   Aborted (UnhealthyInput msg) ->
     pure (failed Nothing (Hspec.Reason (T.unpack (clean ("health check failed: " <> msg)))))
+  Aborted (ReplayDiverged msg) ->
+    pure (failed Nothing (Hspec.Reason (T.unpack (clean ("replay diverged: " <> msg)))))
   where
     render = if useColor then renderReportAnsi else renderReport
-    richRender = if useColor then renderReportRichAnsi else renderReportRich
-    -- Every string handed to hspec is cleaned so the 7-bit guarantee covers
+    -- Every string handed to hspec is cleaned: the 7-bit guarantee covers
     -- gave-up and abort messages (user text) too, not just counterexamples.
-    clean = Encoding.cleanFor pref
+    clean = Glyph.cleanFor pref
     failed loc reason = Hspec.Result "" (Hspec.Failure loc reason)
 
 hspecLocation :: SrcLoc -> Hspec.Location
