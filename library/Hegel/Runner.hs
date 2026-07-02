@@ -226,7 +226,8 @@ readRunError ctx res =
 reconstructProperty :: Ptr HegelContext -> Property () -> Ptr HegelSettings -> ByteString -> IO Result
 reconstructProperty ctx prop s blob =
   withTestCaseFromBlob ctx s blob \tcPtr -> do
-    (eRes, notes) <- observeProperty (mkTestCase ctx tcPtr) prop
+    tc <- mkTestCase ctx tcPtr
+    (eRes, notes) <- observeProperty tc prop
     pure case eRes of
       Left e
         -- A discard or budget stop during replay means the engine's failure
@@ -288,8 +289,8 @@ runTestCase ctx settings action tcPtr =
   run `finally` finalizer
   where
     Finalizer finalizer = settings.perCaseFinalizer
-    tc = mkTestCase ctx tcPtr
     run = do
+      tc <- mkTestCase ctx tcPtr
       status <-
         -- 'catchControl' catches only Hegel's async control signals via base
         -- 'E.catches'; 'catchAny' (unliftio) then catches all remaining

@@ -39,8 +39,12 @@ import Witch qualified
 -- 'markComplete' is called and the runner fetches the next case via
 -- 'hegel_next_test_case'). Blob-derived replay handles are caller-owned and
 -- freed by their bracket instead.
-mkTestCase :: Ptr HegelContext -> Ptr HegelTestCase -> TestCase
-mkTestCase ctx ptr = TestCase {ptr, ctx}
+--
+-- In 'IO' to allocate the case's reusable draw 'Slot'.
+mkTestCase :: Ptr HegelContext -> Ptr HegelTestCase -> IO TestCase
+mkTestCase ctx ptr = do
+  slot <- newSlot
+  pure TestCase {ptr, ctx, slot}
 
 -- * Test case
 
@@ -51,7 +55,9 @@ mkTestCase ctx ptr = TestCase {ptr, ctx}
 -- FFI bindings rather than touching these pointers directly.
 data TestCase = TestCase
   { ptr :: Ptr HegelTestCase,
-    ctx :: Ptr HegelContext
+    ctx :: Ptr HegelContext,
+    -- | Where this case's draw replies return through; see 'Slot'.
+    slot :: Slot
   }
 
 -- * Completion

@@ -316,7 +316,10 @@ executable profile-hegel
   import: conformance
   hs-source-dirs: tests/profile
   main-is: Main.hs
-  other-modules: Warehouse
+  other-modules:
+    Stress
+    Warehouse
+
   build-depends:
     containers ^>=0.7,
     zizek,

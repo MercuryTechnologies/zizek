@@ -14,6 +14,7 @@
 -- harness, not a test. Only usage errors exit nonzero.
 module Main (main) where
 
+import Control.Exception (displayException)
 import Control.Monad (replicateM_, void)
 import Data.Function ((&))
 import Data.List qualified as List
@@ -25,12 +26,14 @@ import Data.Word (Word64)
 import Hegel (Gen)
 import Hegel.Assertion (assert)
 import Hegel.Gen qualified as Gen
+import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Phase (Phase (..))
 import Hegel.Property (Property, forAll, forAllSilent)
-import Hegel.Report (Report (..), Result (..), Stats (..))
+import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..))
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..), defaultSettings)
 import Hegel.Stateful qualified as Stateful
+import Stress qualified
 import System.Environment (getArgs, getProgName)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
@@ -98,7 +101,12 @@ runScenario scenario opts = do
             phases =
               if opts.shrink
                 then defaultSettings.phases
-                else List.filter (/= Shrink) defaultSettings.phases
+                else List.filter (/= Shrink) defaultSettings.phases,
+            -- Profiling workloads are deliberately extreme; the health
+            -- checks would reject exactly the pathological cases (e.g.
+            -- gen-hoard's 10k draws per case) we are here to measure.
+            suppressHealthCheck =
+              [FilterTooMuch, TooSlow, TestCasesTooLarge, LargeInitialTestCase]
           }
   report <- check settings scenario.property
   T.putStrLn (summary scenario settings report)
@@ -113,12 +121,16 @@ summary scenario settings report =
       "result=" <> resultTag report.result
     ]
 
+-- | Constructor name, plus the reason for runs that stopped early — an
+-- opaque @Aborted@ would otherwise hide exactly the misconfiguration (e.g. a
+-- tripped health check) a new scenario needs to hear about.
 resultTag :: Result -> Text
 resultTag = \case
   Ok -> "Ok"
   Counterexample {} -> "Counterexample"
-  GaveUp {} -> "GaveUp"
-  Aborted {} -> "Aborted"
+  GaveUp why -> "GaveUp (" <> why <> ")"
+  Aborted (UnhealthyInput why) -> "Aborted (UnhealthyInput: " <> why <> ")"
+  Aborted (Errored e) -> "Aborted (Errored: " <> T.pack (displayException e) <> ")"
 
 tshow :: (Show a) => a -> Text
 tshow = T.pack . show
@@ -148,7 +160,10 @@ scenarios =
     Scenario "collections" 500 "one list-of-text + one map draw per case; per-byte CBOR cost" collectionsProperty,
     Scenario "stateful-simple" 2000 "passing one-rule counter machine; per-step overhead" (Stateful.run counterMachine),
     Scenario "warehouse" 1000 "passing warehouse machine; realistic mixed stateful workload" (Stateful.run (Warehouse.machine Warehouse.Fixed)),
-    Scenario "shrink" 100 "buggy warehouse machine; find + shrink + replay (pair with --no-shrink)" (Stateful.run (Warehouse.machine Warehouse.Buggy))
+    Scenario "shrink" 100 "buggy warehouse machine; find + shrink + replay (pair with --no-shrink)" (Stateful.run (Warehouse.machine Warehouse.Buggy)),
+    Scenario "warehouse-heavy" 300 "24-SKU warehouse w/ audit-log thunk chains + fat annotations" (Stateful.run Stress.heavyMachine),
+    Scenario "gen-churn" 2000 "fresh dependent generator per draw; pre-encoding worst case" Stress.churnProperty,
+    Scenario "gen-hoard" 20 "10k generators alive as a CAF; cached-encoding retention" Stress.hoardProperty
   ]
 
 smallInt :: Gen Int
