@@ -122,6 +122,9 @@ runConformanceProperty gen body = run `finally` pure ()
         Aborted (UnhealthyInput msg) -> do
           putStrLn ("conformance health check failed: " <> show msg)
           exitWith (ExitFailure 1)
+        Aborted (ReplayDiverged msg) -> do
+          putStrLn ("conformance replay diverged: " <> show msg)
+          exitWith (ExitFailure 1)
 
 -- | Conformance runner whose body returns @Just m@ to emit @m@ as the case's
 -- metric, or @Nothing@ to skip.
@@ -156,6 +159,9 @@ runConformancePropertyPaired gen toMetric =
           exitWith (ExitFailure 1)
         Aborted (UnhealthyInput msg) -> do
           putStrLn ("conformance health check failed: " <> show msg)
+          exitWith (ExitFailure 1)
+        Aborted (ReplayDiverged msg) -> do
+          putStrLn ("conformance replay diverged: " <> show msg)
           exitWith (ExitFailure 1)
 
 -- | Variant of 'runConformanceProperty' for tests whose property is *expected*
@@ -192,6 +198,9 @@ runConformancePropertyExpectFailures gen body = run `finally` pure ()
           exitWith (ExitFailure 1)
         Aborted (UnhealthyInput msg) -> do
           putStrLn ("conformance health check failed: " <> show msg)
+          exitWith (ExitFailure 1)
+        Aborted (ReplayDiverged msg) -> do
+          putStrLn ("conformance replay diverged: " <> show msg)
           exitWith (ExitFailure 1)
 
 -- | Write @{\"interesting_test_cases\": N}@ to @CONFORMANCE_SERVER_RUN_METRICS_FILE@.

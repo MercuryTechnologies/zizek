@@ -22,7 +22,8 @@ import Hegel.HealthCheck (HealthCheck)
 import Hegel.Internal.CString qualified as CString
 import Hegel.Internal.Control (ControlSignal (..), MalformedTest, catchControl, isControlSignal)
 import Hegel.Internal.FFI
-import Hegel.Internal.TestCase (Status (..), TestCase, markComplete, mkTestCase)
+import Hegel.Internal.TestCase (Handle (..), Status (..), TestCase, markComplete, mkTestCase)
+import Hegel.Internal.Tick qualified as Tick
 import Hegel.Phase (Phase)
 import Hegel.Property.Internal (Property, failureDetails, observeProperty, propertyAction)
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
@@ -74,7 +75,16 @@ check settings prop =
           -- The run itself failed (a health check, a nondeterministic test, an
           -- engine panic) and produced no verdict on the property.
           RunErrored -> pure (Aborted (UnhealthyInput (fromMaybe "the run failed" outcome.runError)))
-        pure Report {result, stats = Stats {valid = nValid, invalid = nInvalid}}
+        pure
+          Report
+            { result,
+              stats = Stats {valid = nValid, invalid = nInvalid},
+              -- The reproduction surface, for the failure footer: only a
+              -- persisted key is honest to point at.
+              databaseKey = case settings.database of
+                DatabaseDisabled -> Nothing
+                _ -> settings.databaseKey
+            }
 
 -- * Settings
 
@@ -226,8 +236,9 @@ readRunError ctx res =
 reconstructProperty :: Ptr HegelContext -> Property () -> Ptr HegelSettings -> ByteString -> IO Result
 reconstructProperty ctx prop s blob =
   withTestCaseFromBlob ctx s blob \tcPtr -> do
-    tc <- mkTestCase ctx tcPtr
-    (eRes, notes) <- observeProperty tc prop
+    recording <- Tick.newRecording
+    tc <- mkTestCase recording Handle {ctx, ptr = tcPtr}
+    (eRes, notes, events) <- observeProperty tc prop
     pure case eRes of
       Left e
         -- A discard or budget stop during replay means the engine's failure
@@ -235,11 +246,11 @@ reconstructProperty ctx prop s blob =
         | isControlSignal e -> diverged
         | otherwise ->
             let (message, loc, diff) = failureDetails e
-             in Counterexample {message, notes, loc, diff}
+             in Counterexample {message, notes, events, loc, diff}
       Right () -> diverged
   where
     diverged =
-      Aborted (Errored (toException (userError "failure reported but the property did not reproduce it on replay")))
+      Aborted (ReplayDiverged "the engine reported a failure, but its stored example passed (or discarded) on replay")
 
 -- * Per-case loop
 
@@ -290,7 +301,7 @@ runTestCase ctx settings action tcPtr =
   where
     Finalizer finalizer = settings.perCaseFinalizer
     run = do
-      tc <- mkTestCase ctx tcPtr
+      tc <- mkTestCase Tick.Silent Handle {ctx, ptr = tcPtr}
       status <-
         -- 'catchControl' catches only Hegel's async control signals via base
         -- 'E.catches'; 'catchAny' (unliftio) then catches all remaining

@@ -6,12 +6,16 @@ module Hegel.Report.Note
     NoteKind (..),
     hasInBandFailure,
     isFailureNote,
+    renderValue,
   )
 where
 
 import Data.Text (Text)
+import Data.Text qualified as T
 import GHC.Stack (SrcLoc)
 import Hegel.Diff (Diff)
+import Hegel.Internal.Tick (Tick)
+import Text.Show.Pretty qualified as Pretty
 
 -- | The kind of a journaled 'Note'.
 data NoteKind
@@ -19,6 +23,15 @@ data NoteKind
     Drawn
   | -- | Context attached mid-test (an @annotate@-style call).
     Annotation
+  | -- | A rule's declared result (a 'Hegel.Stateful.respond' call): the
+    -- right-hand side of the trace ledger's @call -> response@ column.
+    Response
+  | -- | A stateful step header, carrying the step number and rule name
+    -- structurally.
+    --
+    -- 'Note.text' still carries the rendered @\"Step N: rulename\"@ string,
+    -- which is what the structured renderers display.
+    StepHeader !Int !Text
   | -- | Context rendered after the report body (a @footnote@-style call).
     Footnote
   | -- | A caught failure journaled in-band at the point it occurred (used by
@@ -35,9 +48,22 @@ data Note = Note
     loc :: Maybe SrcLoc,
     -- | Nesting level (0 = top level). Draws made inside a stateful step are
     -- journaled one level deeper than the step header itself.
-    depth :: !Int
+    depth :: !Int,
+    -- | Sequence stamp from the clock shared with the pool-event stream
+    -- ("Hegel.Internal.Event"); lets the render boundary zip the two streams
+    -- back into one ordered history. @'Hegel.Internal.Tick.Tick' 0@ when no
+    -- event stream was recording (including synthetic test journals).
+    clock :: !Tick
   }
   deriving stock (Show)
+
+-- | Render a value via its 'Show' instance, pretty-printed multi-line when
+-- the output parses as a value AST, the raw 'show' string otherwise. The
+-- default renderer for @forAll@-style draws.
+renderValue :: (Show a) => a -> Text
+renderValue a = T.pack (maybe s Pretty.valToStr (Pretty.parseValue s))
+  where
+    s = show a
 
 -- | Is this note an in-band 'Failure'?
 isFailureNote :: Note -> Bool

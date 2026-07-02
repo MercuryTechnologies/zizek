@@ -114,6 +114,7 @@ library
     Hegel.Internal.FFI
     Hegel.Internal.Schema
     Hegel.Internal.TestCase
+    Hegel.Internal.Tick
     Hegel.Phase
     Hegel.Pool
     Hegel.Property
