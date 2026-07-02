@@ -14,6 +14,7 @@ module Hegel.Internal.TestCase
     mkTestCase,
 
     -- * Test case
+    Handle (..),
     TestCase (..),
 
     -- * Completion
@@ -22,42 +23,68 @@ module Hegel.Internal.TestCase
   )
 where
 
+import Data.Sequence (Seq)
+import Data.Sequence qualified as Seq
 import Data.Text (Text)
 import Foreign (Ptr, nullPtr)
 import Foreign.C.Types (CInt)
 import Hegel.Internal.CString qualified as CString
+import Hegel.Internal.Event (Event)
 import Hegel.Internal.FFI
+import Hegel.Internal.Tick qualified as Tick
+import UnliftIO.IORef (IORef, newIORef)
 import Witch qualified
 
 -- * Construction
 
--- | Pair a run-owned @hegel_test_case_t*@ pointer with the error-reporting
--- context the run is driven under.
+-- | Build the per-case environment around an engine 'Handle'.
 --
--- For run-owned handles the pointer is borrowed from the run handle and
+-- For run-owned handles the case pointer is borrowed from the run handle and
 -- remains valid only for the duration of the current test case (until
 -- 'markComplete' is called and the runner fetches the next case via
 -- 'hegel_next_test_case'). Blob-derived replay handles are caller-owned and
 -- freed by their bracket instead.
 --
--- In 'IO' to allocate the case's reusable draw 'Slot'.
-mkTestCase :: Ptr HegelContext -> Ptr HegelTestCase -> IO TestCase
-mkTestCase ctx ptr = do
+-- The 'Tick.Recording' selects whether this case records: ordinary cases (and
+-- every shrink replay) pass 'Hegel.Internal.Tick.Silent'; only the final
+-- reconstruction replay passes a recording toggle
+-- ('Hegel.Internal.Tick.newRecording') — the same once-per-failure discipline
+-- as the note journal.
+--
+-- In 'IO' to allocate the case's reusable draw 'Slot' and its event buffer.
+mkTestCase :: Tick.Recording -> Handle -> IO TestCase
+mkTestCase recording handle = do
   slot <- newSlot
-  pure TestCase {ptr, ctx, slot}
+  events <- newIORef Seq.empty
+  pure TestCase {handle, slot, recording, events}
 
 -- * Test case
 
--- | A @hegel_test_case_t*@ pointer together with the @hegel_context_t*@ it is
--- driven under.
+-- | The engine's per-case pointer pair: a @hegel_test_case_t*@ together with
+-- the @hegel_context_t*@ it is driven under.
+data Handle = Handle
+  { ctx :: !(Ptr HegelContext),
+    ptr :: !(Ptr HegelTestCase)
+  }
+
+-- | The per-case environment: the engine 'Handle' plus the per-case run
+-- context the Haskell side threads with it.
 --
--- Generators, collections, and the runner pass 'TestCase' handles into the
--- FFI bindings rather than touching these pointers directly.
+-- Generators, collections, and the runner pass 'TestCase' values into the
+-- FFI bindings rather than touching the raw pointers directly.
 data TestCase = TestCase
-  { ptr :: Ptr HegelTestCase,
-    ctx :: Ptr HegelContext,
+  { -- | The engine pointer pair every FFI call goes through (unpacked:
+    -- the nesting is conceptual, not a layout cost on the draw hot path).
+    handle :: {-# UNPACK #-} !Handle,
     -- | Where this case's draw replies return through; see 'Slot'.
-    slot :: Slot
+    slot :: !Slot,
+    -- | Whether this case is recording, and the clock the note journal and the
+    -- pool-event stream share; see "Hegel.Internal.Tick".
+    recording :: !Tick.Recording,
+    -- | This case's pool-event buffer; appended to (via
+    -- 'Hegel.Internal.Tick.record') only while 'recording' is
+    -- 'Hegel.Internal.Tick.Active'. See "Hegel.Internal.Event".
+    events :: !(IORef (Seq Event))
   }
 
 -- * Completion
@@ -79,12 +106,12 @@ markComplete tc status = do
   -- 'Interesting' case also carries an origin string, passed separately.
   rc <- case status of
     Interesting origin ->
-      CString.withText origin (hegel_mark_complete tc.ctx tc.ptr (Witch.into @CInt status))
-    _ -> hegel_mark_complete tc.ctx tc.ptr (Witch.into @CInt status) nullPtr
+      CString.withText origin (hegel_mark_complete tc.handle.ctx tc.handle.ptr (Witch.into @CInt status))
+    _ -> hegel_mark_complete tc.handle.ctx tc.handle.ptr (Witch.into @CInt status) nullPtr
   case rc of
     HEGEL_OK -> pure ()
     HEGEL_E_STOP_TEST -> pure ()
-    _ -> throwOnError tc.ctx rc
+    _ -> throwOnError tc.handle.ctx rc
 
 -- | Final outcome of a test case, sent via 'markComplete'.
 data Status

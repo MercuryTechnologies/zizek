@@ -75,8 +75,8 @@ sevenBitClean = sevenBitCleanWith baseTransliterations
 -- | Make text 7-bit clean against a caller-supplied transliteration table:
 -- keep ASCII as-is, transliterate any char in the table, and @\\xNNNN@-escape
 -- every other non-ASCII char (genuinely unknown user text). The ledger passes
--- @'baseTransliterations' <> its cell glyphs@ so chrome and lane glyphs are
--- covered by one pass without turning the chrome into escape soup.
+-- @'baseTransliterations' <> its cell glyphs@ so chrome and ledger cell glyphs
+-- are covered by one pass without turning the chrome into escape soup.
 sevenBitCleanWith :: Map Char Text -> Text -> Text
 sevenBitCleanWith transliterations = T.concatMap \c ->
   if Char.isAscii c

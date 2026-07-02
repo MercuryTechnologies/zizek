@@ -6,6 +6,8 @@ import DatabaseReplay qualified
 import GeneratorSchemas qualified
 import Integrations qualified
 import KeyedProperties qualified
+import LedgerRendering qualified
+import PoolEvents qualified
 import PropertyChecks qualified
 import ReportRendering qualified
 import SourceRendering qualified
@@ -13,6 +15,7 @@ import StandardGenerators qualified
 import Stateful qualified
 import Test.Tasty (defaultMain, testGroup)
 import Test.Tasty.Hspec (testSpec)
+import TraceIR qualified
 
 main :: IO ()
 main = do
@@ -27,6 +30,9 @@ main = do
   replay <- testSpec "database replay" DatabaseReplay.spec
   keyed <- testSpec "keyed properties" KeyedProperties.spec
   stateful <- testSpec "stateful testing" Stateful.spec
+  poolEvents <- testSpec "pool events" PoolEvents.spec
+  traceIR <- testSpec "trace IR" TraceIR.spec
+  ledger <- testSpec "ledger rendering" LedgerRendering.spec
   defaultMain
     ( testGroup
         "zizek:unit"
@@ -42,6 +48,9 @@ main = do
           replay,
           keyed,
           KeyedProperties.tastyTree,
-          stateful
+          stateful,
+          poolEvents,
+          traceIR,
+          ledger
         ]
     )
