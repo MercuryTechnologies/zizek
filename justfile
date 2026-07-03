@@ -117,3 +117,11 @@ profile-time-compare:
 check-coverage:
   @echo "check-coverage: not yet implemented — add hpc-codecov to flake.nix devShell and wire up here"
   @exit 1
+
+# Render the failure-report gallery (stress scenarios; eyeball harness)
+gallery:
+    cabal run gallery
+
+# Render the guided tour of report complexity (eyeball harness)
+tour:
+    cabal run tour

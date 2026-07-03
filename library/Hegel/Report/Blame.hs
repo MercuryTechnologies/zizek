@@ -13,6 +13,7 @@ module Hegel.Report.Blame
 
     -- * Analysis
     analyze,
+    factVar,
 
     -- * Projections
     Citation (..),
@@ -72,8 +73,11 @@ data Fact
     BornAt !Var
   | -- | Drew it without consuming.
     TouchedAt !Var
-  | -- | Consumed it; the value's death.
+  | -- | Consumed it — the value's death (no continuation followed).
     ConsumedAt !Var
+  | -- | Consumed it into a lineage-linked continuation ('Hegel.Pool.transfer'):
+    -- a handoff, not a death — the logical value lives on in another pool.
+    TransferredAt !Var
   | -- | Touched it /after/ its death: the step is haunted by a value
     -- consumed earlier.
     HauntedAt !Var
@@ -93,9 +97,16 @@ analyze :: Trace -> Maybe Blame
 analyze trace = do
   failure <- trace.failure
   failing <- Trace.step trace failure.step
-  primary <- listToMaybe (sortOn (Down . causalWeight) failing.touches)
+  -- Rank by the *fact* each touch contributes, not its raw event kind, so a
+  -- haunted touch (the bug named outright) outranks an incidental
+  -- consumption or transfer at the same step.
+  (violation, primary) <-
+    listToMaybe
+      ( sortOn
+          (Down . factWeight . fst)
+          [(factAt trace failure.step t, t) | t <- failing.touches]
+      )
   let subject = primary.var
-      violation = factAt trace failure.step primary
   pure
     Blame
       { subject,
@@ -110,18 +121,26 @@ analyze trace = do
           _ -> Nothing
       }
 
--- | Rank a failing step's touches by causal weight:
---
--- * a posthumous touch names the bug outright
--- * a consumption is the step's action
--- * a reuse observes
--- * a birth instantiates
-causalWeight :: Touch -> Int
-causalWeight t = case t.kind of
-  Named _ -> -1 -- never a step touch; unreachable
-  Born _ -> 0
-  Reused -> 1
-  Consumed -> 2
+-- | Causal load, for choosing subjects and deduping citations: a haunted
+-- touch names the bug outright; a consumption is the step's action; a
+-- transfer hands off; a reuse observes; a birth instantiates.
+factWeight :: Fact -> Int
+factWeight = \case
+  BornAt _ -> 0
+  TouchedAt _ -> 1
+  TransferredAt _ -> 2
+  ConsumedAt _ -> 3
+  HauntedAt _ -> 4
+
+-- | The value a fact concerns. One home; the renderers project names from
+-- it.
+factVar :: Fact -> Var
+factVar = \case
+  BornAt v -> v
+  TouchedAt v -> v
+  ConsumedAt v -> v
+  TransferredAt v -> v
+  HauntedAt v -> v
 
 -- | The fact a touch contributes at a step, upgrading a reuse of a dead
 -- value to 'HauntedAt'.
@@ -129,7 +148,9 @@ factAt :: Trace -> Int -> Touch -> Fact
 factAt trace at t = case t.kind of
   Named _ -> TouchedAt t.var -- never a step touch; unreachable
   Born _ -> BornAt t.var
-  Consumed -> ConsumedAt t.var
+  Consumed
+    | Trace.continues trace t.var -> TransferredAt t.var
+    | otherwise -> ConsumedAt t.var
   Reused
     | Just l <- Trace.lifeline trace t.var,
       Just died <- l.consumedAt,
@@ -154,7 +175,7 @@ citationsFor trace failingStep subject =
       b <- l.bornAt
       before b (BornAt l.var)
     deaths =
-      [ before d (ConsumedAt l.var)
+      [ before d (if Trace.continues trace l.var then TransferredAt l.var else ConsumedAt l.var)
       | l <- chainLives,
         Just d <- [l.consumedAt]
       ]
@@ -168,8 +189,7 @@ citationsFor trace failingStep subject =
       | otherwise = Nothing
     -- One citation per step: the ledger draws one rail edge per cited row,
     -- so multiple facts at one step (two draws, or a transfer's consume)
-    -- keep only the most causally loaded (facts sort Born < Touched <
-    -- Consumed < Haunted by construction order).
+    -- keep only the most causally loaded.
     dedupe :: [(Int, Fact)] -> [(Int, Fact)]
     dedupe = fmap strongest . groupOn fst
       where
@@ -177,11 +197,6 @@ citationsFor trace failingStep subject =
         strongest xs = last (sortOn (factWeight . snd) xs)
         groupOn :: (Eq b) => ((Int, Fact) -> b) -> [(Int, Fact)] -> [[(Int, Fact)]]
         groupOn f = List.groupBy (\a b -> f a == f b)
-        factWeight = \case
-          BornAt _ -> 0 :: Int
-          TouchedAt _ -> 1
-          ConsumedAt _ -> 2
-          HauntedAt _ -> 3
 
 -- * Projections
 

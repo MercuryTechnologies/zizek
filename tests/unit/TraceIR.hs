@@ -112,6 +112,42 @@ spec = do
       -- Step 1's Born (a Pool.add, not a draw) correlates with nothing.
       fmap (fmap (.text) . (.note)) (touchesOf 1) `shouldBe` [Nothing]
 
+    it "does not attach a note to a Born (a Pool.add is not a draw)" do
+      -- Drawn(v)@1? No: the Born at clock 2 is immediately followed by an
+      -- unrelated Drawn note at clock 3 — which belongs to a later forAll,
+      -- not to the birth.
+      let notes =
+            [ header (Clock 1) 1 "setup",
+              noteAt (Clock 3) 1 Drawn "unrelated"
+            ]
+          t = Trace.build notes [eventAt (Clock 2) h1 (Born Nothing)]
+      concat [fmap (fmap (.text) . (.note)) s.touches | s <- t.steps] `shouldBe` [Nothing]
+
+    it "a transfer's consuming draw finds its note past the lineage Born" do
+      -- Pool.transfer emits Consumed@c, Born(lineage)@c+1; forAll journals
+      -- the Drawn note at c+2 — it belongs to the consuming draw.
+      let x = Var {pool = 0, id = 1}
+          y = Var {pool = 1, id = 1}
+          notes =
+            [ header (Clock 1) 1 "move",
+              noteAt (Clock 4) 1 Drawn "the-value"
+            ]
+          t =
+            Trace.build
+              notes
+              [ eventAt (Clock 2) x Consumed,
+                eventAt (Clock 3) y (Born (Just x))
+              ]
+          touchNotes =
+            [ (tch.kind, fmap (.text) tch.note)
+            | s <- t.steps,
+              tch <- s.touches
+            ]
+      touchNotes
+        `shouldBe` [ (Consumed, Just "the-value"),
+                     (Born (Just x), Nothing)
+                   ]
+
     it "does not correlate across an intervening note" do
       -- Same shape as step 4, but an annotation lands between the event and
       -- the draw's note: adjacency broken, no correlation.
@@ -122,6 +158,19 @@ spec = do
             ]
           t = Trace.build notes [eventAt (Clock 2) h1 Reused]
       concat [fmap (fmap (.text) . (.note)) s.touches | s <- t.steps] `shouldBe` [Nothing]
+
+    it "clamps pre-first-header events to the earliest real step" do
+      -- No prelude segment exists (the journal starts with a header), so an
+      -- event stamped before it must land on a step that renders — never a
+      -- ghost step 0.
+      let notes = [header (Clock 3) 1 "touch", noteAt (Clock 5) 1 (Failure Nothing) "boom"]
+          t = Trace.build notes [eventAt (Clock 2) h1 (Born Nothing), eventAt (Clock 4) h1 Reused]
+      fmap (.bornAt) t.lifelines `shouldBe` [Just 1]
+      case Blame.analyze t of
+        Nothing -> expectationFailure "expected blame"
+        Just blm ->
+          IntSet.toList (Blame.citationClosure blm)
+            `shouldSatisfy` all (`elem` [s.index | s <- t.steps])
 
     it "lands pre-header events in the prelude step" do
       let notes =
@@ -162,6 +211,30 @@ spec = do
           [(p.step, p.fact) | p <- b.observed.since]
             `shouldBe` [(5, ConsumedAt h1), (4, TouchedAt h1), (1, BornAt h1)]
           b.diagnosis `shouldBe` Just UseAfterConsume
+
+    it "a haunted touch outranks a same-step consumption for the subject" do
+      -- The failing step consumes B (incidental) and touches dead A (the
+      -- bug); the subject must be A and the diagnosis must fire.
+      let a = Var {pool = 0, id = 1}
+          b = Var {pool = 0, id = 2}
+          t =
+            Trace.build
+              [ header (Clock 1) 1 "setup",
+                header (Clock 6) 2 "boom",
+                noteAt (Clock 9) 1 (Failure Nothing) "boom"
+              ]
+              [ eventAt (Clock 2) a (Born Nothing),
+                eventAt (Clock 3) b (Born Nothing),
+                eventAt (Clock 4) a Consumed,
+                eventAt (Clock 7) b Consumed,
+                eventAt (Clock 8) a Reused
+              ]
+      case Blame.analyze t of
+        Nothing -> expectationFailure "expected blame"
+        Just blm -> do
+          blm.subject `shouldBe` a
+          blm.observed.fact `shouldBe` HauntedAt a
+          blm.diagnosis `shouldBe` Just UseAfterConsume
 
     it "citation closure is the mockup-A step set" do
       case Blame.analyze uacTrace of
@@ -210,9 +283,10 @@ spec = do
         Nothing -> expectationFailure "expected blame"
         Just b -> do
           b.subject `shouldBe` y
-          -- The chain cites the pre-transfer history: consume, write, birth.
+          -- The chain cites the pre-transfer history — and the lineage-linked
+          -- consumption is classified as a transfer, not a death.
           [(p.step, p.fact) | p <- b.observed.since]
-            `shouldBe` [(3, ConsumedAt x), (2, TouchedAt x), (1, BornAt x)]
+            `shouldBe` [(3, TransferredAt x), (2, TouchedAt x), (1, BornAt x)]
 
     it "lifts pool labels onto lifelines" do
       let x = Var {pool = 0, id = 1}

@@ -159,11 +159,19 @@ layoutRows opts trace blame = orient <> footerRows
       table.cell NumericCite <> " " <> opts.phrases.cites [T.pack (show c.step) | c <- cited]
 
     detailRows =
-      [ Row {kind = DetailRow, gutter = EdgeAlive, stepNo = Nothing, call = t, rail = verticals allColumns, annot = ""}
+      [ Row {kind = DetailRow, gutter = EdgeAlive, stepNo = Nothing, call = t, rail = detailRail, annot = ""}
       | t <- details
       ]
+    -- Failure-first: the details sit between the rail's origin and its
+    -- targets below, so the columns pass through. Chronological: the failing
+    -- row *terminates* the rail, so rows beneath it carry no rail cells.
+    detailRail = case opts.direction of
+      FailureFirst -> verticals allColumns
+      Chronological -> []
     details = case trace.failure of
-      Just f -> maybe [f.message] (fmap diffLine) f.diff
+      -- One detail row per physical line: an unsplit multi-line message
+      -- would defeat the column-width arithmetic.
+      Just f -> maybe (T.lines f.message) (fmap diffLine) f.diff
       Nothing -> []
     diffLine = \case
       LineSame t -> "  " <> t
@@ -199,7 +207,9 @@ layoutRows opts trace blame = orient <> footerRows
         }
     gutterFor s
       | (rootLife >>= (.bornAt)) == Just s.index = NodeBorn
-      | Just s.index `elem` fmap (.consumedAt) chainLives = NodeDeath
+      -- Death glyphs mean death: a consumption continued by a transfer
+      -- renders as a touch (the words at the arrowhead carry the handoff).
+      | any (\l -> l.consumedAt == Just s.index && not (Trace.continues trace l.var)) chainLives = NodeDeath
       | otherwise = NodeTouch
 
     elisionRowsBetween mUpper lower =
@@ -268,18 +278,14 @@ layoutRows opts trace blame = orient <> footerRows
     callText s = clip (T.unwords (s.rule : touchNames) <> respText)
       where
         touchNames = nub (fmap (nameOf . (.var)) s.touches)
-        respText = maybe "" (\r -> " " <> table.cell ResponseArrow <> " " <> firstLine r) s.response
-        firstLine = T.takeWhile (/= '\n')
+        respText = maybe "" (\r -> " " <> table.cell ResponseArrow <> " " <> Phrase.firstLine r) s.response
     clip t
       | T.length t <= opts.callWidth = t
-      | otherwise = T.take (opts.callWidth - 1) t <> table.cell Ellipsis
+      | otherwise = T.take (opts.callWidth - T.length ell) t <> ell
+      where
+        ell = table.cell Ellipsis
 
-    factText fact = opts.phrases.caused fact (nameOf (factVar fact))
-    factVar = \case
-      BornAt v -> v
-      TouchedAt v -> v
-      ConsumedAt v -> v
-      HauntedAt v -> v
+    factText fact = opts.phrases.caused fact (nameOf (Blame.factVar fact))
 
     footerRows =
       [ Row

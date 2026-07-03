@@ -28,15 +28,15 @@ removes it. The bug: `read` on a closed handle returns stale data.
   a prototype landed and was backed out — mutating the host process's
   handle encoding from a library is too blunt. Decision: when the output
   handle's encoding is not UTF-capable, the integrations auto-select the
-  **ascii glyph table** (M3) and the ascii mode escapes non-ASCII user
-  text (annotations, shown values, rule names), giving a 7-bit-clean
-  guarantee; `HEGEL_GLYPHS` overrides in both directions. Accepted
-  interim: until the glyph table lands, reports still crash under
-  `LANG=C` (the pre-existing behavior).
+  **ascii glyph table** and apply `Glyph.sevenBitClean` — transliterating
+  every known glyph and escaping only unknown user text — giving a
+  7-bit-clean guarantee; `HEGEL_GLYPHS` overrides in both directions.
+  **Shipped** (see the decision record); the interim crash-under-`LANG=C`
+  window is closed.
 - **Unicode glyphs are the default everywhere, including CI.** Modern CI
   log viewers are HTML + monospace and render box drawing fine; jj/git set
   the precedent (piping drops color, keeps glyphs). The ascii glyph table
-  is an *escape hatch* (`--format=ascii`) for the true worst cases
+  is an *escape hatch* (`HEGEL_GLYPHS=ascii`) for the true worst cases
   (windows-1252 pipelines, exotic log processors, `LANG=C` consumers) —
   nearly free via the table architecture, but not what CI gets by default.
   Losing *semantics* (rather than aesthetics) in the ascii table is a bug.
@@ -833,7 +833,9 @@ counters, no layout work — defers the flagship). Order of work:
    children = the citations most-recent-first, deeper nesting reserved
    for indirect chains; renamed from `Problem` at checkpoint 2 — the
    children are evidence, not problems); `Fact = BornAt | TouchedAt |
-   ConsumedAt | HauntedAt` (the mechanical subset; `Fact` chosen over
+   ConsumedAt | TransferredAt | HauntedAt` (the mechanical subset —
+   `TransferredAt` added post-ship for lineage-continued consumptions;
+   `Fact` chosen over
    `Edge`/`EdgeKind` as what the tree node observes — `Citation
    {from, to, fact}` remains the edge; `HauntedAt` = touched after
    death), `subject :: Var` (non-Maybe; `analyze` is `Nothing` when

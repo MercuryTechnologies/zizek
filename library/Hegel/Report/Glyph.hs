@@ -27,6 +27,7 @@ module Hegel.Report.Glyph
     Preference (..),
     preference,
     table,
+    cleanFor,
     sevenBitClean,
   )
 where
@@ -42,7 +43,7 @@ import Hegel.Report.Trace (Lifeline (..), Trace)
 import Hegel.Report.Trace qualified as Trace
 import Numeric (showHex)
 import System.Environment (lookupEnv)
-import System.IO (hGetEncoding, stdout)
+import System.IO (Handle, hGetEncoding)
 
 -- | One abstract ledger cell. Gutter cells and rail cells occupy disjoint
 -- regions of a row, so the ascii table only needs injectivity within each
@@ -160,13 +161,24 @@ ascii =
 -- 'Hegel.Pool.named' label (or its birth-order letter) plus the value's
 -- birth-order ordinal — one name for one logical value, across transfers.
 -- Shared by the ledger and the verdict paragraph.
+-- Defined as @\\tbl trace -> \\v -> …@ so callers that bind
+-- @nameOf = displayName tbl trace@ share the precomputed per-trace name
+-- table across every lookup (the renderers call this per touch, per row).
 displayName :: GlyphTable -> Trace -> Var -> Text
-displayName tbl trace v =
-  let r = Trace.root trace v
-      life = Trace.lifeline trace r
-      poolOrdinals = nub [l.var.pool | l <- trace.lifelines]
-      poolOrd = fromMaybe 0 (lookup r.pool (zip poolOrdinals [0 ..]))
-   in tbl.valueName (life >>= (.label)) poolOrd (maybe 0 (.ordinal) life)
+displayName tbl trace =
+  \v -> Map.findWithDefault (compute (Trace.root trace v)) (Trace.root trace v) precomputed
+  where
+    poolOrds :: Map.Map Int Int
+    poolOrds = Map.fromList (zip (nub [l.var.pool | l <- trace.lifelines]) [0 ..])
+    compute :: Var -> Text
+    compute r =
+      let life = Trace.lifeline trace r
+       in tbl.valueName
+            (life >>= (.label))
+            (Map.findWithDefault 0 r.pool poolOrds)
+            (maybe 0 (.ordinal) life)
+    precomputed :: Map.Map Var Text
+    precomputed = Map.fromList [(Trace.root trace l.var, compute (Trace.root trace l.var)) | l <- trace.lifelines]
 
 -- | Unlabelled pools are lettered @v, w, x, y, z@ in birth order, doubling
 -- past five (@vv, ww, …@) so names never collide across pools.
@@ -191,18 +203,20 @@ subscript = T.map sub . T.pack . show
 data Preference = PreferUnicode | PreferAscii
   deriving stock (Show, Eq)
 
--- | Choose a table for the current process's output. @HEGEL_GLYPHS@
+-- | Choose a table for output destined for the given handle. @HEGEL_GLYPHS@
 -- (@ascii@ \/ @unicode@) overrides in both directions; otherwise a
--- non-UTF-capable stdout encoding (e.g. @LANG=C@, where writing @✗@ would
--- /throw/, not mojibake) selects ascii — the never-crash requirement,
--- answered by detection rather than by forcing the handle's encoding.
-preference :: IO Preference
-preference =
+-- non-UTF-capable encoding (e.g. @LANG=C@, where writing @✗@ would /throw/,
+-- not mojibake) selects ascii — the never-crash requirement, answered by
+-- detection rather than by forcing the handle's encoding. The caller names
+-- the handle it is protecting (the integrations pass 'System.IO.stdout' as
+-- their best knowledge of where the framework writes).
+preference :: Handle -> IO Preference
+preference h =
   lookupEnv "HEGEL_GLYPHS" >>= \case
     Just "ascii" -> pure PreferAscii
     Just "unicode" -> pure PreferUnicode
     _ -> do
-      enc <- hGetEncoding stdout
+      enc <- hGetEncoding h
       pure case enc of
         Just e | "UTF" `T.isInfixOf` T.pack (show e) -> PreferUnicode
         _ -> PreferAscii
@@ -211,6 +225,13 @@ table :: Preference -> GlyphTable
 table = \case
   PreferUnicode -> unicode
   PreferAscii -> ascii
+
+-- | The text-cleaning pass a preference implies: 'sevenBitClean' for ascii
+-- (the 7-bit guarantee covers user text too), identity otherwise.
+cleanFor :: Preference -> Text -> Text
+cleanFor = \case
+  PreferAscii -> sevenBitClean
+  PreferUnicode -> id
 
 -- | Make a rendered report 7-bit clean: /transliterate/ every glyph the
 -- renderers are known to emit (derived from the cell tables, so it cannot

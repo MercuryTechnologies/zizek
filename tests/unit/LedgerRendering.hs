@@ -39,6 +39,7 @@ import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import System.Environment (setEnv, unsetEnv)
+import System.IO (stdout)
 import Test.Hspec
 
 -- ---------------------------------------------------------------------------
@@ -126,7 +127,7 @@ spec = do
             "◌ 5  close v₁                   ◀─╮ │ │   v₁ was consumed",
             "┆    ⋯ 2 steps, none touch v₁     ┆ ┆ ┆",
             "✗ 8  read v₁                    ●─┴─┴─╯",
-            "│    read returned stale bytes    │ │ │"
+            "│    read returned stale bytes"
           ]
 
     it "renders the failure-first ascii ledger" do
@@ -151,6 +152,12 @@ spec = do
       let out = renderWith (Ledger.defaultOptions Glyph.unicode) {Ledger.callWidth = 8}
       out `shouldSatisfy` T.isInfixOf "write v⋯"
 
+    it "the ascii clip stays inside the budget (multi-char ellipsis)" do
+      let out = renderWith (Ledger.defaultOptions Glyph.ascii) {Ledger.callWidth = 8}
+      -- 8 - 3 = 5 chars of call + "..." = exactly the budget.
+      out `shouldSatisfy` T.isInfixOf "write..."
+      out `shouldNotSatisfy` T.isInfixOf "write v..."
+
   describe "layoutRows" do
     it "puts the failing row first (failure-first) with its details beneath in both directions" do
       let rows d =
@@ -163,6 +170,20 @@ spec = do
         `shouldBe` [Ledger.NodeRow, Ledger.DetailRow]
       drop (length (kinds Ledger.Chronological) - 2) (kinds Ledger.Chronological)
         `shouldBe` [Ledger.NodeRow, Ledger.DetailRow]
+
+    it "splits a multi-line failure message into one detail row per line" do
+      let (notes, events) = uacFixture
+          multi =
+            [ if n.kind == Failure Nothing
+                then n {text = "expected open\ngot closed"} :: Note
+                else n
+            | n <- notes
+            ]
+          t = Trace.build multi events
+          b = fromJust (Blame.analyze t)
+          rows = Ledger.layoutRows (Ledger.defaultOptions Glyph.unicode) t b
+      [r.call | r <- rows, r.kind == Ledger.DetailRow]
+        `shouldBe` ["expected open", "got closed"]
 
     it "elides unshown steps explicitly, with counts" do
       let rows = Ledger.layoutRows (Ledger.defaultOptions Glyph.unicode) uacTrace uacBlame
@@ -272,6 +293,15 @@ spec = do
       out `shouldSatisfy` T.isInfixOf "✗ read returned stale bytes"
       out `shouldSatisfy` T.isInfixOf "stored: some-key — replays automatically next run"
 
+    it "footnotes keep their after-the-body position on the composed rung" do
+      let (notes, events) = uacFixture
+          withFootnote = notes <> [noteAt (Clock 18) 0 Footnote "handle table dump: {}"]
+      out <- renderReportRich ((reportOf events withFootnote) {databaseKey = Just "k"})
+      out `shouldSatisfy` T.isInfixOf "handle table dump: {}"
+      -- After the splice, before the reproduction line.
+      T.breakOn "handle table dump" out `shouldSatisfy` \(before, rest) ->
+        "Step 8: read" `T.isInfixOf` before && "stored: k" `T.isInfixOf` rest
+
     it "the footer only renders when a database key exists" do
       out <- renderReportRich (uncurry (flip reportOf) uacFixture)
       out `shouldNotSatisfy` T.isInfixOf "stored:"
@@ -279,9 +309,9 @@ spec = do
   describe "glyph preference" do
     it "HEGEL_GLYPHS overrides detection in both directions" do
       setEnv "HEGEL_GLYPHS" "ascii"
-      p1 <- Glyph.preference
+      p1 <- Glyph.preference stdout
       setEnv "HEGEL_GLYPHS" "unicode"
-      p2 <- Glyph.preference
+      p2 <- Glyph.preference stdout
       unsetEnv "HEGEL_GLYPHS"
       (p1, p2) `shouldBe` (Glyph.PreferAscii, Glyph.PreferUnicode)
 
@@ -289,6 +319,14 @@ spec = do
       -- Cells and chrome map to their ascii forms; genuinely foreign user
       -- text (here: a CJK character) falls back to an escape.
       Glyph.sevenBitClean "✗ v₁ ┃ · — 好" `shouldBe` "x v1 | . -- \\x597d"
+
+    it "a full report survives sevenBitClean without escapes (chrome is transliterated)" do
+      -- The drift guard for the transliteration map: splice chrome, ledger
+      -- glyphs, phrase typography — everything a real report emits must map
+      -- to ascii, with \\x escapes reserved for genuinely foreign user text.
+      report <- check defaultSettings (Stateful.run transferMachine)
+      out <- renderReportRich (report {databaseKey = Just "k"} :: Report)
+      Glyph.sevenBitClean out `shouldNotSatisfy` T.isInfixOf "\\x"
 
   describe "end to end (engine)" do
     it "transfer reconnects the chain on a real machine (citations reach pre-transfer steps)" do
@@ -300,9 +338,10 @@ spec = do
             Nothing -> expectationFailure "expected blame"
             Just b -> do
               -- The failing read touches the closed-pool var; the chain must
-              -- cite the open-pool var's consumption *and* its birth.
+              -- cite the open-pool var's handoff *and* its birth — and the
+              -- lineage-continued consumption reads as a transfer.
               let facts = [c.fact | c <- Blame.citations b]
-              [() | ConsumedAt _ <- facts] `shouldSatisfy` (not . null)
+              [() | TransferredAt _ <- facts] `shouldSatisfy` (not . null)
               [() | BornAt _ <- facts] `shouldSatisfy` (not . null)
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
 

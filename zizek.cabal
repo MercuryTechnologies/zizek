@@ -307,10 +307,10 @@ executable test-stateful
 
 -- Gallery of deliberately-failing stateful machines, each stressing one
 -- rendering decision of the rich report renderer; for manual eyeballing.
--- Not run by CI; `cabal run stateful-report-gallery` from the repo root.
-executable stateful-report-gallery
+-- Not run by CI; `just gallery` from the repo root.
+executable gallery
   import: conformance
-  hs-source-dirs: examples/stateful-report-gallery
+  hs-source-dirs: examples/gallery
   main-is: Main.hs
   build-depends:
     containers ^>=0.7,
@@ -318,10 +318,10 @@ executable stateful-report-gallery
 
 -- A guided tour of the failure report's progression, from a plain spliced
 -- property to the full composed trace report; for manual eyeballing.
--- Not run by CI; `cabal run report-tour` from the repo root.
-executable report-tour
+-- Not run by CI; `just tour` from the repo root.
+executable tour
   import: conformance
-  hs-source-dirs: examples/report-tour
+  hs-source-dirs: examples/tour
   main-is: Main.hs
   build-depends:
     containers ^>=0.7,

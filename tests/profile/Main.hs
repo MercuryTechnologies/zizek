@@ -149,6 +149,7 @@ resultTag = \case
   Counterexample {} -> "Counterexample"
   GaveUp why -> "GaveUp (" <> why <> ")"
   Aborted (UnhealthyInput why) -> "Aborted (UnhealthyInput: " <> why <> ")"
+  Aborted (ReplayDiverged why) -> "Aborted (ReplayDiverged: " <> why <> ")"
   Aborted (Errored e) -> "Aborted (Errored: " <> T.pack (displayException e) <> ")"
 
 tshow :: (Show a) => a -> Text

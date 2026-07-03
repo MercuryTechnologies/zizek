@@ -116,6 +116,7 @@ newLog = Recording <$> newIORef (Clock 0) <*> newIORef Seq.empty
 tick :: Log -> IO Clock
 tick Silent = pure (Clock 0)
 tick (Recording clk _) = atomicModifyIORef' clk \c -> (succ c, c)
+{-# INLINE tick #-}
 
 -- | Record an event stamped with a fresh clock.
 --
@@ -129,6 +130,10 @@ emit Silent _ = pure ()
 emit log_@(Recording _ ref) mkEvent = do
   c <- tick log_
   modifyIORef' ref (|> mkEvent c)
+-- The INLINE makes the zero-cost claim structural rather than
+-- optimizer-dependent: inlined at the call site, the event closure floats
+-- into the 'Recording' branch and a 'Silent' draw allocates nothing.
+{-# INLINE emit #-}
 
 -- | Read back the recorded events, in emission order.
 drain :: Log -> IO [Event]

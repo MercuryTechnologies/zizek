@@ -67,8 +67,9 @@ data Handle = Handle
 -- Generators, collections, and the runner pass 'TestCase' values into the
 -- FFI bindings rather than touching the raw pointers directly.
 data TestCase = TestCase
-  { -- | The engine pointer pair every FFI call goes through.
-    handle :: !Handle,
+  { -- | The engine pointer pair every FFI call goes through (unpacked:
+    -- the nesting is conceptual, not a layout cost on the draw hot path).
+    handle :: {-# UNPACK #-} !Handle,
     -- | Where this case's draw replies return through; see 'Slot'.
     slot :: !Slot,
     -- | This case's pool-event stream (and the clock the journal shares);

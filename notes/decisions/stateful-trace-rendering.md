@@ -36,7 +36,10 @@ reproduction **footer** when a database key exists.
 - **Blame** (`Hegel.Report.Blame`): `analyze` produces a rose tree of
   `Observation`s — the violating one at the root, citations beneath
   (most-recent-first, one per step), each carrying a `Fact` (`BornAt` /
-  `TouchedAt` / `ConsumedAt` / `HauntedAt`). `citations`/`citationClosure`
+  `TouchedAt` / `ConsumedAt` / `TransferredAt` / `HauntedAt` — a
+  lineage-continued consumption classifies as a transfer, so a handoff never
+  words or draws as a death; `◌` is reserved for consumption without
+  continuation). `citations`/`citationClosure`
   are the projections. Every explanatory layer walks this one edge-set, so
   prose and geometry cannot disagree (pinned by the agreement test).
 - **Tables applied last**: layout emits abstract `Cell`s; glyphs come from a
@@ -108,5 +111,5 @@ reproduction **footer** when a database key exists.
   ledger pins in both directions and both tables, verdict pins, ladder
   rungs, glyph-preference knob, transliteration), `DatabaseReplay`
   (`ReplayDiverged`), plus all pre-slice pins unchanged.
-- `cabal run stateful-report-gallery` — four scenarios; 3–4 render the
+- `just gallery` — four scenarios; 3–4 render the
   composed report through the wired path (scenario 3 also in ascii).

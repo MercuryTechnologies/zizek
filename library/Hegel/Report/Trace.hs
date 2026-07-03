@@ -21,10 +21,12 @@ module Hegel.Report.Trace
     step,
     lifeline,
     root,
+    continues,
     chain,
   )
 where
 
+import Control.Applicative ((<|>))
 import Data.List (find)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -150,7 +152,7 @@ build notes events =
                 [ Touch
                     { var = e.var,
                       kind = e.kind,
-                      note = find (\n -> n.kind == Drawn && n.clock == succ e.clock) body
+                      note = correlatedNote body e
                     }
                 | e <- events,
                   windowStart seg <= e.clock && e.clock < end,
@@ -212,6 +214,20 @@ isTouch = \case
   Consumed -> True
   Named _ -> False
 
+-- | The journaled 'Drawn' note for a pool /draw/ event, by clock adjacency.
+--
+-- Only draws correlate — a 'Born' is a 'Hegel.Pool.add', not a draw, and any
+-- note adjacent to it belongs to something else. A transfer's consuming draw
+-- is followed first by its lineage 'Born' (same composite operation), so its
+-- note sits one clock further along.
+correlatedNote :: [Note] -> Event -> Maybe Note
+correlatedNote body e = case e.kind of
+  Reused -> at (succ e.clock)
+  Consumed -> at (succ e.clock) <|> at (succ (succ e.clock))
+  _ -> Nothing
+  where
+    at c = find (\n -> n.kind == Drawn && n.clock == c) body
+
 -- | Fold the event stream into per-value lifelines, in birth order.
 lifelinesOf :: [Event] -> (Clock -> Int) -> [Lifeline]
 lifelinesOf events stepAt = Map.elems (foldl' apply Map.empty events)
@@ -258,10 +274,15 @@ lifelinesOf events stepAt = Map.elems (foldl' apply Map.empty events)
               (f Lifeline {var = e.var, ordinal = 0, label = labelOf e.var, lineage = Nothing, bornAt = Nothing, consumedAt = Nothing, touchedAt = [], posthumous = []})
               m
 
--- | Which step's window contains this clock stamp.
+-- | Which step's window contains this clock stamp. Falls back to the
+-- earliest step (never a step index absent from the trace): a journal whose
+-- first note is a 'StepHeader' has no prelude segment, but events stamped
+-- before that header must still land on a step that renders.
 locateStep :: [Step] -> Clock -> Int
 locateStep steps c =
-  maybe 0 (.index) (find (\s -> let (from, to) = s.window in from <= c && c < to) steps)
+  maybe fallback (.index) (find (\s -> let (from, to) = s.window in from <= c && c < to) steps)
+  where
+    fallback = maybe 0 (.index) (listToMaybe steps)
 
 -- * Queries
 
@@ -284,6 +305,13 @@ root t = go []
     go seen v = case lifeline t v >>= (.lineage) of
       Just parent | parent /= v, parent `notElem` seen -> go (v : seen) parent
       _ -> v
+
+-- | Does this var's consumption continue into a lineage-linked descendant
+-- (i.e. was it a 'Hegel.Pool.transfer', not a death)? The single home of the
+-- transfer-vs-death distinction: 'Hegel.Report.Blame' words it,
+-- 'Hegel.Report.Ledger' draws it.
+continues :: Trace -> Var -> Bool
+continues t v = any (\l -> l.lineage == Just v) t.lifelines
 
 -- | Every var of the logical value: the lineage chain through @v@, oldest
 -- first (ancestors, @v@, and any descendants declared later).

@@ -26,6 +26,7 @@ module Hegel.Report
     renderReportRichAnsi,
     renderReportRichWith,
     renderReportRichAnsiWith,
+    renderReportAuto,
     renderFailure,
     renderValue,
 
@@ -40,7 +41,7 @@ where
 import Control.Exception (Exception (displayException), SomeException, throwIO)
 import Data.Either (partitionEithers)
 import Data.List (partition)
-import Data.Maybe (catMaybes, listToMaybe, maybeToList)
+import Data.Maybe (catMaybes, maybeToList)
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Stack (SrcLoc (..))
@@ -209,6 +210,17 @@ renderReportRichWith opts = renderRichImpl opts renderReport docToText
 renderReportRichAnsiWith :: Ledger.Options -> Report -> IO Text
 renderReportRichAnsiWith opts = renderRichImpl opts renderReportAnsi docToAnsi
 
+-- | The integrations' one-stop renderer: rich, ANSI per @useColor@, glyphs
+-- per the output 'Glyph.Preference' — with the ascii preference's
+-- 7-bit-clean guarantee applied to the whole result. Keeps the
+-- render-then-clean invariant in one place instead of one per framework.
+renderReportAuto :: Bool -> Glyph.Preference -> Report -> IO Text
+renderReportAuto useColor pref report =
+  Glyph.cleanFor pref
+    <$> (if useColor then renderReportRichAnsiWith opts else renderReportRichWith opts) report
+  where
+    opts = Ledger.defaultOptions (Glyph.table pref)
+
 -- | Shared implementation of the rich renderers, parameterised over the
 -- plain-text fallback and the final document renderer.
 renderRichImpl :: Ledger.Options -> (Report -> Text) -> (Doc Ann -> Text) -> Report -> IO Text
@@ -238,7 +250,7 @@ richDoc opts databaseKey message notes events loc diff
           trace = Trace.build notes events
       pure . Just $ case (events, Blame.analyze trace) of
         ([], _) -> timeline
-        (_, Nothing) -> PP.vsep (timeline : footerDoc databaseKey)
+        (_, Nothing) -> PP.vsep (timeline : maybeToList (footerDoc opts.phrases databaseKey))
         (_, Just blame) -> composedDoc opts decls trace blame notes databaseKey
 richDoc _ _ message notes _ loc diff = do
   let (footers, inline) = partition (\n -> n.kind == Footnote) notes
@@ -277,21 +289,29 @@ composedDoc opts decls trace blame notes databaseKey =
         Verdict.verdictDoc opts.phrases opts.glyphs trace blame,
         Just (Ledger.ledgerDoc opts trace blame),
         failingGroupDoc decls notes,
-        listToMaybe (footerDoc databaseKey)
+        -- Footnotes keep their contract on the richest rung too: context
+        -- rendered after the report body, before the reproduction line.
+        footnotesDoc notes,
+        footerDoc opts.phrases databaseKey
       ]
     chip =
       fmap
         (PP.annotate LocAnn . PP.pretty . opts.phrases.phenomenon)
         blame.diagnosis
 
+-- | Footnote notes, rendered after the report body (their documented
+-- position, regardless of rung).
+footnotesDoc :: [Note] -> Maybe (Doc Ann)
+footnotesDoc notes = case [n.text | n <- notes, n.kind == Footnote] of
+  [] -> Nothing
+  fs -> Just (PP.vsep [PP.indent 2 (PP.annotate NoteAnn (PP.pretty t)) | t <- fs])
+
 -- | The reproduction footer: present only when the run persisted under a
 -- database key (pointing anywhere else would be dishonest — replay is
--- automatic on the next run, there is no CLI yet).
-footerDoc :: Maybe Text -> [Doc Ann]
-footerDoc = \case
-  Nothing -> []
-  Just key ->
-    [PP.annotate LocAnn ("stored:" <+> PP.pretty key <+> "— replays automatically next run")]
+-- automatic on the next run, there is no CLI yet). Words from the phrase
+-- table, like everything else.
+footerDoc :: PhraseTable -> Maybe Text -> Maybe (Doc Ann)
+footerDoc phrases = fmap (PP.annotate LocAnn . PP.pretty . phrases.stored)
 
 -- * Internal pure layout
 

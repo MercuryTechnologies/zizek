@@ -17,7 +17,7 @@
 --      full three-edge rail, elision, footer, a verdict quoting the rule's
 --      'Stateful.respond', and the stored-example reproduction line
 --
--- Run with @cabal run report-tour@ from the repo root (source splicing
+-- Run with @just tour@ from the repo root (source splicing
 -- resolves @srcLocFile@ relative to the working directory).
 --
 -- Every stage's bug is shaped so its /minimal/ counterexample retains the
@@ -86,8 +86,10 @@ main = do
     stage
       "6: a pipeline with transfers — the works"
       [ "One job crosses three pools (pending → running → done) as a single",
-        "lifeline: Pool.transfer declares the identity link. Full rail,",
-        "elision, footer, a quoted respond, and the stored-example line."
+        "lifeline: Pool.transfer declares the identity link, and the report",
+        "words each hop as a transfer — ◌ (death) is reserved for consumption",
+        "without a continuation. Full rail, elision, footer, a quoted respond,",
+        "and the stored-example line."
       ]
       =<< check
         defaultSettings

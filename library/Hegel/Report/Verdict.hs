@@ -18,9 +18,11 @@ where
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Report.Ann (Ann (..))
-import Hegel.Report.Blame (Blame (..), Fact (..), Observation (..))
+import Hegel.Report.Blame (Blame (..), Fact, Observation (..))
+import Hegel.Report.Blame qualified as Blame
 import Hegel.Report.Glyph (GlyphTable, displayName)
 import Hegel.Report.Phrase (PhraseTable (..))
+import Hegel.Report.Phrase qualified as Phrase
 import Hegel.Report.Trace (Step (..), Trace)
 import Hegel.Report.Trace qualified as Trace
 import Prettyprinter (Doc)
@@ -84,11 +86,7 @@ paragraph phrases glyphs trace blame =
   where
     clauses = plan trace blame
     nameOf = displayName glyphs trace
-    factName fact = case fact of
-      BornAt v -> nameOf v
-      TouchedAt v -> nameOf v
-      ConsumedAt v -> nameOf v
-      HauntedAt v -> nameOf v
+    factName = nameOf . Blame.factVar
     ref i rule = phrases.stepRef (T.pack (show i)) rule
     lead =
       mconcat
@@ -109,8 +107,7 @@ paragraph phrases glyphs trace blame =
         worded <- case c of
           Returned {rule, response} -> [phrases.returned rule response]
           FailedWith {message}
-            | not (T.null message) -> [phrases.failedWith (firstLine message)]
+            | not (T.null message) -> [phrases.failedWith (Phrase.firstLine message)]
             | otherwise -> []
           _ -> []
       ]
-    firstLine = T.takeWhile (/= '\n')

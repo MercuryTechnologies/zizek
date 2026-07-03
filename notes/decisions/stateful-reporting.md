@@ -147,7 +147,7 @@ the splice's *layout*, and is unaffected by that recomposition.
 - `just test unit` — splice-marker, fallback-mix, nothing-splices, and
   end-to-end (`tests/unit/Stateful.hs`) tests pin the wired behaviour; the
   plain layout's pins are unchanged.
-- `cabal run stateful-report-gallery` — the permanent eyeball harness,
+- `just gallery` — the permanent eyeball harness,
   trimmed (2026-07-02) to four scenarios: palindrome and warehouse for the
   spliced layout (warehouse was the decisive Timeline-evaluation scenario;
   its runtime is engine search, stochastic, not rendering), plus two

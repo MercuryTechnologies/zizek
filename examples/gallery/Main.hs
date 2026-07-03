@@ -18,7 +18,7 @@
 --      than the rail budget (numeric fallback), a prelude-born subject,
 --      and a second lifeline that survives shrinking
 --
--- Run with @cabal run stateful-report-gallery@ from the repo root (source
+-- Run with @just gallery@ from the repo root (source
 -- splicing resolves @srcLocFile@ relative to the working directory).
 -- Scenarios 3–4 render through the same wired path as 1–2: the composed
 -- trace report (verdict, ledger, freeze-frame splice, footer) is what

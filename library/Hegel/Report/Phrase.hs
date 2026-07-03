@@ -11,6 +11,7 @@
 module Hegel.Report.Phrase
   ( PhraseTable (..),
     english,
+    firstLine,
   )
 where
 
@@ -56,7 +57,10 @@ data PhraseTable = PhraseTable
     cites :: [Text] -> Text,
     -- | The headline chip for a matched phenomenon:
     -- @\"pattern: use-after-consume\"@.
-    phenomenon :: Phenomenon -> Text
+    phenomenon :: Phenomenon -> Text,
+    -- | The reproduction footer, given the database key:
+    -- @\"stored: k — replays automatically next run\"@.
+    stored :: Text -> Text
   }
 
 english :: PhraseTable
@@ -66,11 +70,13 @@ english =
         BornAt _ -> "created " <> name
         TouchedAt _ -> "touched " <> name
         ConsumedAt _ -> "consumed " <> name
+        TransferredAt _ -> "transferred " <> name
         HauntedAt _ -> "touched " <> name <> " after its death",
       caused = \fact name -> case fact of
         BornAt _ -> name <> " was created"
         TouchedAt _ -> name <> " was touched"
         ConsumedAt _ -> name <> " was consumed"
+        TransferredAt _ -> name <> " was transferred"
         HauntedAt _ -> name <> " was touched after its death",
       stepRef = \n rule -> "step " <> n <> " (" <> rule <> ")",
       lead = \ref clause -> capitalize ref <> " " <> clause,
@@ -91,7 +97,8 @@ english =
           <> ")",
       cites = \steps -> "cites " <> T.intercalate ", " steps,
       phenomenon = \case
-        UseAfterConsume -> "pattern: use-after-consume"
+        UseAfterConsume -> "pattern: use-after-consume",
+      stored = \key -> "stored: " <> key <> " — replays automatically next run"
     }
   where
     counted :: Int -> Text -> Text
@@ -100,3 +107,8 @@ english =
     capitalize t = case T.uncons t of
       Just (c, rest) -> T.cons (Char.toUpper c) rest
       Nothing -> t
+
+-- | Quote only the first physical line of user text (responses, failure
+-- messages) where a single line is structurally required.
+firstLine :: Text -> Text
+firstLine = T.takeWhile (/= '\n')
