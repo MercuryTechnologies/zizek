@@ -131,6 +131,7 @@ library
     Hegel.Report.Source
     Hegel.Report.Span
     Hegel.Report.Stateful
+    Hegel.Report.Style
     Hegel.Report.Trace
     Hegel.Report.Verdict
     Hegel.Runner
@@ -372,6 +373,7 @@ test-suite unit
     SourceRendering
     StandardGenerators
     Stateful
+    TraceFixtures
     TraceIR
 
   build-depends:

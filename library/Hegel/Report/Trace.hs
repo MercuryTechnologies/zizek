@@ -28,7 +28,6 @@ where
 
 import Control.Applicative ((<|>))
 import Data.List (find)
-import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
@@ -172,18 +171,25 @@ build notes events =
         ]
 
 data Segment = Segment
-  { header :: !(Maybe (Int, Text, Clock)),
+  { header :: !(Maybe Header),
     body :: [Note]
   }
 
+-- | A parsed 'StepHeader' note.
+data Header = Header
+  { index :: !Int,
+    rule :: !Text,
+    start :: !Clock
+  }
+
 segmentIndex :: Segment -> Int
-segmentIndex seg = maybe 0 (\(i, _, _) -> i) seg.header
+segmentIndex seg = maybe 0 (.index) seg.header
 
 segmentLabel :: Segment -> Text
-segmentLabel seg = maybe "<initial>" (\(_, l, _) -> l) seg.header
+segmentLabel seg = maybe "<initial>" (.rule) seg.header
 
 windowStart :: Segment -> Clock
-windowStart seg = maybe (Clock 0) (\(_, _, c) -> c) seg.header
+windowStart seg = maybe (Clock 0) (.start) seg.header
 
 -- | Split the journal at its step headers.
 segment :: [Note] -> [Segment]
@@ -196,7 +202,7 @@ segment notes = case break isHeader notes of
     go [] = []
     go (h : rest) =
       let (body, rest') = break isHeader rest
-       in Segment {header = (\(i, l) -> (i, l, h.clock)) <$> parseHeader h, body} : go rest'
+       in Segment {header = (\(i, l) -> Header {index = i, rule = l, start = h.clock}) <$> parseHeader h, body} : go rest'
     isHeader n = n.depth == 0 && maybe False (const True) (parseHeader n)
 
 -- | A 'StepHeader' note's structured index and rule name.
@@ -229,50 +235,52 @@ correlatedNote body e = case e.kind of
     at c = find (\n -> n.kind == Drawn && n.clock == c) body
 
 -- | Fold the event stream into per-value lifelines, in birth order.
+--
+-- Explicit fold state: lifelines accumulate in reverse birth order (a
+-- structural guarantee, not a clever map key), with per-pool counts giving
+-- ordinals; touch lists accumulate reversed for cheap appends and are
+-- straightened at the end.
 lifelinesOf :: [Event] -> (Clock -> Int) -> [Lifeline]
-lifelinesOf events stepAt = Map.elems (foldl' apply Map.empty events)
+lifelinesOf events stepAt =
+  fmap tidy (reverse (foldl' apply [] events))
   where
     labels :: Map.Map Int Text
     labels = Map.fromList [(e.var.pool, l) | e <- events, Named l <- [e.kind]]
     labelOf :: Var -> Maybe Text
     labelOf v = Map.lookup v.pool labels
-    -- Keyed by (birth sequence, var) so Map.elems yields birth order.
-    apply :: Map (Int, Var) Lifeline -> Event -> Map (Int, Var) Lifeline
-    apply m e = case e.kind of
-      Named _ -> m
+    tidy :: Lifeline -> Lifeline
+    tidy l = l {touchedAt = reverse l.touchedAt, posthumous = reverse l.posthumous}
+    apply :: [Lifeline] -> Event -> [Lifeline]
+    apply ls e = case e.kind of
+      Named _ -> ls
       Born lineage ->
-        let ordinal = 1 + length [() | (_, v) <- Map.keys m, v.pool == e.var.pool]
-         in Map.insert
-              (Map.size m, e.var)
-              Lifeline
-                { var = e.var,
-                  ordinal,
-                  label = labelOf e.var,
-                  lineage,
-                  bornAt = Just (stepAt e.clock),
-                  consumedAt = Nothing,
-                  touchedAt = [],
-                  posthumous = []
-                }
-              m
-      Reused -> adjust \l -> l {touchedAt = l.touchedAt <> [stepAt e.clock]}
+        Lifeline
+          { var = e.var,
+            ordinal = 1 + length [() | l <- ls, l.var.pool == e.var.pool],
+            label = labelOf e.var,
+            lineage,
+            bornAt = Just (stepAt e.clock),
+            consumedAt = Nothing,
+            touchedAt = [],
+            posthumous = []
+          }
+          : ls
+      Reused -> adjust \l -> l {touchedAt = stepAt e.clock : l.touchedAt}
       Consumed -> adjust \l -> l {consumedAt = Just (stepAt e.clock)}
       where
-        adjust f = case find (\(_, v) -> v == e.var) (Map.keys m) of
-          Just k -> Map.adjust f' k m
+        adjust f = case break (\l -> l.var == e.var) ls of
+          (before, l : after) -> before <> (f' l : after)
             where
               -- A touch after death is posthumous (impossible via engine
               -- pool draws today; see 'Lifeline.posthumous').
-              f' l = case (e.kind, l.consumedAt) of
-                (Reused, Just _) -> l {posthumous = l.posthumous <> [stepAt e.clock]}
-                _ -> f l
+              f' = case (e.kind, l.consumedAt) of
+                (Reused, Just _) -> \l' -> l' {posthumous = stepAt e.clock : l'.posthumous}
+                _ -> f
           -- Malformed stream (draw of a never-born var): synthesize the
           -- lifeline with no birth rather than dropping the observation.
-          Nothing ->
-            Map.insert
-              (Map.size m, e.var)
-              (f Lifeline {var = e.var, ordinal = 0, label = labelOf e.var, lineage = Nothing, bornAt = Nothing, consumedAt = Nothing, touchedAt = [], posthumous = []})
-              m
+          (_, []) ->
+            f Lifeline {var = e.var, ordinal = 0, label = labelOf e.var, lineage = Nothing, bornAt = Nothing, consumedAt = Nothing, touchedAt = [], posthumous = []}
+              : ls
 
 -- | Which step's window contains this clock stamp. Falls back to the
 -- earliest step (never a step index absent from the trace): a journal whose

@@ -46,7 +46,10 @@ reproduction **footer** when a database key exists.
   `GlyphTable` (`Glyph.unicode`/`ascii`); *words* come from a `PhraseTable`
   (`Phrase.english`) — every sentence the renderers can emit composes table
   fields plus quoted user data, never inflected. `Glyph.displayName`
-  resolves value names through lineage roots (`h₁` across pools).
+  resolves value names through lineage roots (`h₁` across pools). Both
+  tables plus the layout knobs (direction, budgets) ride
+  `Hegel.Report.Style` — the one record every composed-report section
+  consumes (`defaultStyle`; the `*With` renderers take it explicitly).
 
 ## Decisions (with the one-line rationale)
 

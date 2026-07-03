@@ -31,21 +31,10 @@ import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
+import TraceFixtures (eventAt, h1, header, noteAt)
 
 -- ---------------------------------------------------------------------------
 -- Fixture helpers
-
-noteAt :: Clock -> Int -> NoteKind -> Text -> Note
-noteAt clock depth kind text = Note {kind, text, loc = Nothing, depth, clock}
-
-header :: Clock -> Int -> Text -> Note
-header c i l = noteAt c 0 (StepHeader i l) ("Step " <> T.pack (show i) <> ": " <> l)
-
-eventAt :: Clock -> Var -> EventKind -> Event
-eventAt clock var kind = Event {clock, var, kind}
-
-h1 :: Var
-h1 = Var {pool = 0, id = 7}
 
 -- | The mockup-A shape, synthetically: open(1), write(4), close(5), read(8)
 -- — with the read a posthumous touch (the synthetic stream can express what

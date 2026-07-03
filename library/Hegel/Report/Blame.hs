@@ -25,7 +25,7 @@ where
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Data.List (sortOn)
-import Data.List qualified as List
+import Data.Map.Strict qualified as Map
 import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import Hegel.Internal.Event (EventKind (..), Var)
@@ -158,18 +158,22 @@ factAt trace at t = case t.kind of
         HauntedAt t.var
     | otherwise -> TouchedAt t.var
 
--- | The subject's earlier story, starting from the most recent 'Observation'.
--- The subject's story is its whole lineage chain ('Trace.chain'): a
+-- | The subject's earlier story, most recent first, one citation per step
+-- (the ledger draws one rail edge per cited row; the strongest fact wins a
+-- shared step). The story spans the whole lineage chain ('Trace.chain'): a
 -- transferred value cites its pre-transfer history too.
 citationsFor :: Trace -> Int -> Var -> [Observation]
 citationsFor trace failingStep subject =
   [ Observation {step = s, fact = e, since = []}
-  | (s, e) <- dedupe (sortOn (Down . fst) (mapMaybe id (birth : deaths <> touches)))
+  | (s, e) <- Map.toDescList (Map.fromListWith strongest (mapMaybe id (birth : deaths <> touches)))
   ]
   where
+    strongest :: Fact -> Fact -> Fact
+    strongest a b = if factWeight a >= factWeight b then a else b
     chainLives = mapMaybe (Trace.lifeline trace) (Trace.chain trace subject)
     -- Only the chain root has a true birth; a transfer arrival's Born is
-    -- represented by the ConsumedAt of its source at the same step.
+    -- represented by the ConsumedAt/TransferredAt of its source at the same
+    -- step.
     birth = do
       l <- Trace.lifeline trace (Trace.root trace subject)
       b <- l.bornAt
@@ -187,16 +191,6 @@ citationsFor trace failingStep subject =
     before s e
       | s < failingStep = Just (s, e)
       | otherwise = Nothing
-    -- One citation per step: the ledger draws one rail edge per cited row,
-    -- so multiple facts at one step (two draws, or a transfer's consume)
-    -- keep only the most causally loaded.
-    dedupe :: [(Int, Fact)] -> [(Int, Fact)]
-    dedupe = fmap strongest . groupOn fst
-      where
-        strongest :: [(Int, Fact)] -> (Int, Fact)
-        strongest xs = last (sortOn (factWeight . snd) xs)
-        groupOn :: (Eq b) => ((Int, Fact) -> b) -> [(Int, Fact)] -> [[(Int, Fact)]]
-        groupOn f = List.groupBy (\a b -> f a == f b)
 
 -- * Projections
 

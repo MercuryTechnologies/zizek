@@ -35,7 +35,6 @@ where
 import Data.Char qualified as Char
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Internal.Event (Var (..))

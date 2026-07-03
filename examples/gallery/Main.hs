@@ -40,7 +40,7 @@ import Hegel.Pool qualified as Pool
 import Hegel.Property (Property, annotate, assume, forAll, (===))
 import Hegel.Report (Report (..), renderReportRichAnsi, renderReportRichAnsiWith, renderValue)
 import Hegel.Report.Glyph qualified as Glyph
-import Hegel.Report.Ledger qualified as Ledger
+import Hegel.Report.Style (defaultStyle)
 import Hegel.Property.Internal (Env (..), askEnv)
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
@@ -74,7 +74,7 @@ runLedgerScenario withAscii title prop = do
     then do
       T.putStrLn "── ascii ──"
       T.putStrLn . Glyph.sevenBitClean
-        =<< renderReportRichAnsiWith (Ledger.defaultOptions Glyph.ascii) report
+        =<< renderReportRichAnsiWith (defaultStyle Glyph.ascii) report
     else pure ()
 
 -- | Naive count-with-noun pluralization for demo messages:

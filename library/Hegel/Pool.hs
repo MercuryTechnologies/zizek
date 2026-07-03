@@ -116,17 +116,27 @@ valuesReusable pool = Draw \tc -> do
 --
 -- Drawing from an empty pool discards the current test case.
 valuesConsumed :: Pool a -> Gen a
-valuesConsumed pool = Draw \tc -> do
+valuesConsumed pool = Draw \tc -> snd <$> consume "valuesConsumed" pool tc
+
+-- | The consuming draw shared by 'valuesConsumed' and 'transfer': draw a
+-- vid from the engine (removing it there) and pop the mirrored value.
+--
+-- Throws 'AssumeRejected' when the pool is empty, discarding the test case.
+consume :: String -> Pool a -> TestCase -> IO (Int, a)
+consume caller pool tc = do
   empty <- IntMap.null <$> readIORef pool.values
   if empty
     then throwIO AssumeRejected
     else do
       vid <- poolGenerate tc pool.poolId True
-      atomicModifyIORef' pool.values \m ->
+      v <- atomicModifyIORef' pool.values \m ->
         case IntMap.updateLookupWithKey (\_ _ -> Nothing) vid m of
           (Just v, m') -> (m', v)
           (Nothing, _) ->
-            error ("Hegel.Pool.valuesConsumed: unknown variable id " <> show vid)
+            -- Engine returned a variable id that was never added —
+            -- engine-contract violation, not a user error.
+            error ("Hegel.Pool." <> caller <> ": unknown variable id " <> show vid)
+      pure (vid, v)
 
 -- | A generator that moves a value from one pool to another: a consuming
 -- draw from @src@ whose value is immediately registered in @dst@, with the
@@ -143,16 +153,7 @@ valuesConsumed pool = Draw \tc -> do
 -- case.
 transfer :: Pool a -> Pool a -> Gen a
 transfer src dst = Draw \tc -> do
-  empty <- IntMap.null <$> readIORef src.values
-  if empty
-    then throwIO AssumeRejected
-    else do
-      vid <- poolGenerate tc src.poolId True
-      v <- atomicModifyIORef' src.values \m ->
-        case IntMap.updateLookupWithKey (\_ _ -> Nothing) vid m of
-          (Just v, m') -> (m', v)
-          (Nothing, _) ->
-            error ("Hegel.Pool.transfer: unknown variable id " <> show vid)
-      vid' <- poolAddFrom tc dst.poolId Var {pool = src.poolId, id = vid}
-      modifyIORef' dst.values (IntMap.insert vid' v)
-      pure v
+  (vid, v) <- consume "transfer" src tc
+  vid' <- poolAddFrom tc dst.poolId Var {pool = src.poolId, id = vid}
+  modifyIORef' dst.values (IntMap.insert vid' v)
+  pure v

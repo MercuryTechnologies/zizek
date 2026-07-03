@@ -31,7 +31,7 @@ import Hegel.Report.Blame qualified as Blame
 import Hegel.Report.Glyph (Cell (..), GlyphTable (..))
 import Hegel.Report.Glyph qualified as Glyph
 import Hegel.Report.Ledger qualified as Ledger
-import Hegel.Report.Phrase qualified as Phrase
+import Hegel.Report.Style (Direction (..), Style (..), defaultStyle)
 import Hegel.Report.Trace (Trace)
 import Hegel.Report.Trace qualified as Trace
 import Hegel.Report.Verdict qualified as Verdict
@@ -41,52 +41,10 @@ import Hegel.Stateful qualified as Stateful
 import System.Environment (setEnv, unsetEnv)
 import System.IO (stdout)
 import Test.Hspec
+import TraceFixtures (Model (..), eventAt, eventfulMachine, h1, header, noteAt, uacBlame, uacFixture, uacTrace)
 
 -- ---------------------------------------------------------------------------
 -- Fixture: the mockup-A shape (with filler steps so elision rows render)
-
-noteAt :: Clock -> Int -> NoteKind -> Text -> Note
-noteAt clock depth kind text = Note {kind, text, loc = Nothing, depth, clock}
-
-header :: Clock -> Int -> Text -> Note
-header c i l = noteAt c 0 (StepHeader i l) ("Step " <> T.pack (show i) <> ": " <> l)
-
-eventAt :: Clock -> Var -> EventKind -> Event
-eventAt clock var kind = Event {clock, var, kind}
-
-h1 :: Var
-h1 = Var {pool = 0, id = 7}
-
--- | open(1), fillers(2,3), write(4), close(5), fillers(6,7), read(8) — the
--- read is a haunted touch, so blame cites close, write, and open.
-uacTrace :: Trace
-uacTrace = uncurry Trace.build uacFixture
-
-uacFixture :: ([Note], [Event])
-uacFixture =
-  ( [ header (Clock 1) 1 "open",
-      header (Clock 3) 2 "noop",
-      header (Clock 4) 3 "noop",
-      header (Clock 5) 4 "write",
-      noteAt (Clock 7) 1 Drawn "h",
-      noteAt (Clock 8) 1 Response "ok",
-      header (Clock 9) 5 "close",
-      noteAt (Clock 11) 1 Drawn "h",
-      header (Clock 12) 6 "noop",
-      header (Clock 13) 7 "noop",
-      header (Clock 14) 8 "read",
-      noteAt (Clock 16) 1 Drawn "h",
-      noteAt (Clock 17) 1 (Failure Nothing) "read returned stale bytes"
-    ],
-    [ eventAt (Clock 2) h1 (Born Nothing),
-      eventAt (Clock 6) h1 Reused,
-      eventAt (Clock 10) h1 Consumed,
-      eventAt (Clock 15) h1 Reused
-    ]
-  )
-
-uacBlame :: Blame
-uacBlame = fromJust (Blame.analyze uacTrace)
 
 -- | The fixture's raw streams with one extra note spliced in before the
 -- failure note (clock order is what matters; the list stays sorted).
@@ -95,8 +53,8 @@ fixtureWith extra = (sortOn (.clock) (extra : notes), events)
   where
     (notes, events) = uacFixture
 
-renderWith :: Ledger.Options -> Text
-renderWith opts = docToText (Ledger.ledgerDoc opts uacTrace uacBlame)
+renderWith :: Style -> Text
+renderWith style = docToText (Ledger.ledgerDoc style uacTrace uacBlame)
 
 -- ---------------------------------------------------------------------------
 -- Spec
@@ -105,7 +63,7 @@ spec :: Spec
 spec = do
   describe "ledgerDoc" do
     it "renders the failure-first unicode ledger (mockup-A shape)" do
-      renderWith (Ledger.defaultOptions Glyph.unicode)
+      renderWith (defaultStyle Glyph.unicode)
         `shouldBe` T.intercalate
           "\n"
           [ "✗ 8  read v₁                    ●─┬─┬─╮",
@@ -118,7 +76,7 @@ spec = do
           ]
 
     it "renders the chronological unicode ledger" do
-      renderWith (Ledger.defaultOptions Glyph.unicode) {Ledger.direction = Ledger.Chronological}
+      renderWith (defaultStyle Glyph.unicode) {direction = Chronological}
         `shouldBe` T.intercalate
           "\n"
           [ "● 1  open v₁                    ◀─────╮   v₁ was created",
@@ -131,7 +89,7 @@ spec = do
           ]
 
     it "renders the failure-first ascii ledger" do
-      renderWith (Ledger.defaultOptions Glyph.ascii)
+      renderWith (defaultStyle Glyph.ascii)
         `shouldBe` T.intercalate
           "\n"
           [ "x 8  read v1                     *-+-+-.",
@@ -144,16 +102,16 @@ spec = do
           ]
 
     it "falls back to numeric citations past the rail budget" do
-      let out = renderWith (Ledger.defaultOptions Glyph.unicode) {Ledger.railBudget = 2}
+      let out = renderWith (defaultStyle Glyph.unicode) {railBudget = 2}
       out `shouldSatisfy` T.isInfixOf "← cites 5, 4, 1"
       out `shouldNotSatisfy` T.isInfixOf "◀"
 
     it "clips the call column at the width budget" do
-      let out = renderWith (Ledger.defaultOptions Glyph.unicode) {Ledger.callWidth = 8}
+      let out = renderWith (defaultStyle Glyph.unicode) {callWidth = 8}
       out `shouldSatisfy` T.isInfixOf "write v⋯"
 
     it "the ascii clip stays inside the budget (multi-char ellipsis)" do
-      let out = renderWith (Ledger.defaultOptions Glyph.ascii) {Ledger.callWidth = 8}
+      let out = renderWith (defaultStyle Glyph.ascii) {callWidth = 8}
       -- 8 - 3 = 5 chars of call + "..." = exactly the budget.
       out `shouldSatisfy` T.isInfixOf "write..."
       out `shouldNotSatisfy` T.isInfixOf "write v..."
@@ -162,13 +120,13 @@ spec = do
     it "puts the failing row first (failure-first) with its details beneath in both directions" do
       let rows d =
             Ledger.layoutRows
-              (Ledger.defaultOptions Glyph.unicode) {Ledger.direction = d}
+              (defaultStyle Glyph.unicode) {direction = d}
               uacTrace
               uacBlame
           kinds d = fmap (.kind) (rows d)
-      take 2 (kinds Ledger.FailureFirst)
+      take 2 (kinds FailureFirst)
         `shouldBe` [Ledger.NodeRow, Ledger.DetailRow]
-      drop (length (kinds Ledger.Chronological) - 2) (kinds Ledger.Chronological)
+      drop (length (kinds Chronological) - 2) (kinds Chronological)
         `shouldBe` [Ledger.NodeRow, Ledger.DetailRow]
 
     it "splits a multi-line failure message into one detail row per line" do
@@ -181,19 +139,19 @@ spec = do
             ]
           t = Trace.build multi events
           b = fromJust (Blame.analyze t)
-          rows = Ledger.layoutRows (Ledger.defaultOptions Glyph.unicode) t b
+          rows = Ledger.layoutRows (defaultStyle Glyph.unicode) t b
       [r.call | r <- rows, r.kind == Ledger.DetailRow]
         `shouldBe` ["expected open", "got closed"]
 
     it "elides unshown steps explicitly, with counts" do
-      let rows = Ledger.layoutRows (Ledger.defaultOptions Glyph.unicode) uacTrace uacBlame
+      let rows = Ledger.layoutRows (defaultStyle Glyph.unicode) uacTrace uacBlame
       [r.call | r <- rows, r.kind == Ledger.ElisionRow]
         `shouldBe` ["⋯ 2 steps, none touch v₁", "⋯ 2 steps, none touch v₁"]
 
   describe "verdictDoc" do
     it "words the use-after-consume fixture as a proof paragraph" do
       -- The paragraph reflows at the layout width; compare the words.
-      fmap (unwrap . docToText) (Verdict.verdictDoc Phrase.english Glyph.unicode uacTrace uacBlame)
+      fmap (unwrap . docToText) (Verdict.verdictDoc (defaultStyle Glyph.unicode) uacTrace uacBlame)
         `shouldBe` Just
           "Step 8 (read) touched v₁ after its death: v₁ was consumed at step 5 (close), v₁ was touched at step 4 (write), v₁ was created at step 1 (open) — but it failed: read returned stale bytes."
 
@@ -202,7 +160,7 @@ spec = do
       let (notes, events) = fixtureWith (noteAt (Clock 16) 1 Response "Just \"a\"")
           t = Trace.build notes events
           b = fromJust (Blame.analyze t)
-      fmap (unwrap . docToText) (Verdict.verdictDoc Phrase.english Glyph.unicode t b)
+      fmap (unwrap . docToText) (Verdict.verdictDoc (defaultStyle Glyph.unicode) t b)
         `shouldSatisfy` maybe False (T.isInfixOf "— but read returned Just \"a\".")
 
     it "agrees with the rail: every step in the prose is in the citation closure" do
@@ -226,7 +184,7 @@ spec = do
               ]
               [eventAt (Clock 2) h1 (Born Nothing)]
           b = fromJust (Blame.analyze t)
-      Verdict.verdictDoc Phrase.english Glyph.unicode t b `shouldSatisfy` \case
+      Verdict.verdictDoc (defaultStyle Glyph.unicode) t b `shouldSatisfy` \case
         Nothing -> True
         Just _ -> False
 
@@ -353,7 +311,7 @@ spec = do
           case Blame.analyze trace of
             Nothing -> expectationFailure "expected blame"
             Just blame -> do
-              let out = docToText (Ledger.ledgerDoc (Ledger.defaultOptions Glyph.unicode) trace blame)
+              let out = docToText (Ledger.ledgerDoc (defaultStyle Glyph.unicode) trace blame)
               out `shouldSatisfy` T.isInfixOf "✗"
               out `shouldSatisfy` T.isInfixOf "●"
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
@@ -406,39 +364,4 @@ transferMachine =
             pure m
         ],
       invariants = []
-    }
-
--- ---------------------------------------------------------------------------
--- Engine fixture (the TraceIR machine, kept local so the suites stay
--- independent)
-
-data Model = Model
-  { pool :: Pool.Pool Int,
-    reused :: Bool,
-    consumed :: Bool
-  }
-
-eventfulMachine :: Stateful.Machine Model IO
-eventfulMachine =
-  Stateful.Machine
-    { initial = do
-        env <- askEnv
-        p <- liftIO (Pool.new env.testCase)
-        pure Model {pool = p, reused = False, consumed = False},
-      rules =
-        [ Stateful.Rule "register" \m -> do
-            n <- forAll (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
-            liftIO (Pool.add m.pool n)
-            pure m,
-          Stateful.Rule "reuse" \m -> do
-            _ <- forAll (Pool.valuesReusable m.pool)
-            pure m {reused = True},
-          Stateful.Rule "consume" \m -> do
-            _ <- forAll (Pool.valuesConsumed m.pool)
-            pure m {consumed = True}
-        ],
-      invariants =
-        [ Stateful.Invariant "never_reuse_and_consume" \m ->
-            assert (not (m.reused && m.consumed)) "reuse and consume never both happen (bug)"
-        ]
     }

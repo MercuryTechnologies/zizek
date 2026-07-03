@@ -8,7 +8,7 @@ re-litigated; the "landed" paragraphs in the decided-plan section below are
 the fuller build log). This note remains the home of the design space, the
 survey material, and everything **deferred**: R1 lanes, R2 obligation lanes
 (zizek-side; see N3), F2–F5, O1–O5, the N-series, the recorded code debts
-(A2/A4/A5), and the engine asks (`pool_remove`).
+(A2/A4), and the engine asks (`pool_remove`).
 
 Running example used throughout: a file-handle machine where `open` puts a
 handle in a `Hegel.Pool`, `write`/`read`/`transfer` draw from it, `close`
@@ -941,12 +941,12 @@ debt, with triggers: **A2** — `Row.call`/`annot` carry pre-rendered
 glyph+phrase text, so the layout pins are table-coupled; restructure to
 abstract row content when A4/M5/R1 reshape `Row` anyway (doing it now =
 three pin churns for one). **A4** — `layoutRows` is a where-monolith;
-decompose when M5's composition reveals the seams. **A5** — converge
-`Ledger.Options`/verdict params into one style record when M5 wires the
-composed report (partially done: `Options.phrases`). Smaller items
-(fixture dedup across test suites, `Segment.header` tuple→record,
-`lifelinesOf` fold clarity, name-in-lane-colour rule) batch
-opportunistically.
+decompose when M5's composition reveals the seams. ~~**A5**~~ — *paid
+(2026-07-03)*: `Hegel.Report.Style` now carries glyphs + phrases +
+layout knobs for every composed-report section; `Ledger.Options` is
+gone. The smaller items (fixture dedup across test suites,
+`Segment.header` tuple→record, `lifelinesOf` fold clarity) were paid in
+the same pass; the name-in-lane-colour rule remains open.
 
 Deferred from this slice (recipes recorded above so nothing re-derives):
 R1 lanes, R2 obligation lanes, F2 program listing, O1–O3

@@ -23,12 +23,7 @@
 --
 -- > import Hegel.Report.Ledger qualified as Ledger
 module Hegel.Report.Ledger
-  ( -- * Options
-    Direction (..),
-    Options (..),
-    defaultOptions,
-
-    -- * Row model
+  ( -- * Row model
     RowKind (..),
     Row (..),
     layoutRows,
@@ -40,17 +35,18 @@ where
 
 import Data.IntSet qualified as IntSet
 import Data.List (nub, sortOn)
-import Data.Maybe (mapMaybe)
+import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import Data.Text (Text)
 import Data.Text qualified as T
-import Hegel.Diff (LineDiff (..))
 import Hegel.Report.Ann (Ann (..))
-import Hegel.Report.Blame (Blame (..), Fact (..), Observation (..))
+import Hegel.Report.Ann qualified as Ann
+import Hegel.Report.Blame (Blame (..), Observation (..))
 import Hegel.Report.Blame qualified as Blame
 import Hegel.Report.Glyph (Cell (..), GlyphTable (..), displayName)
 import Hegel.Report.Phrase (PhraseTable (..))
 import Hegel.Report.Phrase qualified as Phrase
+import Hegel.Report.Style (Direction (..), Style (..))
 import Hegel.Report.Trace (Lifeline (..), Step (..), Touch (..), Trace)
 import Hegel.Report.Trace qualified as Trace
 import Prettyprinter (Doc)
@@ -58,35 +54,8 @@ import Prettyprinter qualified as PP
 
 -- * Options
 
--- | Reading order. 'FailureFirst' puts the failure at eye level (jj's
--- @\@@-at-top instinct) with relevance decaying downward into elided
--- history; 'Chronological' reads as a story and matches the plain
--- renderer's order. The default is decided on live gallery traces.
-data Direction = FailureFirst | Chronological
-  deriving stock (Show, Eq)
-
-data Options = Options
-  { glyphs :: !GlyphTable,
-    -- | The words for annotations, elisions, and the footer — shared with
-    -- the verdict paragraph so the two renderers agree by construction.
-    phrases :: !PhraseTable,
-    direction :: !Direction,
-    -- | Maximum drawn rail columns; more citations than this fall back to
-    -- the numeric citation list on the failing row.
-    railBudget :: !Int,
-    -- | Call-column clip budget (@rule args → response@), in characters.
-    callWidth :: !Int
-  }
-
-defaultOptions :: GlyphTable -> Options
-defaultOptions table =
-  Options
-    { glyphs = table,
-      phrases = Phrase.english,
-      direction = FailureFirst,
-      railBudget = 3,
-      callWidth = 40
-    }
+-- The style record lives in "Hegel.Report.Style"; the ledger is one of its
+-- consumers (with the layout knobs that happen to be ledger-specific).
 
 -- * Row model
 
@@ -119,7 +88,7 @@ data Row = Row
 
 -- | Lay the trace out as ledger rows. Total: with no citations the ledger is
 -- just the failing row and its details.
-layoutRows :: Options -> Trace -> Blame -> [Row]
+layoutRows :: Style -> Trace -> Blame -> [Row]
 layoutRows opts trace blame = orient <> footerRows
   where
     -- The failing row keeps its detail lines directly beneath it in both
@@ -133,9 +102,11 @@ layoutRows opts trace blame = orient <> footerRows
     cited = blame.observed.since
     k = length cited
     drawRail = k > 0 && k <= opts.railBudget
-    -- Citation column, 1-based: position in 'since' order (nearest cause
-    -- innermost — 'since' is most-recent-first).
-    columnOf s = lookup s (zip (fmap (.step) cited) [1 ..])
+    -- One association: (column, citation), column 1-based in 'since' order
+    -- (nearest cause innermost — 'since' is most-recent-first). Everything
+    -- rail-related projects from it.
+    indexedCites = zip [1 :: Int ..] cited
+    columnOf s = listToMaybe [c | (c, o) <- indexedCites, o.step == s]
     -- Shown steps, failure first.
     shown = sortOn (Down . (.index)) [s | s <- trace.steps, IntSet.member s.index closure]
     (failingSteps, citedSteps) = splitAt 1 shown
@@ -173,23 +144,16 @@ layoutRows opts trace blame = orient <> footerRows
       -- would defeat the column-width arithmetic.
       Just f -> maybe (T.lines f.message) (fmap diffLine) f.diff
       Nothing -> []
-    diffLine = \case
-      LineSame t -> "  " <> t
-      LineRemoved t -> "- " <> t
-      LineAdded t -> "+ " <> t
+    diffLine = Ann.lineDiffText
 
     -- Cited steps and the elisions between them, walking back through time.
-    historyRows = go (fmap (.index) failingSteps) citedSteps
+    historyRows = go (listToMaybe (fmap (.index) failingSteps)) citedSteps
       where
         go _ [] = terminator
         go prev (s : rest) =
-          elisionRowsBetween (listToMaybe' prev) s.index
+          elisionRowsBetween prev s.index
             <> [citedRow s]
-            <> go [s.index] rest
-        listToMaybe' :: [Int] -> Maybe Int
-        listToMaybe' = \case
-          [] -> Nothing
-          (x : _) -> Just x
+            <> go (Just s.index) rest
     terminator =
       [ Row {kind = TerminatorRow, gutter = HistoryEnd, stepNo = Nothing, call = "", rail = [], annot = ""}
       | earliestShown <- take 1 (reverse (fmap (.index) shown)),
@@ -203,7 +167,7 @@ layoutRows opts trace blame = orient <> footerRows
           stepNo = Just s.index,
           call = callText s,
           rail = if drawRail then maybe [] citedRail (columnOf s.index) else [],
-          annot = maybe "" factText (lookup s.index [(c.step, c.fact) | c <- cited])
+          annot = maybe "" factText (listToMaybe [o.fact | (_, o) <- indexedCites, o.step == s.index])
         }
     gutterFor s
       | (rootLife >>= (.bornAt)) == Just s.index = NodeBorn
@@ -250,20 +214,18 @@ layoutRows opts trace blame = orient <> footerRows
         <> replicate (2 * c - 1) RailHoriz
         <> [cornerCell]
         <> concat [[Blank, RailVert] | _ <- [c + 1 .. k]]
-    verticals cols =
+    verticals = verticalsWith RailVert
+    elidedVerticals = verticalsWith RailElided
+    verticalsWith cell cols =
       case cols of
         [] -> []
-        _ -> Blank : concat [[Blank, if c `elem` cols then RailVert else Blank] | c <- [1 .. k]]
-    elidedVerticals cols =
-      case cols of
-        [] -> []
-        _ -> Blank : concat [[Blank, if c `elem` cols then RailElided else Blank] | c <- [1 .. k]]
+        _ -> Blank : concat [[Blank, if c `elem` cols then cell else Blank] | c <- [1 .. k]]
     allColumns = if drawRail then [1 .. k] else []
     -- Columns still travelling at rows below (further back in time than)
     -- the given step: citations whose row is at or before it.
     activeColumnsBelow lower =
       if drawRail
-        then [c | (c, s) <- zip [1 ..] (fmap (.step) cited), s <= lower]
+        then [c | (c, o) <- indexedCites, o.step <= lower]
         else []
 
     -- Text ----------------------------------------------------------------
@@ -314,7 +276,7 @@ layoutRows opts trace blame = orient <> footerRows
 
 -- | Render the rows as an aligned document: gutter, step number, clipped
 -- call column, the rail region, annotations at the arrowheads.
-ledgerDoc :: Options -> Trace -> Blame -> Doc Ann
+ledgerDoc :: Style -> Trace -> Blame -> Doc Ann
 ledgerDoc opts trace blame = PP.vsep (fmap rowDoc rows)
   where
     rows = layoutRows opts trace blame
@@ -355,6 +317,8 @@ ledgerDoc opts trace blame = PP.vsep (fmap rowDoc rows)
           FooterRow -> PP.annotate ElidedAnn (PP.pretty r.annot)
           _ -> PP.annotate NoteAnn (PP.pretty r.annot)
 
+    -- Prefix sniffing co-located with its producer ('Ann.lineDiffText');
+    -- the full structured fix rides the recorded Row debt (A2).
     diffAnn t
       | "- " `T.isPrefixOf` t = DiffRemoved
       | "+ " `T.isPrefixOf` t = DiffAdded

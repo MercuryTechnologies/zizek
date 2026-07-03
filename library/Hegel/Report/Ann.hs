@@ -13,6 +13,8 @@ module Hegel.Report.Ann
 
     -- * Shared layout helpers
     diffDocs,
+    lineDiffText,
+    lineDiffAnn,
   )
 where
 
@@ -109,10 +111,22 @@ diffDocs :: [LineDiff] -> [Doc Ann]
 diffDocs d = diffLegend : fmap lineDiffDoc d
 
 lineDiffDoc :: LineDiff -> Doc Ann
-lineDiffDoc = \case
-  LineSame t -> PP.annotate DiffSame ("  " <> PP.pretty t)
-  LineRemoved t -> PP.annotate DiffRemoved ("- " <> PP.pretty t)
-  LineAdded t -> PP.annotate DiffAdded ("+ " <> PP.pretty t)
+lineDiffDoc d = PP.annotate (lineDiffAnn d) (PP.pretty (lineDiffText d))
+
+-- | A diff line as prefixed text — the one home of the @  @\/@- @\/@+ @
+-- prefix vocabulary (the ledger's detail rows render from this too).
+lineDiffText :: LineDiff -> Text
+lineDiffText = \case
+  LineSame t -> "  " <> t
+  LineRemoved t -> "- " <> t
+  LineAdded t -> "+ " <> t
+
+-- | The annotation matching 'lineDiffText'.
+lineDiffAnn :: LineDiff -> Ann
+lineDiffAnn = \case
+  LineSame _ -> DiffSame
+  LineRemoved _ -> DiffRemoved
+  LineAdded _ -> DiffAdded
 
 -- | Legend tying the diff markers to the @(===)@ operands: @(- lhs) (+ rhs)@,
 -- each token coloured to match the diff lines it keys (hedgehog's header

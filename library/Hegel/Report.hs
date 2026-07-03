@@ -67,6 +67,7 @@ import Hegel.Report.Source
   )
 import Hegel.Report.Span (Span (..), spanFromSrcLoc)
 import Hegel.Report.Stateful (failingGroupDoc, isStepJournal, noteFiles, statefulDoc)
+import Hegel.Report.Style (Style (..), defaultStyle)
 import Hegel.Report.Trace (Trace)
 import Hegel.Report.Trace qualified as Trace
 import Hegel.Report.Verdict qualified as Verdict
@@ -194,21 +195,21 @@ renderValue a = T.pack (maybe s Pretty.valToStr (Pretty.parseValue s))
 -- Reads source files at render time; degrades to 'renderReport' when no
 -- source is readable.
 renderReportRich :: Report -> IO Text
-renderReportRich = renderReportRichWith (Ledger.defaultOptions Glyph.unicode)
+renderReportRich = renderReportRichWith (defaultStyle Glyph.unicode)
 
 -- | 'renderReportRich' with ANSI colour codes. Degrades to 'renderReportAnsi'
 -- when no source is readable.
 renderReportRichAnsi :: Report -> IO Text
-renderReportRichAnsi = renderReportRichAnsiWith (Ledger.defaultOptions Glyph.unicode)
+renderReportRichAnsi = renderReportRichAnsiWith (defaultStyle Glyph.unicode)
 
--- | 'renderReportRich' with explicit trace-rendering options (glyph table,
--- phrase table, direction, budgets).
-renderReportRichWith :: Ledger.Options -> Report -> IO Text
-renderReportRichWith opts = renderRichImpl opts renderReport docToText
+-- | 'renderReportRich' with an explicit 'Style' (glyph table, phrase table,
+-- direction, budgets).
+renderReportRichWith :: Style -> Report -> IO Text
+renderReportRichWith style = renderRichImpl style renderReport docToText
 
--- | 'renderReportRichAnsi' with explicit trace-rendering options.
-renderReportRichAnsiWith :: Ledger.Options -> Report -> IO Text
-renderReportRichAnsiWith opts = renderRichImpl opts renderReportAnsi docToAnsi
+-- | 'renderReportRichAnsi' with an explicit 'Style'.
+renderReportRichAnsiWith :: Style -> Report -> IO Text
+renderReportRichAnsiWith style = renderRichImpl style renderReportAnsi docToAnsi
 
 -- | The integrations' one-stop renderer: rich, ANSI per @useColor@, glyphs
 -- per the output 'Glyph.Preference' — with the ascii preference's
@@ -217,23 +218,22 @@ renderReportRichAnsiWith opts = renderRichImpl opts renderReportAnsi docToAnsi
 renderReportAuto :: Bool -> Glyph.Preference -> Report -> IO Text
 renderReportAuto useColor pref report =
   Glyph.cleanFor pref
-    <$> (if useColor then renderReportRichAnsiWith opts else renderReportRichWith opts) report
+    <$> (if useColor then renderReportRichAnsiWith style else renderReportRichWith style) report
   where
-    opts = Ledger.defaultOptions (Glyph.table pref)
+    style = defaultStyle (Glyph.table pref)
 
 -- | Shared implementation of the rich renderers, parameterised over the
 -- plain-text fallback and the final document renderer.
-renderRichImpl :: Ledger.Options -> (Report -> Text) -> (Doc Ann -> Text) -> Report -> IO Text
-renderRichImpl opts plain toText report = case report.result of
-  Counterexample {message, notes, events, loc, diff} -> do
-    mdoc <- richDoc opts report.databaseKey message notes events loc diff
-    pure case mdoc of
-      Nothing -> plain report
-      Just body -> toText (PP.vsep ["failed after" <+> statsDoc report.stats, body])
-  _ -> pure (plain report)
+renderRichImpl :: Style -> (Report -> Text) -> (Doc Ann -> Text) -> Report -> IO Text
+renderRichImpl style plain toText report = do
+  mdoc <- richDoc style report
+  pure case mdoc of
+    Nothing -> plain report
+    Just body -> toText (PP.vsep ["failed after" <+> statsDoc report.stats, body])
 
--- | Attempt to build the rich failure doc, falling back to 'Nothing' when no
--- declaration could be read for any location.
+-- | Attempt to build the rich failure doc, falling back to 'Nothing' when
+-- the result is not a counterexample or no declaration could be read for
+-- any location.
 --
 -- Step-structured journals take the degradation ladder, each rung pinned:
 --
@@ -242,17 +242,24 @@ renderRichImpl opts plain toText report = case report.result of
 -- (3) a blame tree → the composed trace report: verdict paragraph,
 --     citation ledger, the failing step's freeze-frame splice, footer
 --     (the verdict line itself degrades away when citations are empty).
-richDoc :: Ledger.Options -> Maybe Text -> Text -> [Note] -> [Event] -> Maybe SrcLoc -> Maybe Diff -> IO (Maybe (Doc Ann))
-richDoc opts databaseKey message notes events loc diff
-  | isStepJournal notes = do
-      decls <- loadDeclarations (noteFiles notes)
-      let timeline = statefulDoc decls message notes loc diff
-          trace = Trace.build notes events
-      pure . Just $ case (events, Blame.analyze trace) of
-        ([], _) -> timeline
-        (_, Nothing) -> PP.vsep (timeline : maybeToList (footerDoc opts.phrases databaseKey))
-        (_, Just blame) -> composedDoc opts decls trace blame notes databaseKey
-richDoc _ _ message notes _ loc diff = do
+richDoc :: Style -> Report -> IO (Maybe (Doc Ann))
+richDoc style report = case report.result of
+  Counterexample {message, notes, events, loc, diff}
+    | isStepJournal notes -> do
+        decls <- loadDeclarations (noteFiles notes)
+        let timeline = statefulDoc decls message notes loc diff
+            trace = Trace.build notes events
+        pure . Just $ case (events, Blame.analyze trace) of
+          ([], _) -> timeline
+          (_, Nothing) -> PP.vsep (timeline : maybeToList (footerDoc style.phrases report.databaseKey))
+          (_, Just blame) -> composedDoc style decls trace blame notes report.databaseKey
+    | otherwise -> plainRichDoc message notes loc diff
+  _ -> pure Nothing
+
+-- | The non-stateful rich doc: drawn values and the failure message spliced
+-- into a source listing.
+plainRichDoc :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> IO (Maybe (Doc Ann))
+plainRichDoc message notes loc diff = do
   let (footers, inline) = partition (\n -> n.kind == Footnote) notes
       inputs = [(fmap spanFromSrcLoc n.loc, n.text) | n <- inline]
       mFailureSpan = fmap spanFromSrcLoc loc
@@ -280,23 +287,23 @@ richDoc _ _ message notes _ loc diff = do
 -- ledger, the failing step's freeze-frame splice, footer. Sections separate
 -- with one blank line; every layer is a projection of the same trace and
 -- blame values.
-composedDoc :: Ledger.Options -> Declarations -> Trace -> Blame -> [Note] -> Maybe Text -> Doc Ann
-composedDoc opts decls trace blame notes databaseKey =
+composedDoc :: Style -> Declarations -> Trace -> Blame -> [Note] -> Maybe Text -> Doc Ann
+composedDoc style decls trace blame notes databaseKey =
   PP.vsep (PP.punctuate PP.line (catMaybes sections))
   where
     sections =
       [ chip,
-        Verdict.verdictDoc opts.phrases opts.glyphs trace blame,
-        Just (Ledger.ledgerDoc opts trace blame),
+        Verdict.verdictDoc style trace blame,
+        Just (Ledger.ledgerDoc style trace blame),
         failingGroupDoc decls notes,
         -- Footnotes keep their contract on the richest rung too: context
         -- rendered after the report body, before the reproduction line.
         footnotesDoc notes,
-        footerDoc opts.phrases databaseKey
+        footerDoc style.phrases databaseKey
       ]
     chip =
       fmap
-        (PP.annotate LocAnn . PP.pretty . opts.phrases.phenomenon)
+        (PP.annotate LocAnn . PP.pretty . style.phrases.phenomenon)
         blame.diagnosis
 
 -- | Footnote notes, rendered after the report body (their documented

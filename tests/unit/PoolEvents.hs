@@ -3,15 +3,8 @@
 -- with the note journal.
 module PoolEvents (spec) where
 
-import Control.Monad.IO.Class (liftIO)
-import Data.Function ((&))
 import Data.List (nub, sort)
-import Hegel (Gen)
-import Hegel.Gen qualified as Gen
-import Hegel.Pool (Pool)
-import Hegel.Pool qualified as Pool
-import Hegel.Property (assert, forAll)
-import Hegel.Property.Internal (Env (..), askEnv)
+import Hegel.Property (assert)
 import Hegel.Report
   ( Clock (..),
     Event (..),
@@ -25,44 +18,7 @@ import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
-
-intGen :: Gen Int
-intGen = Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
-
--- | A machine whose failure requires all three pool-event kinds to have
--- occurred: the invariant trips only once a reusable draw /and/ a consuming
--- draw have both happened, so the minimal counterexample must keep at least
--- one 'Born', one 'Reused', and one 'Consumed' event.
-data Model = Model
-  { pool :: Pool Int,
-    reused :: Bool,
-    consumed :: Bool
-  }
-
-eventfulMachine :: Stateful.Machine Model IO
-eventfulMachine =
-  Stateful.Machine
-    { initial = do
-        env <- askEnv
-        p <- liftIO (Pool.new env.testCase)
-        pure Model {pool = p, reused = False, consumed = False},
-      rules =
-        [ Stateful.Rule "register" \m -> do
-            n <- forAll intGen
-            liftIO (Pool.add m.pool n)
-            pure m,
-          Stateful.Rule "reuse" \m -> do
-            _ <- forAll (Pool.valuesReusable m.pool)
-            pure m {reused = True},
-          Stateful.Rule "consume" \m -> do
-            _ <- forAll (Pool.valuesConsumed m.pool)
-            pure m {consumed = True}
-        ],
-      invariants =
-        [ Stateful.Invariant "never_reuse_and_consume" \m ->
-            assert (not (m.reused && m.consumed)) "reuse and consume never both happen (bug)"
-        ]
-    }
+import TraceFixtures (eventfulMachine)
 
 -- | Run 'eventfulMachine' to a counterexample and hand its journal and event
 -- stream to the assertion body.

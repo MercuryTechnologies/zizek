@@ -23,6 +23,7 @@ import Hegel.Report.Blame qualified as Blame
 import Hegel.Report.Glyph (GlyphTable, displayName)
 import Hegel.Report.Phrase (PhraseTable (..))
 import Hegel.Report.Phrase qualified as Phrase
+import Hegel.Report.Style (Style (..))
 import Hegel.Report.Trace (Step (..), Trace)
 import Hegel.Report.Trace qualified as Trace
 import Prettyprinter (Doc)
@@ -69,14 +70,14 @@ plan trace blame =
 --
 -- 'Nothing' when the blame tree has no citations: with nothing to justify,
 -- the headline suffices (the composed report's degradation row).
-verdictDoc :: PhraseTable -> GlyphTable -> Trace -> Blame -> Maybe (Doc Ann)
-verdictDoc phrases glyphs trace blame
+verdictDoc :: Style -> Trace -> Blame -> Maybe (Doc Ann)
+verdictDoc style trace blame
   | null blame.observed.since = Nothing
   | otherwise =
       Just
         ( PP.annotate
             NoteAnn
-            (PP.fillSep (fmap PP.pretty (T.words (paragraph phrases glyphs trace blame))))
+            (PP.fillSep (fmap PP.pretty (T.words (paragraph style.phrases style.glyphs trace blame))))
         )
 
 -- | The paragraph as one 'Text' (also what the pins check).
