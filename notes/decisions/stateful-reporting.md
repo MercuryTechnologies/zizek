@@ -147,6 +147,10 @@ the splice's *layout*, and is unaffected by that recomposition.
 - `just test unit` — splice-marker, fallback-mix, nothing-splices, and
   end-to-end (`tests/unit/Stateful.hs`) tests pin the wired behaviour; the
   plain layout's pins are unchanged.
-- `cabal run demo-stateful-rich` — seven scenarios × (plain, Timeline,
-  Aggregate); the permanent eyeball harness. Scenario 7's runtime is engine
-  search (stochastic, 10k–40k cases), not rendering.
+- `cabal run stateful-report-gallery` — the permanent eyeball harness,
+  trimmed (2026-07-02) to four scenarios: palindrome and warehouse for the
+  spliced layout (warehouse was the decisive Timeline-evaluation scenario;
+  its runtime is engine search, stochastic, not rendering), plus two
+  citation-ledger scenarios from the trace-rendering slice. The five
+  cut scenarios' rendering behaviours (fallback mixing, inline bindings,
+  spine repetition, …) are pinned in `tests/unit/`.

@@ -866,7 +866,12 @@ counters, no layout work — defers the flagship). Order of work:
    (with "none touch vₙ" when true), `~` terminator, `▸ lifelines
    elided` footer; call column clips with in-value `⋯`. Both directions
    built; details stay under the ✗ row in each. Gallery scenarios 8–10
-   are the checkpoint-3 artifact; byte-exact pins in
+   were the checkpoint-3 artifact; after the checkpoint the gallery was
+   trimmed to four scenarios (two spliced, two ledger), with the flagship
+   file-handle machine redesigned so its *minimal* counterexample needs
+   an unrelated open between write and close — the full ledger vocabulary
+   (three-edge rail, elision row, lineage-linked lifeline, footer) forced
+   by the bug's shape rather than decoration. Byte-exact pins in
    `tests/unit/LedgerRendering.hs`.
    Ship unicode and ascii tables together, specced against the coverage
    tiers. **Direction decided at checkpoint 3: failure-first default,
