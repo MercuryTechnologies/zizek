@@ -316,6 +316,18 @@ executable stateful-report-gallery
     containers ^>=0.7,
     zizek,
 
+-- A guided tour of the failure report's progression, from a plain spliced
+-- property to the full composed trace report; for manual eyeballing.
+-- Not run by CI; `cabal run report-tour` from the repo root.
+executable report-tour
+  import: conformance
+  hs-source-dirs: examples/report-tour
+  main-is: Main.hs
+  build-depends:
+    containers ^>=0.7,
+    unliftio ^>=0.2,
+    zizek,
+
 -- Profiling scenarios: deterministic, named workloads isolating the
 -- Haskell-side hot paths (see notes/decisions/profiling-harness.md).
 -- `cabal run profile-hegel -- --list` for the scenario list; driven by
