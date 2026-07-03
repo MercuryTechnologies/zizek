@@ -33,8 +33,10 @@ Every scenario is `check` with a **fixed seed** (default `2026`, `--seed` to ove
 | `heap-stress` | 300 | 24-SKU warehouse, per-step audit-log thunk chains + fat annotations | allocator pressure & residency shape under big states; per-case sawtooth |
 | `gen-churn` | 2000 | fresh dependent generator per draw | pre-encoding's no-win case: per-draw generator construction + schema encode |
 | `gen-hoard` | 20 | 10k generators alive as a CAF, 1k-wide draw window per case | cached-encoding retention; residency plateau |
+| `pool` | 1000 | passing two-pool handle machine (open→closed via `Pool.transfer`) | per-case event-stream cost on the hot loop (recording is `Silent`; only the closure handed to `emit` is built) |
 | `render-plain` | 200 | one fixed find run (100 cases, full shrink), then N forced plain renders | per-failure report-render latency |
 | `render-rich` | 100 | same find run, rich renderer | source discovery + splicing + Timeline doc cost |
+| `render-trace` | 100 | a pool/transfer failure (500-case find), rich renderer | the rung-3 composed report: `Trace.build` + `Blame.analyze` + ledger + verdict, over the shared splice |
 
 For the `render-*` scenarios the case count is the number of render iterations, not `testCases`.
 
@@ -113,6 +115,31 @@ Three stress scenarios added (`tests/profile/Stress.hs`): `heap-stress` (24 SKUs
 - **Pre-encoding retention (gen-hoard)**: residency ramps to a plateau as hoard windows force cached encodings (census ~4.5 MB live at 500 cases; RTS max 12.5 MB with profiling headers), i.e. roughly ~0.5 KB per generator held alive — most of which is the generator closure + schema `Value` that existed before pre-encoding. The CAF is even collected once the run ends (census drops back to 232 KB). Bounded, proportional, converges: fine.
 - **Pre-encoding churn (gen-churn)**: constructing a fresh generator per draw costs ~2.6× ticks and ~4.3× alloc vs the cached path (`encode` 32% + builder 14% + CBOR map-building 16% of ticks). Not a leak — pure garbage — but worth a user-facing doc note someday: hoist generators out of loops/binds when bounds allow.
 - `heap-stress` cumulative alloc ≈ 1.8 MB/case — barely above plain `mixed` (1.7 MB/case) despite 24 SKUs and the audit log; per-step library machinery, not user state, dominates allocation.
+
+## Findings (2026-07-03, trace/ledger/verdict machinery)
+
+Added a pool-bearing machine (`tests/profile/Handles.hs`: open→closed via
+`Pool.transfer`, a use-after-close buffer leak) and two scenarios to check
+whether the composed trace report (`render-trace`) or the per-case event
+stream (`pool`) cost anything. They don't.
+
+- **Rung-3 render is one-shot and free.** Per-render (difference method,
+  `-O1` default build, so the fixed find run cancels): `render-trace` **0.33
+  ms**, `render-rich` **0.41 ms**, `render-plain` 0.005 ms. The full composed
+  report (`Trace.build` + `Blame.analyze` + ledger geometry + verdict list) is
+  *cheaper* than the old rich Timeline render — both are dominated by the
+  shared source discovery/splicing (`findDeclarations`), and the trace layer
+  adds negligibly on top. Rendering happens once per failure, ~1500× cheaper
+  than the find+shrink before it.
+- **The event stream is invisible on the hot loop.** `pool` (5000 cases):
+  99.9% productivity, 60 KB max residency (flat), ~200 KB/case — *below*
+  pool-free `mixed` (512 KB/case). Recording is `Silent` during search and
+  every shrink replay (mirrors the journal), so a pool op's only per-case cost
+  is the unforced closure handed to `emit`; it does not register in allocation
+  or GC.
+- Consequence: the verdict-list rewrite, the `Link*` cell rename, and dropping
+  the `direction` knob are all render-only and one-shot; nothing here touches
+  the per-case path (the knob removal even deleted ledger branches).
 
 ## Deferred
 

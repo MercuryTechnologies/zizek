@@ -23,6 +23,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as T
 import Data.Word (Word64)
+import Handles qualified
 import Hegel (Gen)
 import Hegel.Assertion (assert)
 import Hegel.Gen qualified as Gen
@@ -120,10 +121,10 @@ runScenario scenario opts = do
     Check prop -> do
       report <- check settings prop
       T.putStrLn (summary scenario settings.testCases report)
-    RenderLoop render -> do
-      -- Fixed find run (100 cases, full shrink) so every capture renders the
-      -- identical counterexample; only the render loop below is the workload.
-      report <- check settings {testCases = 100} (Stateful.run (Warehouse.machine Warehouse.Buggy))
+    RenderLoop findCases findProp render -> do
+      -- Fixed find run (full shrink) so every capture renders the identical
+      -- counterexample; only the render loop below is the workload.
+      report <- check settings {testCases = findCases} findProp
       let iterations = fromMaybe scenario.defaultCases opts.cases
       replicateM_ iterations do
         rendered <- render report
@@ -168,11 +169,11 @@ data Scenario = Scenario
 data Work
   = -- | An ordinary property run; the case count is 'testCases'.
     Check (Property ())
-  | -- | Find the buggy warehouse counterexample once (fixed find run, full
-    -- shrink), then render its report; the case count is the number of
-    -- render iterations. Rendering happens once per failure in real use —
+  | -- | Find a counterexample once (fixed find run of @findCases@ cases, full
+    -- shrink), then render its report; the scenario's case count is the number
+    -- of render iterations. Rendering happens once per failure in real use —
     -- the loop makes a per-failure latency cost profileable.
-    RenderLoop (Report -> IO Text)
+    RenderLoop Int (Property ()) (Report -> IO Text)
 
 describeScenario :: Scenario -> String
 describeScenario s =
@@ -194,9 +195,16 @@ scenarios =
     Scenario "heap-stress" 300 "24-SKU warehouse w/ audit-log thunk chains + fat annotations" (Check (Stateful.run Stress.heavyMachine)),
     Scenario "gen-churn" 2000 "fresh dependent generator per draw; pre-encoding worst case" (Check Stress.churnProperty),
     Scenario "gen-hoard" 20 "10k generators alive as a CAF; cached-encoding retention" (Check Stress.hoardProperty),
-    Scenario "render-plain" 200 "render the buggy warehouse counterexample (plain renderer)" (RenderLoop (pure . renderReport)),
-    Scenario "render-rich" 100 "render it rich (source discovery, splicing, Timeline layout)" (RenderLoop renderReportRichAnsi)
+    Scenario "pool" 1000 "passing pool/transfer handle machine; per-case event-stream overhead" (Check (Stateful.run (Handles.machine Handles.Fixed))),
+    Scenario "render-plain" 200 "render the buggy warehouse counterexample (plain renderer)" (RenderLoop 100 warehouseBug (pure . renderReport)),
+    Scenario "render-rich" 100 "render it rich (source discovery, splicing, Timeline layout)" (RenderLoop 100 warehouseBug renderReportRichAnsi),
+    Scenario "render-trace" 100 "render a pool/transfer failure rich (Trace/Blame/ledger/verdict)" (RenderLoop 500 handlesBug renderReportRichAnsi)
   ]
+
+-- | The two find runs the render scenarios replay.
+warehouseBug, handlesBug :: Property ()
+warehouseBug = Stateful.run (Warehouse.machine Warehouse.Buggy)
+handlesBug = Stateful.run (Handles.machine Handles.Buggy)
 
 smallInt :: Gen Int
 smallInt = Gen.int & Gen.min 0 & Gen.max 1000 & Gen.build

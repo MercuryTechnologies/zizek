@@ -341,6 +341,7 @@ executable profile-hegel
   hs-source-dirs: tests/profile
   main-is: Main.hs
   other-modules:
+    Handles
     Stress
     Warehouse
 
