@@ -218,6 +218,7 @@ lifelinesOf events stepAt = Map.elems (foldl' apply Map.empty events)
   where
     labels :: Map.Map Int Text
     labels = Map.fromList [(e.var.pool, l) | e <- events, Named l <- [e.kind]]
+    labelOf :: Var -> Maybe Text
     labelOf v = Map.lookup v.pool labels
     -- Keyed by (birth sequence, var) so Map.elems yields birth order.
     apply :: Map (Int, Var) Lifeline -> Event -> Map (Int, Var) Lifeline
@@ -276,13 +277,23 @@ lifeline t v = find (\l -> l.var == v) t.lifelines
 -- ('Hegel.Pool.transfer') back to the first var. Display names resolve
 -- here, so a transferred value keeps one name across pools.
 root :: Trace -> Var -> Var
-root t v = case lifeline t v >>= (.lineage) of
-  Just parent | parent /= v -> root t parent
-  _ -> v
+root t = go []
+  where
+    -- The visited guard keeps 'build''s totality promise on malformed
+    -- streams: a lineage cycle terminates at the first revisit.
+    go seen v = case lifeline t v >>= (.lineage) of
+      Just parent | parent /= v, parent `notElem` seen -> go (v : seen) parent
+      _ -> v
 
 -- | Every var of the logical value: the lineage chain through @v@, oldest
 -- first (ancestors, @v@, and any descendants declared later).
 chain :: Trace -> Var -> [Var]
-chain t v = go (root t v)
+chain t v = go [] [root t v]
   where
-    go x = x : concatMap go [l.var | l <- t.lifelines, l.lineage == Just x]
+    -- Breadth-first with a visited guard (same totality promise as 'root').
+    go acc = \case
+      [] -> reverse acc
+      (x : queue)
+        | x `elem` acc -> go acc queue
+        | otherwise ->
+            go (x : acc) (queue <> [l.var | l <- t.lifelines, l.lineage == Just x])

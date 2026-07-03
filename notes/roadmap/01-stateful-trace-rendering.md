@@ -908,10 +908,43 @@ counters, no layout work — defers the flagship). Order of work:
    `v₁`; `Pool.new` stays for auto-named quick use), and the **ascii
    picks** `◌→%` (was digit-confusable `0`) and `┊→.` (density gradient
    `| : .`).
-4. **Verdict paragraph**: ERL deontic/indicative walk of the same blame
-   tree — no longer a feasibility spike.
+4. **Verdict paragraph** — **landed** (`Hegel.Report.Verdict`), with a
+   prose-bounding architecture decided at its checkpoint: the blame tree
+   projects to a wordless `[Clause]` plan (`Violated`/`Since`/`Returned`/
+   `FailedWith` — data, serializable, one edge-set with the rail, pinned
+   by the agreement test), and words come from a `PhraseTable` applied
+   last — the prose twin of the glyph tables. Every sentence the verdict
+   can emit is a composition of the English table's ~10 fields plus
+   *quoted* user data (names, responses, messages — never inflected), so
+   the linguistic surface is enumerable and another locale is another
+   table (bounding discipline first; dev-tool diagnostics are
+   conventionally English-only). The mockups' semantic deontic clauses
+   ("every read of a closed handle must…") are *not* mechanically
+   derivable — they need rule descriptions (deferred API); the mechanical
+   paragraph states the violation, the since-chain, and the quoted
+   outcome. `Nothing` when there are no citations (headline suffices).
 5. **Footer**: paste-able replay command opening at the failing step +
    honesty counters; divergence as a distinct verdict when replay breaks.
+
+Code review record (2026-07-02, pre-M5). Fixed: lineage-cycle totality
+guards on `Trace.root`/`chain`; one-citation-per-step dedupe in
+`Blame.citationsFor` (two same-step touches used to orphan a rail
+column); pool letters double past five pools (`vv, ww, …`) instead of
+silently colliding; **all renderer words unified into one
+`Hegel.Report.Phrase.PhraseTable`** (the ledger's arrowhead/elision/
+footer/cites text had been a second untabled English vocabulary; both
+renderers now agree by construction) and `displayName` moved to
+`Hegel.Report.Glyph` (killing the Verdict→Ledger dependency). Recorded
+debt, with triggers: **A2** — `Row.call`/`annot` carry pre-rendered
+glyph+phrase text, so the layout pins are table-coupled; restructure to
+abstract row content when A4/M5/R1 reshape `Row` anyway (doing it now =
+three pin churns for one). **A4** — `layoutRows` is a where-monolith;
+decompose when M5's composition reveals the seams. **A5** — converge
+`Ledger.Options`/verdict params into one style record when M5 wires the
+composed report (partially done: `Options.phrases`). Smaller items
+(fixture dedup across test suites, `Segment.header` tuple→record,
+`lifelinesOf` fold clarity, name-in-lane-colour rule) batch
+opportunistically.
 
 Deferred from this slice (recipes recorded above so nothing re-derives):
 R1 lanes, R2 obligation lanes, F2 program listing, O1–O3

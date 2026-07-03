@@ -40,16 +40,17 @@ where
 
 import Data.IntSet qualified as IntSet
 import Data.List (nub, sortOn)
-import Data.Maybe (fromMaybe, isJust, mapMaybe)
+import Data.Maybe (mapMaybe)
 import Data.Ord (Down (..))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Diff (LineDiff (..))
-import Hegel.Internal.Event (Var (..))
 import Hegel.Report.Ann (Ann (..))
 import Hegel.Report.Blame (Blame (..), Fact (..), Observation (..))
 import Hegel.Report.Blame qualified as Blame
-import Hegel.Report.Glyph (Cell (..), GlyphTable (..))
+import Hegel.Report.Glyph (Cell (..), GlyphTable (..), displayName)
+import Hegel.Report.Phrase (PhraseTable (..))
+import Hegel.Report.Phrase qualified as Phrase
 import Hegel.Report.Trace (Lifeline (..), Step (..), Touch (..), Trace)
 import Hegel.Report.Trace qualified as Trace
 import Prettyprinter (Doc)
@@ -66,6 +67,9 @@ data Direction = FailureFirst | Chronological
 
 data Options = Options
   { glyphs :: !GlyphTable,
+    -- | The words for annotations, elisions, and the footer — shared with
+    -- the verdict paragraph so the two renderers agree by construction.
+    phrases :: !PhraseTable,
     direction :: !Direction,
     -- | Maximum drawn rail columns; more citations than this fall back to
     -- the numeric citation list on the failing row.
@@ -76,7 +80,13 @@ data Options = Options
 
 defaultOptions :: GlyphTable -> Options
 defaultOptions table =
-  Options {glyphs = table, direction = FailureFirst, railBudget = 3, callWidth = 40}
+  Options
+    { glyphs = table,
+      phrases = Phrase.english,
+      direction = FailureFirst,
+      railBudget = 3,
+      callWidth = 40
+    }
 
 -- * Row model
 
@@ -146,7 +156,7 @@ layoutRows opts trace blame = orient <> footerRows
         : detailRows
 
     numericCites =
-      table.cell NumericCite <> " cites " <> T.intercalate ", " [T.pack (show c.step) | c <- cited]
+      table.cell NumericCite <> " " <> opts.phrases.cites [T.pack (show c.step) | c <- cited]
 
     detailRows =
       [ Row {kind = DetailRow, gutter = EdgeAlive, stepNo = Nothing, call = t, rail = verticals allColumns, annot = ""}
@@ -168,6 +178,7 @@ layoutRows opts trace blame = orient <> footerRows
           elisionRowsBetween (listToMaybe' prev) s.index
             <> [citedRow s]
             <> go [s.index] rest
+        listToMaybe' :: [Int] -> Maybe Int
         listToMaybe' = \case
           [] -> Nothing
           (x : _) -> Just x
@@ -183,7 +194,7 @@ layoutRows opts trace blame = orient <> footerRows
           gutter = gutterFor s,
           stepNo = Just s.index,
           call = callText s,
-          rail = if drawRail then citedRail (fromMaybe 1 (columnOf s.index)) else [],
+          rail = if drawRail then maybe [] citedRail (columnOf s.index) else [],
           annot = maybe "" factText (lookup s.index [(c.step, c.fact) | c <- cited])
         }
     gutterFor s
@@ -205,17 +216,15 @@ layoutRows opts trace blame = orient <> footerRows
         not (null between)
       ]
     elisionLabel between =
-      T.pack (show (length between))
-        <> (if length between == 1 then " step" else " steps")
-        <> if any (touchesSubject) between
-          then ""
-          else ", none touch " <> subjectName
+      opts.phrases.elidedSteps
+        (length between)
+        (if any touchesSubject between then Nothing else Just subjectName)
     touchesSubject s = any (\t -> Trace.root trace t.var == subjectRoot) s.touches
 
     -- Rail geometry -------------------------------------------------------
-    (teeCell, cornerCell) = case opts.direction of
-      FailureFirst -> (RailTeeDown, RailCornerUp)
-      Chronological -> (RailTeeUp, RailCornerDown)
+    cornerCell = case opts.direction of
+      FailureFirst -> RailCornerUp
+      Chronological -> RailCornerDown
     originTee = case opts.direction of
       FailureFirst -> RailTeeDown
       Chronological -> RailTeeUp
@@ -253,12 +262,7 @@ layoutRows opts trace blame = orient <> footerRows
     subjectRoot = Trace.root trace blame.subject
     rootLife = Trace.lifeline trace subjectRoot
     chainLives = mapMaybe (Trace.lifeline trace) (Trace.chain trace blame.subject)
-    poolOrdinals = nub [l.var.pool | l <- trace.lifelines]
-    nameOf v =
-      let r = Trace.root trace v
-          life = Trace.lifeline trace r
-          poolOrd = fromMaybe 0 (lookup r.pool (zip poolOrdinals [0 ..]))
-       in table.valueName (life >>= (.label)) poolOrd (maybe 0 (.ordinal) life)
+    nameOf = displayName table trace
     subjectName = nameOf blame.subject
 
     callText s = clip (T.unwords (s.rule : touchNames) <> respText)
@@ -270,11 +274,12 @@ layoutRows opts trace blame = orient <> footerRows
       | T.length t <= opts.callWidth = t
       | otherwise = T.take (opts.callWidth - 1) t <> table.cell Ellipsis
 
-    factText = \case
-      BornAt v -> nameOf v <> " born here"
-      TouchedAt v -> "touched " <> nameOf v
-      ConsumedAt v -> "consumed " <> nameOf v
-      HauntedAt v -> "touched " <> nameOf v <> " after its death"
+    factText fact = opts.phrases.caused fact (nameOf (factVar fact))
+    factVar = \case
+      BornAt v -> v
+      TouchedAt v -> v
+      ConsumedAt v -> v
+      HauntedAt v -> v
 
     footerRows =
       [ Row
@@ -286,20 +291,18 @@ layoutRows opts trace blame = orient <> footerRows
             annot =
               table.cell ElidedMark
                 <> " "
-                <> T.pack (show (length others))
-                <> (if length others == 1 then " lifeline" else " lifelines")
-                <> " elided ("
-                <> T.unwords (nub (fmap (nameOf . (.var)) others))
-                <> extraSteps
-                <> ")"
+                <> opts.phrases.elidedLifelines
+                  (length others)
+                  (nub (fmap (nameOf . (.var)) others))
+                  extraSteps
           }
       | let others = [l | l <- trace.lifelines, Trace.root trace l.var /= subjectRoot],
         not (null others)
       ]
     extraSteps =
       case length [s | s <- trace.steps, s.index > 0, not (IntSet.member s.index closure)] of
-        0 -> ""
-        n -> " · " <> T.pack (show n) <> (if n == 1 then " step" else " steps")
+        0 -> Nothing
+        n -> Just n
 
 -- * Rendering
 

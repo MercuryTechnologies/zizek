@@ -127,10 +127,12 @@ library
     Hegel.Report.Journal
     Hegel.Report.Ledger
     Hegel.Report.Note
+    Hegel.Report.Phrase
     Hegel.Report.Source
     Hegel.Report.Span
     Hegel.Report.Stateful
     Hegel.Report.Trace
+    Hegel.Report.Verdict
     Hegel.Runner
     Hegel.Settings
     Hegel.Stateful

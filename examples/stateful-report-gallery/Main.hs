@@ -42,7 +42,9 @@ import Hegel.Report.Ann (docToAnsi)
 import Hegel.Report.Blame qualified as Blame
 import Hegel.Report.Glyph qualified as Glyph
 import Hegel.Report.Ledger qualified as Ledger
+import Hegel.Report.Phrase qualified as Phrase
 import Hegel.Report.Trace qualified as Trace
+import Hegel.Report.Verdict qualified as Verdict
 import Hegel.Property.Internal (Env (..), askEnv)
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
@@ -79,6 +81,9 @@ runLedgerScenario withAscii title prop = do
         Nothing -> T.putStrLn "(no blame: nothing to cite)"
         Just blame -> do
           let render opts = T.putStrLn (docToAnsi (Ledger.ledgerDoc opts trace blame) <> "\n")
+          case Verdict.verdictDoc Phrase.english Glyph.unicode trace blame of
+            Nothing -> pure ()
+            Just verdict -> T.putStrLn (docToAnsi verdict <> "\n")
           T.putStrLn "── citation ledger ──"
           render (Ledger.defaultOptions Glyph.unicode)
           if withAscii

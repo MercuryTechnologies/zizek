@@ -4,6 +4,8 @@ module LedgerRendering (spec) where
 
 import Control.Monad.IO.Class (liftIO)
 import Data.Function ((&))
+import Data.IntSet qualified as IntSet
+import Data.List (nub, sortOn)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -27,8 +29,10 @@ import Hegel.Report.Blame qualified as Blame
 import Hegel.Report.Glyph (Cell (..), GlyphTable (..))
 import Hegel.Report.Glyph qualified as Glyph
 import Hegel.Report.Ledger qualified as Ledger
+import Hegel.Report.Phrase qualified as Phrase
 import Hegel.Report.Trace (Trace)
 import Hegel.Report.Trace qualified as Trace
+import Hegel.Report.Verdict qualified as Verdict
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
@@ -52,9 +56,11 @@ h1 = Var {pool = 0, id = 7}
 -- | open(1), fillers(2,3), write(4), close(5), fillers(6,7), read(8) — the
 -- read is a haunted touch, so blame cites close, write, and open.
 uacTrace :: Trace
-uacTrace =
-  Trace.build
-    [ header (Clock 1) 1 "open",
+uacTrace = uncurry Trace.build uacFixture
+
+uacFixture :: ([Note], [Event])
+uacFixture =
+  ( [ header (Clock 1) 1 "open",
       header (Clock 3) 2 "noop",
       header (Clock 4) 3 "noop",
       header (Clock 5) 4 "write",
@@ -67,15 +73,23 @@ uacTrace =
       header (Clock 14) 8 "read",
       noteAt (Clock 16) 1 Drawn "h",
       noteAt (Clock 17) 1 (Failure Nothing) "read returned stale bytes"
-    ]
+    ],
     [ eventAt (Clock 2) h1 (Born Nothing),
       eventAt (Clock 6) h1 Reused,
       eventAt (Clock 10) h1 Consumed,
       eventAt (Clock 15) h1 Reused
     ]
+  )
 
 uacBlame :: Blame
 uacBlame = fromJust (Blame.analyze uacTrace)
+
+-- | The fixture's raw streams with one extra note spliced in before the
+-- failure note (clock order is what matters; the list stays sorted).
+fixtureWith :: Note -> ([Note], [Event])
+fixtureWith extra = (sortOn (.clock) (extra : notes), events)
+  where
+    (notes, events) = uacFixture
 
 renderWith :: Ledger.Options -> Text
 renderWith opts = docToText (Ledger.ledgerDoc opts uacTrace uacBlame)
@@ -93,20 +107,20 @@ spec = do
           [ "✗ 8  read v₁                    ●─┬─┬─╮",
             "│    read returned stale bytes    │ │ │",
             "┆    ⋯ 2 steps, none touch v₁     ┆ ┆ ┆",
-            "◌ 5  close v₁                   ◀─╯ │ │   consumed v₁",
-            "○ 4  write v₁ → ok              ◀───╯ │   touched v₁",
+            "◌ 5  close v₁                   ◀─╯ │ │   v₁ was consumed",
+            "○ 4  write v₁ → ok              ◀───╯ │   v₁ was touched",
             "┆    ⋯ 2 steps, none touch v₁         ┆",
-            "● 1  open v₁                    ◀─────╯   v₁ born here"
+            "● 1  open v₁                    ◀─────╯   v₁ was created"
           ]
 
     it "renders the chronological unicode ledger" do
       renderWith (Ledger.defaultOptions Glyph.unicode) {Ledger.direction = Ledger.Chronological}
         `shouldBe` T.intercalate
           "\n"
-          [ "● 1  open v₁                    ◀─────╮   v₁ born here",
+          [ "● 1  open v₁                    ◀─────╮   v₁ was created",
             "┆    ⋯ 2 steps, none touch v₁         ┆",
-            "○ 4  write v₁ → ok              ◀───╮ │   touched v₁",
-            "◌ 5  close v₁                   ◀─╮ │ │   consumed v₁",
+            "○ 4  write v₁ → ok              ◀───╮ │   v₁ was touched",
+            "◌ 5  close v₁                   ◀─╮ │ │   v₁ was consumed",
             "┆    ⋯ 2 steps, none touch v₁     ┆ ┆ ┆",
             "✗ 8  read v₁                    ●─┴─┴─╯",
             "│    read returned stale bytes    │ │ │"
@@ -119,10 +133,10 @@ spec = do
           [ "x 8  read v1                     *-+-+-.",
             "|    read returned stale bytes     | | |",
             ":    ... 2 steps, none touch v1    : : :",
-            "% 5  close v1                    <-' | |   consumed v1",
-            "o 4  write v1 -> ok              <---' |   touched v1",
+            "% 5  close v1                    <-' | |   v1 was consumed",
+            "o 4  write v1 -> ok              <---' |   v1 was touched",
             ":    ... 2 steps, none touch v1        :",
-            "* 1  open v1                     <-----'   v1 born here"
+            "* 1  open v1                     <-----'   v1 was created"
           ]
 
     it "falls back to numeric citations past the rail budget" do
@@ -152,6 +166,80 @@ spec = do
       [r.call | r <- rows, r.kind == Ledger.ElisionRow]
         `shouldBe` ["⋯ 2 steps, none touch v₁", "⋯ 2 steps, none touch v₁"]
 
+  describe "verdictDoc" do
+    it "words the use-after-consume fixture as a proof paragraph" do
+      -- The paragraph reflows at the layout width; compare the words.
+      fmap (unwrap . docToText) (Verdict.verdictDoc Phrase.english Glyph.unicode uacTrace uacBlame)
+        `shouldBe` Just
+          "Step 8 (read) touched v₁ after its death: v₁ was consumed at step 5 (close), v₁ was touched at step 4 (write), v₁ was created at step 1 (open) — but it failed: read returned stale bytes."
+
+    it "quotes a declared response as the observed outcome" do
+      -- Give the failing step a respond note; the outcome clause quotes it.
+      let (notes, events) = fixtureWith (noteAt (Clock 16) 1 Response "Just \"a\"")
+          t = Trace.build notes events
+          b = fromJust (Blame.analyze t)
+      fmap (unwrap . docToText) (Verdict.verdictDoc Phrase.english Glyph.unicode t b)
+        `shouldSatisfy` maybe False (T.isInfixOf "— but read returned Just \"a\".")
+
+    it "agrees with the rail: every step in the prose is in the citation closure" do
+      let stepsInPlan =
+            [ i
+            | c <- Verdict.plan uacTrace uacBlame,
+              i <- case c of
+                Verdict.Violated {step = i} -> [i]
+                Verdict.Since {step = i} -> [i]
+                _ -> []
+            ]
+      stepsInPlan `shouldSatisfy` all (`IntSet.member` Blame.citationClosure uacBlame)
+
+    it "is Nothing when there is nothing to cite" do
+      -- A failure whose step touched a pool value born in the same step:
+      -- blame exists, but with no earlier history there are no citations.
+      let t =
+            Trace.build
+              [ header (Clock 1) 1 "boom",
+                noteAt (Clock 3) 1 (Failure Nothing) "boom"
+              ]
+              [eventAt (Clock 2) h1 (Born Nothing)]
+          b = fromJust (Blame.analyze t)
+      Verdict.verdictDoc Phrase.english Glyph.unicode t b `shouldSatisfy` \case
+        Nothing -> True
+        Just _ -> False
+
+  describe "review fixes" do
+    it "a lineage cycle terminates root and chain (malformed stream)" do
+      let a = Var {pool = 0, id = 1}
+          b = Var {pool = 0, id = 2}
+          t =
+            Trace.build
+              [header (Clock 1) 1 "loop"]
+              [ eventAt (Clock 2) a (Born (Just b)),
+                eventAt (Clock 3) b (Born (Just a))
+              ]
+      -- Totality is the assertion: these must return, whatever they return.
+      Trace.chain t a `shouldSatisfy` (not . null)
+      Trace.root t a `shouldSatisfy` \v -> v == a || v == b
+
+    it "two same-step touches yield one citation (no orphan rail column)" do
+      let t =
+            Trace.build
+              [ header (Clock 1) 1 "open",
+                header (Clock 3) 2 "double",
+                header (Clock 6) 3 "boom",
+                noteAt (Clock 8) 1 (Failure Nothing) "boom"
+              ]
+              [ eventAt (Clock 2) h1 (Born Nothing),
+                eventAt (Clock 4) h1 Reused,
+                eventAt (Clock 5) h1 Reused,
+                eventAt (Clock 7) h1 Reused
+              ]
+          b = fromJust (Blame.analyze t)
+      [(c.to) | c <- Blame.citations b] `shouldBe` [2, 1]
+
+    it "pool letters stay distinct past five pools" do
+      let names = [Glyph.unicode.valueName Nothing p 1 | p <- [0 .. 9]]
+      length (nub names) `shouldBe` length names
+
   describe "glyph tables" do
     it "ascii preserves semantics within the gutter family" do
       let gutterCells = [NodeBorn, NodeTouch, NodeDeath, NodeFail, EdgeAlive, EdgeDead, EdgeElided, HistoryEnd]
@@ -174,6 +262,10 @@ spec = do
               out `shouldSatisfy` T.isInfixOf "✗"
               out `shouldSatisfy` T.isInfixOf "●"
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
+
+-- | Undo paragraph reflow for comparison.
+unwrap :: Text -> Text
+unwrap = T.unwords . T.words
 
 -- | No two distinct cells in a family may render to the same glyph.
 distinctUnder :: GlyphTable -> [Cell] -> Bool

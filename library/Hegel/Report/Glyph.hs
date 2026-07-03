@@ -21,11 +21,17 @@ module Hegel.Report.Glyph
     GlyphTable (..),
     unicode,
     ascii,
+    displayName,
   )
 where
 
+import Data.List (nub)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Hegel.Internal.Event (Var (..))
+import Hegel.Report.Trace (Lifeline (..), Trace)
+import Hegel.Report.Trace qualified as Trace
 
 -- | One abstract ledger cell. Gutter cells and rail cells occupy disjoint
 -- regions of a row, so the ascii table only needs injectivity within each
@@ -139,11 +145,24 @@ ascii =
         maybe (poolLetter poolOrd) id label <> T.pack (show valOrd)
     }
 
--- | Pools are lettered @v, w, x, …@ in birth order (semantic letters like
--- @h@ for handles would need a user-facing naming API — a checkpoint
--- question).
+-- | A value's display name, resolved through its lineage root: the pool's
+-- 'Hegel.Pool.named' label (or its birth-order letter) plus the value's
+-- birth-order ordinal — one name for one logical value, across transfers.
+-- Shared by the ledger and the verdict paragraph.
+displayName :: GlyphTable -> Trace -> Var -> Text
+displayName table trace v =
+  let r = Trace.root trace v
+      life = Trace.lifeline trace r
+      poolOrdinals = nub [l.var.pool | l <- trace.lifelines]
+      poolOrd = fromMaybe 0 (lookup r.pool (zip poolOrdinals [0 ..]))
+   in table.valueName (life >>= (.label)) poolOrd (maybe 0 (.ordinal) life)
+
+-- | Unlabelled pools are lettered @v, w, x, y, z@ in birth order, doubling
+-- past five (@vv, ww, …@) so names never collide across pools.
 poolLetter :: Int -> Text
-poolLetter n = T.singleton (toEnum (fromEnum 'v' + n `mod` 4))
+poolLetter n = T.replicate (n `div` 5 + 1) (T.singleton letter)
+  where
+    letter = "vwxyz" !! (n `mod` 5)
 
 -- | @₁₂₃@-style subscripts (borderline coverage tier: kept for now, plain
 -- digits in the ascii table regardless).

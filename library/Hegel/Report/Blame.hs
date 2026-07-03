@@ -24,6 +24,7 @@ where
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Data.List (sortOn)
+import Data.List qualified as List
 import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import Hegel.Internal.Event (EventKind (..), Var)
@@ -142,7 +143,7 @@ factAt trace at t = case t.kind of
 citationsFor :: Trace -> Int -> Var -> [Observation]
 citationsFor trace failingStep subject =
   [ Observation {step = s, fact = e, since = []}
-  | (s, e) <- sortOn (Down . fst) (mapMaybe id (birth : deaths <> touches))
+  | (s, e) <- dedupe (sortOn (Down . fst) (mapMaybe id (birth : deaths <> touches)))
   ]
   where
     chainLives = mapMaybe (Trace.lifeline trace) (Trace.chain trace subject)
@@ -165,6 +166,22 @@ citationsFor trace failingStep subject =
     before s e
       | s < failingStep = Just (s, e)
       | otherwise = Nothing
+    -- One citation per step: the ledger draws one rail edge per cited row,
+    -- so multiple facts at one step (two draws, or a transfer's consume)
+    -- keep only the most causally loaded (facts sort Born < Touched <
+    -- Consumed < Haunted by construction order).
+    dedupe :: [(Int, Fact)] -> [(Int, Fact)]
+    dedupe = fmap strongest . groupOn fst
+      where
+        strongest :: [(Int, Fact)] -> (Int, Fact)
+        strongest xs = last (sortOn (factWeight . snd) xs)
+        groupOn :: (Eq b) => ((Int, Fact) -> b) -> [(Int, Fact)] -> [[(Int, Fact)]]
+        groupOn f = List.groupBy (\a b -> f a == f b)
+        factWeight = \case
+          BornAt _ -> 0 :: Int
+          TouchedAt _ -> 1
+          ConsumedAt _ -> 2
+          HauntedAt _ -> 3
 
 -- * Projections
 
