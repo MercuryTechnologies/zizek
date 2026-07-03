@@ -40,6 +40,7 @@ where
 import Data.Foldable (toList)
 import Data.Sequence (Seq, (|>))
 import Data.Sequence qualified as Seq
+import Data.Text (Text)
 import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 
 -- * Clock
@@ -76,12 +77,21 @@ data Event = Event
 -- There is no @Removed@: @libhegel@ has no @pool_remove@, so the only way a
 -- value leaves a pool is a consuming draw — 'Consumed' /is/ the death event.
 data EventKind
-  = -- | Registered in the pool ('Hegel.Pool.add').
-    Born
+  = -- | Registered in the pool ('Hegel.Pool.add'). The payload is the
+    -- value's /lineage/: 'Just' the source var when this birth is the
+    -- destination half of a 'Hegel.Pool.transfer' — a declared identity
+    -- link, letting the trace reconnect one logical value across pools.
+    Born !(Maybe Var)
   | -- | Drawn without removal ('Hegel.Pool.valuesReusable').
     Reused
-  | -- | Drawn and removed ('Hegel.Pool.valuesConsumed'); the value's death.
+  | -- | Drawn and removed ('Hegel.Pool.valuesConsumed'); the value's death —
+    -- unless a lineage-linked 'Born' in the same step continues it (a
+    -- transfer).
     Consumed
+  | -- | A pool label ('Hegel.Pool.named'): the event's @var.pool@ names the
+    -- pool, @var.id@ is meaningless (0), and the payload is the display
+    -- label. Not a touch; the trace lifts it out of the step stream.
+    Named !Text
   deriving stock (Show, Eq)
 
 -- * Recording

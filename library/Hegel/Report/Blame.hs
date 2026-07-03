@@ -117,7 +117,8 @@ analyze trace = do
 -- * a birth instantiates
 causalWeight :: Touch -> Int
 causalWeight t = case t.kind of
-  Born -> 0
+  Named _ -> -1 -- never a step touch; unreachable
+  Born _ -> 0
   Reused -> 1
   Consumed -> 2
 
@@ -125,7 +126,8 @@ causalWeight t = case t.kind of
 -- value to 'HauntedAt'.
 factAt :: Trace -> Int -> Touch -> Fact
 factAt trace at t = case t.kind of
-  Born -> BornAt t.var
+  Named _ -> TouchedAt t.var -- never a step touch; unreachable
+  Born _ -> BornAt t.var
   Consumed -> ConsumedAt t.var
   Reused
     | Just l <- Trace.lifeline trace t.var,
@@ -135,24 +137,29 @@ factAt trace at t = case t.kind of
     | otherwise -> TouchedAt t.var
 
 -- | The subject's earlier story, starting from the most recent 'Observation'.
+-- The subject's story is its whole lineage chain ('Trace.chain'): a
+-- transferred value cites its pre-transfer history too.
 citationsFor :: Trace -> Int -> Var -> [Observation]
 citationsFor trace failingStep subject =
   [ Observation {step = s, fact = e, since = []}
-  | (s, e) <- sortOn (Down . fst) (mapMaybe id (death : birth : touches))
+  | (s, e) <- sortOn (Down . fst) (mapMaybe id (birth : deaths <> touches))
   ]
   where
-    life = Trace.lifeline trace subject
+    chainLives = mapMaybe (Trace.lifeline trace) (Trace.chain trace subject)
+    -- Only the chain root has a true birth; a transfer arrival's Born is
+    -- represented by the ConsumedAt of its source at the same step.
     birth = do
-      l <- life
+      l <- Trace.lifeline trace (Trace.root trace subject)
       b <- l.bornAt
-      before b (BornAt subject)
-    death = do
-      l <- life
-      d <- l.consumedAt
-      before d (ConsumedAt subject)
+      before b (BornAt l.var)
+    deaths =
+      [ before d (ConsumedAt l.var)
+      | l <- chainLives,
+        Just d <- [l.consumedAt]
+      ]
     touches =
-      [ before t (TouchedAt subject)
-      | l <- maybe [] pure life,
+      [ before t (TouchedAt l.var)
+      | l <- chainLives,
         t <- l.touchedAt
       ]
     before s e

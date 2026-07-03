@@ -851,14 +851,33 @@ counters, no layout work — defers the flagship). Order of work:
    express a posthumous touch even though engine pool draws cannot,
    which keeps the flagship blame path testable ahead of any engine
    `pool_remove`.
-3. **R3 citation ledger**: Design 1's engine + the citation column/rail —
-   exercises the citation-closure revset, elision, rails, and annotations
-   without lane allocation. Spec the abstract cell-kind enum + row model
-   (`GraphRowRenderer`-shaped) against `Hegel.Report.Stateful`;
-   renderdag's source is small enough to read for column allocation.
+3. **R3 citation ledger** — **landed gallery-first** (`Hegel.Report.Glyph`
+   + `Hegel.Report.Ledger`; default renderer untouched): abstract `Cell`
+   enum → `GlyphTable` (unicode + ascii built together; response arrow
+   and numeric-cite sigils also table-routed so ascii mode leaks no
+   Unicode; per-region injectivity pinned — gutter and rail families
+   never share a column, so `╯`/`┊` may both map to a quote-like glyph
+   without semantic loss). `Ledger.layoutRows` emits a `Row` model
+   (gutter cell, step no, clipped call column, rail cells, annot);
+   `ledgerDoc` aligns and annotates (lane/rail colours, dim step
+   numbers/elisions, diff-coloured details). Pinned rules hold: only the
+   failing row draws rail edges (mid-line, justifications at arrowheads);
+   overflow → `← cites …` numeric fallback; explicit `⋯ n steps` elision
+   (with "none touch vₙ" when true), `~` terminator, `▸ lifelines
+   elided` footer; call column clips with in-value `⋯`. Both directions
+   built; details stay under the ✗ row in each. Gallery scenarios 8–10
+   are the checkpoint-3 artifact; byte-exact pins in
+   `tests/unit/LedgerRendering.hs`.
    Ship unicode and ascii tables together, specced against the coverage
-   tiers. Decide default direction (failure-first vs chronological) on
-   live traces — mockups A/B below frame the choice. R1 is the same
+   tiers. **Direction decided at checkpoint 3: failure-first default,
+   chronological retained as the option.** Accepted costs, consciously:
+   reads against time's arrow (descending step numbers are the cue); the
+   ✗ row sits far from the M5 freeze-frame splice — its adjacency goes
+   to the verdict paragraph instead, which is the better neighbor since
+   M4's grammar is also violation-first; anything *streamed* (verbose
+   mode, mid-run dumps) must stay chronological, so both directions are
+   permanent; R1's braid must follow the same default when it lands (jj
+   proves lifelines work top-down). R1 is the same
    engine with lanes switched on; build it second. Also decided at this
    checkpoint, on real gallery output: the **two-pool reconnection
    question**. With death = consumed draw, an exercisable
@@ -866,15 +885,24 @@ counters, no layout work — defers the flagship). Order of work:
    add-to-closed — two engine `Var`s for one logical handle, so the
    blame chain reads `read → BornAt(close step)` and
    `PosthumousTouch`/`UseAfterConsume` never fire on real traces.
-   Options: (a) it already reads fine, do nothing; (b) mechanical
-   handoff heuristic in `Blame` — a step that consumes X and bears Y is
-   a transfer, link the lifelines (the braid's `○─┤` connector,
-   precedented above); (c) a `Pool.transfer`-style API declaring the
-   identity link — note (c) needs **no engine changes**: transfer =
-   `poolGenerate(consume)` on pool A + `poolAdd` on pool B (both existing
-   FFI calls) composed with the link recorded in zizek's own event
-   stream. The IR is unchanged under all three, which is what
-   makes deferring safe.
+   **Decided at checkpoint 3: (c) `Pool.transfer`, alone — no heuristic
+   fallback** (an inferred link can silently assert a false identity,
+   disqualifying for a report whose thesis is every-edge-justified; the
+   exactly-one-consume-one-bear inference is recorded here as rejected).
+   Landed with the checkpoint: `Event.Born` carries `Maybe Var` lineage
+   (schema touch done pre-F4, deliberately); `Pool.transfer src dst` =
+   consuming draw + `poolAddFrom` with the declared link — zero engine
+   changes; `Trace.Lifeline` gains `lineage`, with `Trace.root`/`chain`
+   resolving the logical value; `Blame.citationsFor` cites across the
+   chain (root birth, all touches, each consumption); the ledger names,
+   gutters, elisions, and footer all resolve through the root. Gallery
+   scenario 8 now renders the flagship one-lane story
+   (`✗ read ← ◌ close ← ○ write ← ● open`, all `h₁`). Also landed:
+   **`Pool.named`** (a `Named` event kind carries the label;
+   `Lifeline.label`; `Glyph.valueName` consults it — `h₁` instead of
+   `v₁`; `Pool.new` stays for auto-named quick use), and the **ascii
+   picks** `◌→%` (was digit-confusable `0`) and `┊→.` (density gradient
+   `| : .`).
 4. **Verdict paragraph**: ERL deontic/indicative walk of the same blame
    tree — no longer a feasibility spike.
 5. **Footer**: paste-able replay command opening at the failing step +

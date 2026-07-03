@@ -123,7 +123,9 @@ library
     Hegel.Report.Ann
     Hegel.Report.Blame
     Hegel.Report.Discovery
+    Hegel.Report.Glyph
     Hegel.Report.Journal
+    Hegel.Report.Ledger
     Hegel.Report.Note
     Hegel.Report.Source
     Hegel.Report.Span
@@ -349,6 +351,7 @@ test-suite unit
     GeneratorSchemas
     Integrations
     KeyedProperties
+    LedgerRendering
     PoolEvents
     PropertyChecks
     ReportRendering

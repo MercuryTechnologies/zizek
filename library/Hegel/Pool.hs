@@ -23,6 +23,7 @@ module Hegel.Pool
 
     -- * Construction
     new,
+    named,
 
     -- * Mutation
     add,
@@ -34,15 +35,18 @@ module Hegel.Pool
     -- * Generators
     valuesReusable,
     valuesConsumed,
+    transfer,
   )
 where
 
 import Control.Exception (throwIO)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
+import Data.Text (Text)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.Control (AssumeRejected (..))
-import Hegel.Internal.DataSource (newPool, poolAdd, poolGenerate)
+import Hegel.Internal.DataSource (labelPool, newPool, poolAdd, poolAddFrom, poolGenerate)
+import Hegel.Internal.Event (Var (..))
 import Hegel.Internal.TestCase (TestCase)
 import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 
@@ -57,11 +61,23 @@ data Pool a = Pool
   }
 
 -- | Create a new pool. Allocates a pool id from the engine immediately.
+--
+-- The failure report auto-names the pool's values (@v₁, w₁, …@ by birth
+-- order); use 'named' when a semantic letter (@h₁@ for handles) reads
+-- better.
 new :: TestCase -> IO (Pool a)
 new tc = do
   pid <- newPool tc
   ref <- newIORef IntMap.empty
   pure Pool {tc, poolId = pid, values = ref}
+
+-- | 'new' with a display label for the failure report: values of a pool
+-- named @"h"@ render as @h₁, h₂, …@ in the trace ledger.
+named :: Text -> TestCase -> IO (Pool a)
+named label tc = do
+  pool <- new tc
+  labelPool tc pool.poolId label
+  pure pool
 
 -- | Add a value to the pool. The engine assigns the variable id.
 add :: Pool a -> a -> IO ()
@@ -111,3 +127,32 @@ valuesConsumed pool = Draw \tc -> do
           (Just v, m') -> (m', v)
           (Nothing, _) ->
             error ("Hegel.Pool.valuesConsumed: unknown variable id " <> show vid)
+
+-- | A generator that moves a value from one pool to another: a consuming
+-- draw from @src@ whose value is immediately registered in @dst@, with the
+-- identity link /declared/ in the event stream — the failure report renders
+-- the value as one continuous lifeline across both pools rather than two
+-- unrelated ones.
+--
+-- This is the honest way to model state changes like closing a handle
+-- (consume from the open pool, transfer into the closed pool): a manual
+-- @'valuesConsumed' … 'add'@ pair works but severs the value's story.
+--
+-- No engine primitive is involved beyond the same draw + add; the link is
+-- zizek-side bookkeeping. Drawing from an empty @src@ discards the test
+-- case.
+transfer :: Pool a -> Pool a -> Gen a
+transfer src dst = Draw \tc -> do
+  empty <- IntMap.null <$> readIORef src.values
+  if empty
+    then throwIO AssumeRejected
+    else do
+      vid <- poolGenerate tc src.poolId True
+      v <- atomicModifyIORef' src.values \m ->
+        case IntMap.updateLookupWithKey (\_ _ -> Nothing) vid m of
+          (Just v, m') -> (m', v)
+          (Nothing, _) ->
+            error ("Hegel.Pool.transfer: unknown variable id " <> show vid)
+      vid' <- poolAddFrom tc dst.poolId Var {pool = src.poolId, id = vid}
+      modifyIORef' dst.values (IntMap.insert vid' v)
+      pure v

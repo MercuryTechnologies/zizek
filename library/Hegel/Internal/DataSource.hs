@@ -22,6 +22,8 @@ module Hegel.Internal.DataSource
     -- * Pools
     newPool,
     poolAdd,
+    poolAddFrom,
+    labelPool,
     poolGenerate,
 
     -- * State machines
@@ -153,16 +155,33 @@ newPool tc =
 -- | Register a new variable in the pool; returns the engine-assigned
 -- variable id.
 --
--- Records a 'Event.Born' event (this and 'poolGenerate' are the only pool
--- emission points, so 'Hegel.Pool' needs no event awareness).
+-- Records a 'Event.Born' event (this, 'poolAddFrom', 'poolGenerate', and
+-- 'labelPool' are the only pool emission points, so 'Hegel.Pool' needs no
+-- event awareness).
 poolAdd :: TestCase -> Int -> IO Int
-poolAdd tc pid = do
+poolAdd tc pid = poolAddWith tc pid Nothing
+
+-- | 'poolAdd' with a declared lineage: the new variable continues the given
+-- source var's logical value (the destination half of 'Hegel.Pool.transfer').
+poolAddFrom :: TestCase -> Int -> Event.Var -> IO Int
+poolAddFrom tc pid from = poolAddWith tc pid (Just from)
+
+poolAddWith :: TestCase -> Int -> Maybe Event.Var -> IO Int
+poolAddWith tc pid lineage = do
   vid <- withSlot tc.slot \outId -> do
     hegel_pool_add tc.handle.ctx tc.handle.ptr (fromIntegral pid) outId >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
   Event.emit tc.events \c ->
-    Event.Event {clock = c, var = Event.Var {pool = pid, id = vid}, kind = Event.Born}
+    Event.Event {clock = c, var = Event.Var {pool = pid, id = vid}, kind = Event.Born lineage}
   pure vid
+
+-- | Record a pool's display label ('Hegel.Pool.named'). No engine call —
+-- labels are report vocabulary; the event stream is their only channel to
+-- the renderer.
+labelPool :: TestCase -> Int -> Text -> IO ()
+labelPool tc pid label =
+  Event.emit tc.events \c ->
+    Event.Event {clock = c, var = Event.Var {pool = pid, id = 0}, kind = Event.Named label}
 
 -- | Draw a variable id from the pool.
 --

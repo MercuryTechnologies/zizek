@@ -76,6 +76,19 @@ data Ann
     FailureGutter
   | -- | Inlined failure message text.
     FailureMessage
+  | -- | A trace-ledger lane glyph (and any value name in text), coloured by
+    -- the lane's index — glyphs carry state, columns carry identity, and the
+    -- colour binds a value's name in prose to its lane with zero geometry.
+    LaneAnn !Int
+  | -- | A citation-rail cell, coloured as the lane of the value the edge
+    -- concerns.
+    RailAnn !Int
+  | -- | A ledger step number (dim).
+    StepNoAnn
+  | -- | A rule's @→ response@ segment on a ledger row.
+    ResponseAnn
+  | -- | Elision rows and other droppable ledger detail (dim).
+    ElidedAnn
 
 -- | Render a 'Doc Ann' as plain text, stripping all annotations.
 docToText :: Doc Ann -> Text
@@ -131,3 +144,22 @@ annToAnsi = \case
   FailureMark -> PP.Terminal.color PP.Terminal.Red
   FailureGutter -> mempty
   FailureMessage -> mempty
+  LaneAnn n -> laneColor n
+  RailAnn n -> laneColor n
+  -- No SGR-2 faint in prettyprinter-ansi-terminal; dull white is the
+  -- established "dim" approximation (see 'LocAnn').
+  StepNoAnn -> PP.Terminal.colorDull PP.Terminal.White
+  ResponseAnn -> mempty
+  ElidedAnn -> PP.Terminal.colorDull PP.Terminal.White
+
+-- | Lane colours cycle through five theme-safe hues; never red (reserved
+-- for failure), never white\/black\/grey (theme-fragile). Ordering is
+-- colourblind-aware: the deutan confusion pair is deferred to lane 5.
+laneColor :: Int -> AnsiStyle
+laneColor n =
+  PP.Terminal.color case n `mod` 5 of
+    0 -> PP.Terminal.Cyan
+    1 -> PP.Terminal.Magenta
+    2 -> PP.Terminal.Yellow
+    3 -> PP.Terminal.Blue
+    _ -> PP.Terminal.Green

@@ -22,9 +22,22 @@
 --      least contrived exercise of the rich renderer on a realistic
 --      failure
 --
+-- Scenarios 8–10 additionally print the (not yet wired) citation ledger in
+-- all its renderings, beside today's report — the M3 eyeball harness:
+--
+--   8. file-handle machine in the two-pool shape (close = consume-from-open
+--      + add-to-closed) — the flagship use-after-close bug, and live
+--      evidence for the two-pool reconnection question (the blame chain
+--      starts at close; open\/write belong to the severed open-pool var)
+--   9. rail-budget overflow (numeric citation fallback), a prelude-born
+--      subject, an elision row, and the elided-lifelines footer
+--  10. consume-as-death in a single pool — the death glyph lands on the ✗
+--      row itself (a ◌ on a cited row is unreachable in this shape)
+--
 -- Always exits 0; this is an eyeballing harness, not an assertion.
 module Main (main) where
 
+import Control.Monad.IO.Class (liftIO)
 import Data.Function ((&))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -33,7 +46,10 @@ import Data.Text.IO qualified as T
 import GHC.Stack (HasCallStack, SrcLoc (..), callStack, getCallStack)
 import Hegel.Assertion (assert)
 import Hegel.Gen qualified as Gen
+import Hegel.Pool (Pool)
+import Hegel.Pool qualified as Pool
 import Hegel.Property (Property, annotate, assume, forAll, (===))
+import Hegel.Property.Internal (Env (..), askEnv)
 import Hegel.Report
   ( Clock (..),
     Note (..),
@@ -44,9 +60,15 @@ import Hegel.Report
     renderReportRichAnsi,
     renderValue,
   )
+import Hegel.Report.Ann (docToAnsi)
+import Hegel.Report.Blame qualified as Blame
+import Hegel.Report.Glyph qualified as Glyph
+import Hegel.Report.Ledger qualified as Ledger
+import Hegel.Report.Trace qualified as Trace
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
+import UnliftIO.IORef (IORef, modifyIORef', newIORef, readIORef)
 
 main :: IO ()
 main = do
@@ -57,6 +79,9 @@ main = do
   runScenario "5: machine defined inline in one large binding" (Stateful.run inlineMachine)
   showReport "6: synthetic mixed-loc journal (degrade mixing)" syntheticReport
   runScenario "7: interconnected state, cross-structure invariants (warehouse)" (Stateful.run warehouseMachine)
+  runLedgerScenario "8: file-handle two-pool machine (use-after-close, ledger)" (Stateful.run fileHandleMachine)
+  runLedgerScenario "9: rail overflow + elided lifelines (ledger)" (Stateful.run overflowMachine)
+  runLedgerScenario "10: consume-as-death, single pool (ledger)" (Stateful.run consumeMachine)
 
 runScenario :: Text -> Property () -> IO ()
 runScenario title prop = showReport title =<< check defaultSettings prop
@@ -65,6 +90,31 @@ runScenario title prop = showReport title =<< check defaultSettings prop
 showReport :: Text -> Report -> IO ()
 showReport title report = do
   T.putStrLn ("\n━━━━━ scenario " <> title <> " ━━━━━")
+  T.putStrLn =<< renderReportRichAnsi report
+
+-- | The M3 eyeball harness: the citation ledger in all four renderings,
+-- then today's wired renderer for comparison. Nothing here is wired into
+-- the default report yet (gallery-first prototyping).
+runLedgerScenario :: Text -> Property () -> IO ()
+runLedgerScenario title prop = do
+  report <- check defaultSettings prop
+  T.putStrLn ("\n━━━━━ scenario " <> title <> " ━━━━━")
+  case report.result of
+    Counterexample {notes, events} -> do
+      let trace = Trace.build notes events
+      case Blame.analyze trace of
+        Nothing -> T.putStrLn "(no blame: nothing to cite)"
+        Just blame -> do
+          let render opts = T.putStrLn (docToAnsi (Ledger.ledgerDoc opts trace blame) <> "\n")
+              unicodeOpts = Ledger.defaultOptions Glyph.unicode
+          T.putStrLn "── ledger · failure-first · unicode ──"
+          render unicodeOpts
+          T.putStrLn "── ledger · chronological · unicode ──"
+          render unicodeOpts {Ledger.direction = Ledger.Chronological}
+          T.putStrLn "── ledger · failure-first · ascii ──"
+          render (Ledger.defaultOptions Glyph.ascii)
+    _ -> pure ()
+  T.putStrLn "── today's wired renderer ──"
   T.putStrLn =<< renderReportRichAnsi report
 
 -- | Naive count-with-noun pluralization for demo messages:
@@ -343,3 +393,141 @@ syntheticReport = Report {result, stats = Stats {valid = 7, invalid = 0}}
           loc = Just realLoc,
           diff = Nothing
         }
+
+-- ---------------------------------------------------------------------------
+-- Scenario 8: the flagship file-handle machine, World-B shape (close =
+-- consume-from-open + add-to-closed). The SUT bug: close forgets to drop the
+-- handle's content, so reading a closed handle returns stale bytes instead
+-- of nothing. Minimal counterexample: open, write, close, read_closed —
+-- the mockup-A shape.
+
+data FileModel = FileModel
+  { openHandles :: Pool Int,
+    closedHandles :: Pool Int,
+    nextHandle :: IORef Int,
+    contents :: IORef (Map Int Text)
+  }
+
+fileHandleMachine :: Stateful.Machine FileModel IO
+fileHandleMachine =
+  Stateful.Machine
+    { initial = do
+        env <- askEnv
+        openHandles <- liftIO (Pool.named "h" env.testCase)
+        closedHandles <- liftIO (Pool.named "c" env.testCase)
+        nextHandle <- newIORef 0
+        contents <- newIORef Map.empty
+        pure FileModel {openHandles, closedHandles, nextHandle, contents},
+      rules =
+        [ Stateful.Rule "open" \m -> do
+            h <- liftIO do
+              h <- readIORef m.nextHandle
+              modifyIORef' m.nextHandle (+ 1)
+              pure h
+            liftIO (Pool.add m.openHandles h)
+            Stateful.respond "ok"
+            pure m,
+          Stateful.Rule "write" \m -> do
+            h <- forAll (Pool.valuesReusable m.openHandles)
+            v <- forAll (Gen.text & Gen.minSize 1 & Gen.maxSize 4 & Gen.build)
+            liftIO (modifyIORef' m.contents (Map.insert h v))
+            Stateful.respond "ok"
+            pure m,
+          Stateful.Rule "close" \m -> do
+            -- The transfer declares the identity link, so the report keeps
+            -- one h-lifeline across both pools.
+            _h <- forAll (Pool.transfer m.openHandles m.closedHandles)
+            -- BUG: the SUT should drop the handle's content here.
+            Stateful.respond "ok"
+            pure m,
+          Stateful.Rule "read_closed" \m -> do
+            h <- forAll (Pool.valuesReusable m.closedHandles)
+            r <- liftIO (Map.lookup h <$> readIORef m.contents)
+            Stateful.respondShow r
+            r === Nothing
+            pure m
+        ],
+      invariants = []
+    }
+
+-- ---------------------------------------------------------------------------
+-- Scenario 9: more citations than the rail budget (numeric fallback) plus a
+-- second lifeline that must survive shrinking (the elided-lifelines footer).
+
+data OverflowModel = OverflowModel
+  { poked :: Pool Text,
+    decoys :: Pool Int,
+    pokes :: Int,
+    decoyed :: Bool,
+    lastWasPoke :: Bool
+  }
+
+overflowMachine :: Stateful.Machine OverflowModel IO
+overflowMachine =
+  Stateful.Machine
+    { initial = do
+        env <- askEnv
+        poked <- liftIO (Pool.new env.testCase)
+        decoys <- liftIO (Pool.new env.testCase)
+        liftIO (Pool.add poked "the-value")
+        pure OverflowModel {poked, decoys, pokes = 0, decoyed = False, lastWasPoke = False},
+      rules =
+        [ Stateful.Rule "poke" \m -> do
+            _ <- forAll (Pool.valuesReusable m.poked)
+            Stateful.respond "ok"
+            pure m {pokes = m.pokes + 1, lastWasPoke = True},
+          Stateful.Rule "decoy" \m -> do
+            n <- forAll (Gen.int & Gen.min 0 & Gen.max 9 & Gen.build)
+            liftIO (Pool.add m.decoys n)
+            pure m {decoyed = True, lastWasPoke = False}
+        ],
+      invariants =
+        [ -- The 'lastWasPoke' conjunct pins the failing step to a poke of
+          -- the subject (rather than the decoy), so the failure cites the
+          -- subject's full touch history — more than the rail budget.
+          Stateful.Invariant "few_pokes" \m ->
+            assert
+              (not (m.pokes >= 5 && m.decoyed && m.lastWasPoke))
+              "at most four pokes once a decoy exists"
+        ]
+    }
+
+-- ---------------------------------------------------------------------------
+-- Scenario 10: World-A shape — consumption is death, single pool. The
+-- failing step's own draw is the consumption, so the death glyph lands on
+-- the ✗ row; a ◌ on a *cited* row is unreachable in this shape (the engine
+-- never re-issues a consumed value) — checkpoint-3 evidence for the
+-- two-pool reconnection question.
+
+data ConsumeModel = ConsumeModel
+  { items :: Pool Int,
+    reused :: Bool,
+    consumed :: Bool
+  }
+
+consumeMachine :: Stateful.Machine ConsumeModel IO
+consumeMachine =
+  Stateful.Machine
+    { initial = do
+        env <- askEnv
+        items <- liftIO (Pool.new env.testCase)
+        pure ConsumeModel {items, reused = False, consumed = False},
+      rules =
+        [ Stateful.Rule "register" \m -> do
+            n <- forAll (Gen.int & Gen.min 0 & Gen.max 99 & Gen.build)
+            liftIO (Pool.add m.items n)
+            pure m,
+          Stateful.Rule "reuse" \m -> do
+            _ <- forAll (Pool.valuesReusable m.items)
+            Stateful.respond "ok"
+            pure m {reused = True},
+          Stateful.Rule "consume" \m -> do
+            _ <- forAll (Pool.valuesConsumed m.items)
+            Stateful.respond "gone"
+            pure m {consumed = True}
+        ],
+      invariants =
+        [ Stateful.Invariant "never_reuse_and_consume" \m ->
+            assert (not (m.reused && m.consumed)) "reuse and consume never both happen (bug)"
+        ]
+    }

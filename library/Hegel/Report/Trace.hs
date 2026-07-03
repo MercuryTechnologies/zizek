@@ -20,6 +20,8 @@ module Hegel.Report.Trace
     -- * Queries
     step,
     lifeline,
+    root,
+    chain,
   )
 where
 
@@ -92,6 +94,12 @@ data Lifeline = Lifeline
   { var :: !Var,
     -- | Birth order within the value's pool, 1-based.
     ordinal :: !Int,
+    -- | The pool's display label ('Hegel.Pool.named'), when it has one.
+    label :: !(Maybe Text),
+    -- | The source var this value continues ('Hegel.Pool.transfer'): a
+    -- declared identity link. Renderers resolve names and blame chains
+    -- through it (see 'root').
+    lineage :: !(Maybe Var),
     -- | Step containing the 'Born' event.
     bornAt :: !(Maybe Int),
     -- | Step containing the 'Consumed' event.
@@ -145,7 +153,8 @@ build notes events =
                       note = find (\n -> n.kind == Drawn && n.clock == succ e.clock) body
                     }
                 | e <- events,
-                  windowStart seg <= e.clock && e.clock < end
+                  windowStart seg <= e.clock && e.clock < end,
+                  isTouch e.kind
                 ],
               failed = any isFailure body
             }
@@ -194,20 +203,35 @@ parseHeader n
   | n.depth == 0, StepHeader i label <- n.kind = Just (i, label)
   | otherwise = Nothing
 
+-- | Is this event a step activity (as opposed to out-of-band vocabulary
+-- like a pool label)?
+isTouch :: EventKind -> Bool
+isTouch = \case
+  Born _ -> True
+  Reused -> True
+  Consumed -> True
+  Named _ -> False
+
 -- | Fold the event stream into per-value lifelines, in birth order.
 lifelinesOf :: [Event] -> (Clock -> Int) -> [Lifeline]
 lifelinesOf events stepAt = Map.elems (foldl' apply Map.empty events)
   where
+    labels :: Map.Map Int Text
+    labels = Map.fromList [(e.var.pool, l) | e <- events, Named l <- [e.kind]]
+    labelOf v = Map.lookup v.pool labels
     -- Keyed by (birth sequence, var) so Map.elems yields birth order.
     apply :: Map (Int, Var) Lifeline -> Event -> Map (Int, Var) Lifeline
     apply m e = case e.kind of
-      Born ->
+      Named _ -> m
+      Born lineage ->
         let ordinal = 1 + length [() | (_, v) <- Map.keys m, v.pool == e.var.pool]
          in Map.insert
               (Map.size m, e.var)
               Lifeline
                 { var = e.var,
                   ordinal,
+                  label = labelOf e.var,
+                  lineage,
                   bornAt = Just (stepAt e.clock),
                   consumedAt = Nothing,
                   touchedAt = [],
@@ -230,7 +254,7 @@ lifelinesOf events stepAt = Map.elems (foldl' apply Map.empty events)
           Nothing ->
             Map.insert
               (Map.size m, e.var)
-              (f Lifeline {var = e.var, ordinal = 0, bornAt = Nothing, consumedAt = Nothing, touchedAt = [], posthumous = []})
+              (f Lifeline {var = e.var, ordinal = 0, label = labelOf e.var, lineage = Nothing, bornAt = Nothing, consumedAt = Nothing, touchedAt = [], posthumous = []})
               m
 
 -- | Which step's window contains this clock stamp.
@@ -247,3 +271,18 @@ step t i = find (\s -> s.index == i) t.steps
 -- | The lifeline of the given value.
 lifeline :: Trace -> Var -> Maybe Lifeline
 lifeline t v = find (\l -> l.var == v) t.lifelines
+
+-- | The logical value's original identity: follow declared lineage
+-- ('Hegel.Pool.transfer') back to the first var. Display names resolve
+-- here, so a transferred value keeps one name across pools.
+root :: Trace -> Var -> Var
+root t v = case lifeline t v >>= (.lineage) of
+  Just parent | parent /= v -> root t parent
+  _ -> v
+
+-- | Every var of the logical value: the lineage chain through @v@, oldest
+-- first (ancestors, @v@, and any descendants declared later).
+chain :: Trace -> Var -> [Var]
+chain t v = go (root t v)
+  where
+    go x = x : concatMap go [l.var | l <- t.lifelines, l.lineage == Just x]

@@ -81,7 +81,7 @@ spec = describe "pool-event stream" do
   it "records all three event kinds for the eventful counterexample" do
     withEventfulCounterexample \_notes events -> do
       let kinds = fmap (.kind) events
-      kinds `shouldSatisfy` elem Born
+      kinds `shouldSatisfy` any (\case Born _ -> True; _ -> False)
       kinds `shouldSatisfy` elem Reused
       kinds `shouldSatisfy` elem Consumed
 
@@ -98,7 +98,7 @@ spec = describe "pool-event stream" do
       sequence_
         [ do
             let es = lifeOf ref
-            fmap (.kind) (take 1 es) `shouldBe` [Born]
+            fmap (.kind) (take 1 es) `shouldBe` [Born Nothing]
             -- Nothing follows a consuming draw: the engine has no
             -- pool_remove, so Consumed is the death event.
             dropWhile (\e -> e.kind /= Consumed) es `shouldSatisfy` \case

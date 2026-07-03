@@ -62,7 +62,7 @@ useAfterConsume =
       noteAt (Clock 13) 1 Drawn "h1",
       noteAt (Clock 14) 1 (Failure Nothing) "read returned stale bytes"
     ],
-    [ eventAt (Clock 2) h1 Born,
+    [ eventAt (Clock 2) h1 (Born Nothing),
       eventAt (Clock 5) h1 Reused,
       eventAt (Clock 9) h1 Consumed,
       eventAt (Clock 12) h1 Reused
@@ -128,7 +128,7 @@ spec = do
             [ noteAt (Clock 3) 0 Annotation "Initial invariant check.",
               header (Clock 4) 1 "touch"
             ]
-          t = Trace.build notes [eventAt (Clock 2) h1 Born]
+          t = Trace.build notes [eventAt (Clock 2) h1 (Born Nothing)]
       [(s.index, s.rule) | s <- t.steps] `shouldBe` [(0, "<initial>"), (1, "touch")]
       fmap (.bornAt) t.lifelines `shouldBe` [Just 0]
 
@@ -144,9 +144,9 @@ spec = do
           t =
             Trace.build
               [header (Clock 1) 1 "setup"]
-              [ eventAt (Clock 2) va Born,
-                eventAt (Clock 3) vb Born,
-                eventAt (Clock 4) vc Born
+              [ eventAt (Clock 2) va (Born Nothing),
+                eventAt (Clock 3) vb (Born Nothing),
+                eventAt (Clock 4) vc (Born Nothing)
               ]
       [(l.var, l.ordinal) | l <- t.lifelines] `shouldBe` [(va, 1), (vb, 1), (vc, 2)]
 
@@ -184,6 +184,47 @@ spec = do
       Blame.analyze t `shouldSatisfy` \case
         Nothing -> True
         Just _ -> False
+
+    it "follows declared lineage across pools (transfer chains)" do
+      -- open(1) births X in pool 0; write(2) touches X; close(3) consumes X
+      -- and births Y in pool 1 with lineage X; read(4) touches Y and fails.
+      let x = Var {pool = 0, id = 1}
+          y = Var {pool = 1, id = 1}
+          t =
+            Trace.build
+              [ header (Clock 1) 1 "open",
+                header (Clock 3) 2 "write",
+                header (Clock 5) 3 "close",
+                header (Clock 8) 4 "read",
+                noteAt (Clock 10) 1 (Failure Nothing) "stale"
+              ]
+              [ eventAt (Clock 2) x (Born Nothing),
+                eventAt (Clock 4) x Reused,
+                eventAt (Clock 6) x Consumed,
+                eventAt (Clock 7) y (Born (Just x)),
+                eventAt (Clock 9) y Reused
+              ]
+      Trace.root t y `shouldBe` x
+      Trace.chain t y `shouldBe` [x, y]
+      case Blame.analyze t of
+        Nothing -> expectationFailure "expected blame"
+        Just b -> do
+          b.subject `shouldBe` y
+          -- The chain cites the pre-transfer history: consume, write, birth.
+          [(p.step, p.fact) | p <- b.observed.since]
+            `shouldBe` [(3, ConsumedAt x), (2, TouchedAt x), (1, BornAt x)]
+
+    it "lifts pool labels onto lifelines" do
+      let x = Var {pool = 0, id = 1}
+          t =
+            Trace.build
+              [header (Clock 2) 1 "open"]
+              [ eventAt (Clock 1) x (Named "h"),
+                eventAt (Clock 3) x (Born Nothing)
+              ]
+      fmap (.label) t.lifelines `shouldBe` [Just "h"]
+      -- A label event is vocabulary, not a touch.
+      concatMap (.touches) t.steps `shouldSatisfy` ((== 1) . length)
 
     it "yields Nothing when nothing failed" do
       let (notes, events) = useAfterConsume
