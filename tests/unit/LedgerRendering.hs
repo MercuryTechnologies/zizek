@@ -31,7 +31,7 @@ import Hegel.Report.Blame qualified as Blame
 import Hegel.Report.Glyph (Cell (..), GlyphTable (..))
 import Hegel.Report.Glyph qualified as Glyph
 import Hegel.Report.Ledger qualified as Ledger
-import Hegel.Report.Style (Direction (..), Style (..), defaultStyle)
+import Hegel.Report.Style (Style (..), defaultStyle)
 import Hegel.Report.Trace (Trace)
 import Hegel.Report.Trace qualified as Trace
 import Hegel.Report.Verdict qualified as Verdict
@@ -75,19 +75,6 @@ spec = do
             "● 1  open v₁                    ◀─────╯   v₁ was created"
           ]
 
-    it "renders the chronological unicode ledger" do
-      renderWith (defaultStyle Glyph.unicode) {direction = Chronological}
-        `shouldBe` T.intercalate
-          "\n"
-          [ "● 1  open v₁                    ◀─────╮   v₁ was created",
-            "┆    ⋯ 2 steps, none touch v₁         ┆",
-            "○ 4  write v₁ → ok              ◀───╮ │   v₁ was touched",
-            "◌ 5  close v₁                   ◀─╮ │ │   v₁ was consumed",
-            "┆    ⋯ 2 steps, none touch v₁     ┆ ┆ ┆",
-            "✗ 8  read v₁                    ●─┴─┴─╯",
-            "│    read returned stale bytes"
-          ]
-
     it "renders the failure-first ascii ledger" do
       renderWith (defaultStyle Glyph.ascii)
         `shouldBe` T.intercalate
@@ -101,8 +88,8 @@ spec = do
             "* 1  open v1                     <-----'   v1 was created"
           ]
 
-    it "falls back to numeric citations past the rail budget" do
-      let out = renderWith (defaultStyle Glyph.unicode) {railBudget = 2}
+    it "falls back to numeric citations past the link budget" do
+      let out = renderWith (defaultStyle Glyph.unicode) {linkBudget = 2}
       out `shouldSatisfy` T.isInfixOf "← cites 5, 4, 1"
       out `shouldNotSatisfy` T.isInfixOf "◀"
 
@@ -117,16 +104,9 @@ spec = do
       out `shouldNotSatisfy` T.isInfixOf "write v..."
 
   describe "layoutRows" do
-    it "puts the failing row first (failure-first) with its details beneath in both directions" do
-      let rows d =
-            Ledger.layoutRows
-              (defaultStyle Glyph.unicode) {direction = d}
-              uacTrace
-              uacBlame
-          kinds d = fmap (.kind) (rows d)
-      take 2 (kinds FailureFirst)
-        `shouldBe` [Ledger.NodeRow, Ledger.DetailRow]
-      drop (length (kinds Chronological) - 2) (kinds Chronological)
+    it "puts the failing row first (failure-first) with its details beneath" do
+      let rows = Ledger.layoutRows (defaultStyle Glyph.unicode) uacTrace uacBlame
+      take 2 (fmap (.kind) rows)
         `shouldBe` [Ledger.NodeRow, Ledger.DetailRow]
 
     it "splits a multi-line failure message into one detail row per line" do
@@ -149,11 +129,18 @@ spec = do
         `shouldBe` ["⋯ 2 steps, none touch v₁", "⋯ 2 steps, none touch v₁"]
 
   describe "verdictDoc" do
-    it "words the use-after-consume fixture as a proof paragraph" do
-      -- The paragraph reflows at the layout width; compare the words.
+    it "words the use-after-consume fixture as a bulleted list (chronological)" do
+      -- The headline reflows at the layout width and the bullets sit on their
+      -- own lines; 'unwrap' flattens whitespace to compare content + order.
       fmap (unwrap . docToText) (Verdict.verdictDoc (defaultStyle Glyph.unicode) uacTrace uacBlame)
         `shouldBe` Just
-          "Step 8 (read) touched v₁ after its death: v₁ was consumed at step 5 (close), v₁ was touched at step 4 (write), v₁ was created at step 1 (open) — but it failed: read returned stale bytes."
+          "Step 8 (read) touched v₁ after its death — but it failed: read returned stale bytes. • v₁ was created at step 1 (open) • v₁ was touched at step 4 (write) • v₁ was consumed at step 5 (close)"
+
+    it "renders as a headline over one bullet line per justification" do
+      let out = docToText <$> Verdict.verdictDoc (defaultStyle Glyph.unicode) uacTrace uacBlame
+      -- Headline + three bullets = at least four lines, each bullet marked.
+      fmap (length . T.lines) out `shouldSatisfy` maybe False (>= 4)
+      fmap (length . filter (T.isInfixOf "•") . T.lines) out `shouldBe` Just 3
 
     it "quotes a declared response as the observed outcome" do
       -- Give the failing step a respond note; the outcome clause quotes it.
@@ -163,7 +150,7 @@ spec = do
       fmap (unwrap . docToText) (Verdict.verdictDoc (defaultStyle Glyph.unicode) t b)
         `shouldSatisfy` maybe False (T.isInfixOf "— but read returned Just \"a\".")
 
-    it "agrees with the rail: every step in the prose is in the citation closure" do
+    it "agrees with the link: every step in the prose is in the citation closure" do
       let stepsInPlan =
             [ i
             | c <- Verdict.plan uacTrace uacBlame,
@@ -202,7 +189,7 @@ spec = do
       Trace.chain t a `shouldSatisfy` (not . null)
       Trace.root t a `shouldSatisfy` \v -> v == a || v == b
 
-    it "two same-step touches yield one citation (no orphan rail column)" do
+    it "two same-step touches yield one citation (no orphan link column)" do
       let t =
             Trace.build
               [ header (Clock 1) 1 "open",
@@ -227,9 +214,9 @@ spec = do
       let gutterCells = [NodeBorn, NodeTouch, NodeDeath, NodeFail, EdgeAlive, EdgeDead, EdgeElided, HistoryEnd]
       distinctUnder Glyph.ascii gutterCells `shouldBe` True
 
-    it "ascii preserves semantics within the rail family" do
-      let railCells = [RailOrigin, RailHoriz, RailVert, RailElided, RailTeeDown, RailCornerDown, RailCornerUp, RailArrow]
-      distinctUnder Glyph.ascii railCells `shouldBe` True
+    it "ascii preserves semantics within the link family" do
+      let linkCells = [LinkOrigin, LinkHorizontal, LinkVertical, LinkElided, LinkTeeDown, LinkCornerDown, LinkCornerUp, LinkArrow]
+      distinctUnder Glyph.ascii linkCells `shouldBe` True
 
   describe "composed report (the wired ladder)" do
     it "rung 1: a pool-free stateful failure keeps today's layout exactly" do
@@ -244,6 +231,8 @@ spec = do
           report = (reportOf events notes) {databaseKey = Just "some-key"}
       out <- renderReportRich report
       out `shouldSatisfy` T.isInfixOf "Step 8 (read) touched v₁ after its death"
+      -- The verdict list's first (chronological) bullet.
+      out `shouldSatisfy` T.isInfixOf "• v₁ was created at step 1 (open)"
       out `shouldSatisfy` T.isInfixOf "◀─────╯"
       -- The freeze-frame panel (fixture notes carry no locs, so its lines
       -- are the structured fallbacks).
@@ -303,7 +292,7 @@ spec = do
               [() | BornAt _ <- facts] `shouldSatisfy` (not . null)
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
-    it "a real pool machine renders a ledger with a failure row and rail" do
+    it "a real pool machine renders a ledger with a failure row and link" do
       report <- check defaultSettings (Stateful.run eventfulMachine)
       case report.result of
         Counterexample {notes, events} -> do

@@ -1,5 +1,5 @@
 -- | The citation ledger: the R3 trace layout — a single-trunk slice of the
--- failing value's story with a mid-line citation rail, rendered from the
+-- failing value's story with a mid-line citation link, rendered from the
 -- trace and blame IR ("Hegel.Report.Trace", "Hegel.Report.Blame").
 --
 -- Layout rules pinned by the design note
@@ -8,13 +8,13 @@
 -- * The revset is the failure's citation closure; everything else is elided,
 --   explicitly (@⋯ n steps@ rows, @~@ history terminator, @▸ lifelines
 --   elided@ footer) — never silently.
--- * Only the failing step gets drawn rail edges, one column per citation up
---   to the rail budget; overflow falls back to a numeric citation list.
--- * The rail sits mid-line — between the call column and the annotations —
+-- * Only the failing step gets drawn link edges, one column per citation up
+--   to the link budget; overflow falls back to a numeric citation list.
+-- * The link sits mid-line — between the call column and the annotations —
 --   so each justification lands at its arrowhead (tenet 6: text strictly
 --   right of geometry).
 -- * The call column is clipped at a width budget (the accepted cost of the
---   mid-line rail); the full values live in the failure details and splice.
+--   mid-line link); the full values live in the failure details and splice.
 --
 -- Layout emits abstract 'Cell's; glyphs are applied last via the
 -- 'Glyph.GlyphTable' (tenet 3).
@@ -46,7 +46,7 @@ import Hegel.Report.Blame qualified as Blame
 import Hegel.Report.Glyph (Cell (..), GlyphTable (..), displayName)
 import Hegel.Report.Phrase (PhraseTable (..))
 import Hegel.Report.Phrase qualified as Phrase
-import Hegel.Report.Style (Direction (..), Style (..))
+import Hegel.Report.Style (Style (..))
 import Hegel.Report.Trace (Lifeline (..), Step (..), Touch (..), Trace)
 import Hegel.Report.Trace qualified as Trace
 import Prettyprinter (Doc)
@@ -79,7 +79,7 @@ data Row = Row
     gutter :: !Cell,
     stepNo :: !(Maybe Int),
     call :: !Text,
-    rail :: [Cell],
+    link :: [Cell],
     annot :: !Text
   }
   deriving stock (Show, Eq)
@@ -91,20 +91,18 @@ data Row = Row
 layoutRows :: Style -> Trace -> Blame -> [Row]
 layoutRows opts trace blame = orient <> footerRows
   where
-    -- The failing row keeps its detail lines directly beneath it in both
-    -- directions; only the history reverses.
-    orient = case opts.direction of
-      FailureFirst -> failingBlock <> historyRows
-      Chronological -> reverse historyRows <> failingBlock
+    -- Failure-first: the failing row (with its detail lines) sits at the top,
+    -- history reading back through time beneath it.
+    orient = failingBlock <> historyRows
 
     table = opts.glyphs
     closure = Blame.citationClosure blame
     cited = blame.observed.since
     k = length cited
-    drawRail = k > 0 && k <= opts.railBudget
+    drawLink = k > 0 && k <= opts.linkBudget
     -- One association: (column, citation), column 1-based in 'since' order
     -- (nearest cause innermost — 'since' is most-recent-first). Everything
-    -- rail-related projects from it.
+    -- link-related projects from it.
     indexedCites = zip [1 :: Int ..] cited
     columnOf s = listToMaybe [c | (c, o) <- indexedCites, o.step == s]
     -- Shown steps, failure first.
@@ -118,9 +116,9 @@ layoutRows opts trace blame = orient <> footerRows
           gutter = NodeFail,
           stepNo = Just s.index,
           call = callText s,
-          rail = if drawRail then originRail else [],
+          link = if drawLink then originLink else [],
           annot =
-            if drawRail || null cited
+            if drawLink || null cited
               then ""
               else numericCites
         }
@@ -130,15 +128,12 @@ layoutRows opts trace blame = orient <> footerRows
       table.cell NumericCite <> " " <> opts.phrases.cites [T.pack (show c.step) | c <- cited]
 
     detailRows =
-      [ Row {kind = DetailRow, gutter = EdgeAlive, stepNo = Nothing, call = t, rail = detailRail, annot = ""}
+      [ Row {kind = DetailRow, gutter = EdgeAlive, stepNo = Nothing, call = t, link = detailLink, annot = ""}
       | t <- details
       ]
-    -- Failure-first: the details sit between the rail's origin and its
-    -- targets below, so the columns pass through. Chronological: the failing
-    -- row *terminates* the rail, so rows beneath it carry no rail cells.
-    detailRail = case opts.direction of
-      FailureFirst -> verticals allColumns
-      Chronological -> []
+    -- The details sit between the link's origin and its targets below, so the
+    -- columns pass through.
+    detailLink = verticals allColumns
     details = case trace.failure of
       -- One detail row per physical line: an unsplit multi-line message
       -- would defeat the column-width arithmetic.
@@ -155,7 +150,7 @@ layoutRows opts trace blame = orient <> footerRows
             <> [citedRow s]
             <> go (Just s.index) rest
     terminator =
-      [ Row {kind = TerminatorRow, gutter = HistoryEnd, stepNo = Nothing, call = "", rail = [], annot = ""}
+      [ Row {kind = TerminatorRow, gutter = HistoryEnd, stepNo = Nothing, call = "", link = [], annot = ""}
       | earliestShown <- take 1 (reverse (fmap (.index) shown)),
         any (\s -> s.index < earliestShown) trace.steps
       ]
@@ -166,7 +161,7 @@ layoutRows opts trace blame = orient <> footerRows
           gutter = gutterFor s,
           stepNo = Just s.index,
           call = callText s,
-          rail = if drawRail then maybe [] citedRail (columnOf s.index) else [],
+          link = if drawLink then maybe [] citedLink (columnOf s.index) else [],
           annot = maybe "" factText (listToMaybe [o.fact | (_, o) <- indexedCites, o.step == s.index])
         }
     gutterFor s
@@ -182,7 +177,7 @@ layoutRows opts trace blame = orient <> footerRows
             gutter = EdgeElided,
             stepNo = Nothing,
             call = table.cell Ellipsis <> " " <> elisionLabel between,
-            rail = elidedVerticals (activeColumnsBelow lower),
+            link = elidedVerticals (activeColumnsBelow lower),
             annot = ""
           }
       | upper <- maybe [] pure mUpper,
@@ -195,36 +190,30 @@ layoutRows opts trace blame = orient <> footerRows
         (if any touchesSubject between then Nothing else Just subjectName)
     touchesSubject s = any (\t -> Trace.root trace t.var == subjectRoot) s.touches
 
-    -- Rail geometry -------------------------------------------------------
-    cornerCell = case opts.direction of
-      FailureFirst -> RailCornerUp
-      Chronological -> RailCornerDown
-    originTee = case opts.direction of
-      FailureFirst -> RailTeeDown
-      Chronological -> RailTeeUp
-    originCorner = case opts.direction of
-      FailureFirst -> RailCornerDown
-      Chronological -> RailCornerUp
+    -- Link geometry (failure-first) ---------------------------------------
+    cornerCell = LinkCornerUp
+    originTee = LinkTeeDown
+    originCorner = LinkCornerDown
 
-    originRail =
-      RailOrigin
-        : concat [[RailHoriz, if c < k then originTee else originCorner] | c <- [1 .. k]]
-    citedRail c =
-      [RailArrow]
-        <> replicate (2 * c - 1) RailHoriz
+    originLink =
+      LinkOrigin
+        : concat [[LinkHorizontal, if c < k then originTee else originCorner] | c <- [1 .. k]]
+    citedLink c =
+      [LinkArrow]
+        <> replicate (2 * c - 1) LinkHorizontal
         <> [cornerCell]
-        <> concat [[Blank, RailVert] | _ <- [c + 1 .. k]]
-    verticals = verticalsWith RailVert
-    elidedVerticals = verticalsWith RailElided
+        <> concat [[Blank, LinkVertical] | _ <- [c + 1 .. k]]
+    verticals = verticalsWith LinkVertical
+    elidedVerticals = verticalsWith LinkElided
     verticalsWith cell cols =
       case cols of
         [] -> []
         _ -> Blank : concat [[Blank, if c `elem` cols then cell else Blank] | c <- [1 .. k]]
-    allColumns = if drawRail then [1 .. k] else []
+    allColumns = if drawLink then [1 .. k] else []
     -- Columns still travelling at rows below (further back in time than)
     -- the given step: citations whose row is at or before it.
     activeColumnsBelow lower =
-      if drawRail
+      if drawLink
         then [c | (c, o) <- indexedCites, o.step <= lower]
         else []
 
@@ -255,7 +244,7 @@ layoutRows opts trace blame = orient <> footerRows
             gutter = Blank,
             stepNo = Nothing,
             call = "",
-            rail = [],
+            link = [],
             annot =
               table.cell ElidedMark
                 <> " "
@@ -275,7 +264,7 @@ layoutRows opts trace blame = orient <> footerRows
 -- * Rendering
 
 -- | Render the rows as an aligned document: gutter, step number, clipped
--- call column, the rail region, annotations at the arrowheads.
+-- call column, the link region, annotations at the arrowheads.
 ledgerDoc :: Style -> Trace -> Blame -> Doc Ann
 ledgerDoc opts trace blame = PP.vsep (fmap rowDoc rows)
   where
@@ -284,8 +273,8 @@ ledgerDoc opts trace blame = PP.vsep (fmap rowDoc rows)
 
     stepW = maximum (1 : [length (show i) | Row {stepNo = Just i} <- rows])
     callW = maximum (0 : [T.length r.call | r <- rows, r.kind /= FooterRow])
-    railW = maximum (0 : [railWidth r.rail | r <- rows])
-    railWidth cells = sum (fmap (T.length . table.cell) cells)
+    linkW = maximum (0 : [linkWidth r.link | r <- rows])
+    linkWidth cells = sum (fmap (T.length . table.cell) cells)
 
     rowDoc r
       -- The footer is prose, not a ledger line: no ghost columns.
@@ -299,7 +288,7 @@ ledgerDoc opts trace blame = PP.vsep (fmap rowDoc rows)
             ("  ", "  "),
             (callPadded, callDoc),
             ("  ", "  "),
-            (railPadded, PP.annotate (RailAnn 0) (PP.pretty railPadded)),
+            (linkPadded, PP.annotate (LinkAnn 0) (PP.pretty linkPadded)),
             ("   ", "   "),
             (r.annot, annotDoc)
           ]
@@ -311,8 +300,8 @@ ledgerDoc opts trace blame = PP.vsep (fmap rowDoc rows)
           DetailRow -> PP.annotate (diffAnn r.call) (PP.pretty callPadded)
           ElisionRow -> PP.annotate ElidedAnn (PP.pretty callPadded)
           _ -> respAnnotated callPadded
-        railTxt = foldMap table.cell r.rail
-        railPadded = railTxt <> T.replicate (railW - T.length railTxt) " "
+        linkTxt = foldMap table.cell r.link
+        linkPadded = linkTxt <> T.replicate (linkW - T.length linkTxt) " "
         annotDoc = case r.kind of
           FooterRow -> PP.annotate ElidedAnn (PP.pretty r.annot)
           _ -> PP.annotate NoteAnn (PP.pretty r.annot)

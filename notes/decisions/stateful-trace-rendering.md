@@ -11,9 +11,10 @@ builds on).
 
 `renderReportRich`/`renderReportRichAnsi` now produce, for a stateful
 counterexample with pool context: the `failed after N tests` headline, a
-phenomenon chip when a pattern matched, the **verdict paragraph** (a prose
-proof: violation, "since" clauses, quoted outcome), the **citation ledger**
-(the failing value's lifeline as a failure-first slice with a mid-line rail
+phenomenon chip when a pattern matched, the **verdict list** (a headline —
+the violation and observed outcome — over one bullet per justification, in
+chronological order), the **citation ledger**
+(the failing value's lifeline as a failure-first slice with a mid-line link
 drawing the blame edges), the failing step's **freeze-frame splice** (the
 existing Timeline splice, demoted from whole-report to panel), and the
 reproduction **footer** when a database key exists.
@@ -47,7 +48,7 @@ reproduction **footer** when a database key exists.
   (`Phrase.english`) — every sentence the renderers can emit composes table
   fields plus quoted user data, never inflected. `Glyph.displayName`
   resolves value names through lineage roots (`h₁` across pools). Both
-  tables plus the layout knobs (direction, budgets) ride
+  tables plus the layout knobs (budgets) ride
   `Hegel.Report.Style` — the one record every composed-report section
   consumes (`defaultStyle`; the `*With` renderers take it explicitly).
 
@@ -59,13 +60,15 @@ reproduction **footer** when a database key exists.
   `Born` event's lineage — never inferred (a heuristic could silently assert
   a false identity; rejected). `Pool.named` labels a pool's values for the
   report; `Pool.new` keeps auto-letters (`v, w, x…`, doubling past five).
-- **Failure-first is the ledger's default direction** (chronological stays
-  an option, and is the only possible order for anything streamed). Accepted
-  costs recorded in the roadmap note; the verdict paragraph is
-  violation-first too, so prose and geometry read in the same order.
-- **Mid-line rail** (between call column and annotations): justifications
+- **Failure-first is the ledger's only direction** — the failure sits at eye
+  level, history reading back beneath it. (An earlier `Chronological` knob was
+  removed: one order, no configuration.) The **verdict list** reads the other
+  way — chronologically, oldest cause first — because a bulleted list reads
+  most naturally forward in time. These are fixed editorial choices in two
+  renderers over the same `Verdict.plan`/`Blame` data, not a shared knob.
+- **Mid-line link** (between call column and annotations): justifications
   sit at their arrowheads; text stays strictly right of geometry. The call
-  column clips (`⋯`) as the accepted cost. Rail budget 3; overflow degrades
+  column clips (`⋯`) as the accepted cost. Link budget 3; overflow degrades
   to a numeric `← cites …` list.
 - **Elision is explicit, always**: `⋯ n steps` rows (with "none touch h₁"
   when true), `~` history terminator, `▸ k lifelines elided (…)` footer.
@@ -100,18 +103,18 @@ reproduction **footer** when a database key exists.
 - **One edge-set, worded twice**: every step number in the verdict plan is
   in `Blame.citationClosure` (pinned).
 - **Ascii loses no semantics**: the ascii table is injective within each
-  cell family (gutter/rail never share a column; pinned).
+  cell family (gutter/link never share a column; pinned).
 - **Rung 1 is byte-for-byte**: pool-free stateful reports are untouched by
   the slice (pinned, plus all pre-slice pins unchanged).
 - **Totality**: `Trace.build` is total on malformed streams (never-born
   vars synthesized; lineage cycles guarded in `root`/`chain`).
 - **One citation per step**: `Blame` dedupes same-step facts (strongest
-  wins) so the rail never draws an orphan column.
+  wins) so the link never draws an orphan column.
 
 ## Verification
 
 - `just test unit` — `PoolEvents`, `TraceIR`, `LedgerRendering` (byte-exact
-  ledger pins in both directions and both tables, verdict pins, ladder
+  failure-first ledger pins in both glyph tables, verdict-list pins, ladder
   rungs, glyph-preference knob, transliteration), `DatabaseReplay`
   (`ReplayDiverged`), plus all pre-slice pins unchanged.
 - `just gallery` — four scenarios; 3–4 render the

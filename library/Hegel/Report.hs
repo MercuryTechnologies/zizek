@@ -203,7 +203,7 @@ renderReportRichAnsi :: Report -> IO Text
 renderReportRichAnsi = renderReportRichAnsiWith (defaultStyle Glyph.unicode)
 
 -- | 'renderReportRich' with an explicit 'Style' (glyph table, phrase table,
--- direction, budgets).
+-- budgets).
 renderReportRichWith :: Style -> Report -> IO Text
 renderReportRichWith style = renderRichImpl style renderReport docToText
 

@@ -82,9 +82,9 @@ data Ann
     -- the lane's index — glyphs carry state, columns carry identity, and the
     -- colour binds a value's name in prose to its lane with zero geometry.
     LaneAnn !Int
-  | -- | A citation-rail cell, coloured as the lane of the value the edge
+  | -- | A citation-link cell, coloured as the lane of the value the edge
     -- concerns.
-    RailAnn !Int
+    LinkAnn !Int
   | -- | A ledger step number (dim).
     StepNoAnn
   | -- | A rule's @→ response@ segment on a ledger row.
@@ -159,7 +159,7 @@ annToAnsi = \case
   FailureGutter -> mempty
   FailureMessage -> mempty
   LaneAnn n -> laneColor n
-  RailAnn n -> laneColor n
+  LinkAnn n -> laneColor n
   -- No SGR-2 faint in prettyprinter-ansi-terminal; dull white is the
   -- established "dim" approximation (see 'LocAnn').
   StepNoAnn -> PP.Terminal.colorDull PP.Terminal.White

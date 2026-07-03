@@ -1,6 +1,6 @@
--- | The verdict paragraph: the blame tree worded as a short prose proof —
--- the failing observation, its justifications as \"since\" clauses, and the
--- observed outcome.
+-- | The verdict: the blame tree worded as a bulleted list — a headline (the
+-- failing observation and the observed outcome) over one bullet per
+-- justification (\"since\" clause), oldest cause first.
 --
 -- Intended to be imported with qualification:
 --
@@ -20,13 +20,14 @@ import Data.Text qualified as T
 import Hegel.Report.Ann (Ann (..))
 import Hegel.Report.Blame (Blame (..), Fact, Observation (..))
 import Hegel.Report.Blame qualified as Blame
-import Hegel.Report.Glyph (GlyphTable, displayName)
+import Hegel.Report.Glyph (Cell (..))
+import Hegel.Report.Glyph qualified as Glyph
 import Hegel.Report.Phrase (PhraseTable (..))
 import Hegel.Report.Phrase qualified as Phrase
 import Hegel.Report.Style (Style (..))
 import Hegel.Report.Trace (Step (..), Trace)
 import Hegel.Report.Trace qualified as Trace
-import Prettyprinter (Doc)
+import Prettyprinter (Doc, (<+>))
 import Prettyprinter qualified as PP
 
 -- * The plan
@@ -66,42 +67,38 @@ plan trace blame =
 
 -- * Rendering
 
--- | Word the verdict plan as a reflowing paragraph.
+-- | Word the verdict plan as a bulleted list: a headline (the violation and
+-- the observed outcome, one reflowing line) over one bullet per
+-- justification, in chronological order.
+--
+-- The bullets read oldest cause first — 'plan' lists them most-recent-first,
+-- so we reverse — because a list reads most naturally forward in time. The
+-- citation ledger just below reads the other way (failure-first); the two
+-- orders are deliberate, not a shared knob.
 --
 -- 'Nothing' when the blame tree has no citations: with nothing to justify,
--- the headline suffices (the composed report's degradation row).
+-- the headline alone adds nothing the ledger's failing row does not already
+-- say (the composed report's degradation row).
 verdictDoc :: Style -> Trace -> Blame -> Maybe (Doc Ann)
 verdictDoc style trace blame
   | null blame.observed.since = Nothing
-  | otherwise =
-      Just
-        ( PP.annotate
-            NoteAnn
-            (PP.fillSep (fmap PP.pretty (T.words (paragraph style.phrases style.glyphs trace blame))))
-        )
-
--- | The paragraph as one 'Text' (also what the pins check).
-paragraph :: PhraseTable -> GlyphTable -> Trace -> Blame -> Text
-paragraph phrases glyphs trace blame =
-  mconcat (lead : causes <> outcome <> [phrases.terminal])
+  | otherwise = Just (PP.annotate NoteAnn (PP.vsep (headline : bullets)))
   where
+    phrases = style.phrases
     clauses = plan trace blame
-    nameOf = displayName glyphs trace
+    nameOf = Glyph.displayName style.glyphs trace
     factName = nameOf . Blame.factVar
     ref i rule = phrases.stepRef (T.pack (show i)) rule
+    reflow :: Text -> Doc Ann
+    reflow = PP.fillSep . fmap PP.pretty . T.words
+    bullet = PP.pretty (style.glyphs.cell VerdictBullet)
+
+    -- Headline: the violation, its observed outcome, and the terminal mark.
+    headline = reflow (T.concat (lead <> outcome <> [phrases.terminal]))
     lead =
-      mconcat
-        [ phrases.lead (ref st r) (phrases.violates f (factName f))
-        | Violated {step = st, rule = r, fact = f} <- clauses
-        ]
-    causes = case [(st, r, f) | Since {step = st, rule = r, fact = f} <- clauses] of
-      [] -> []
-      cs ->
-        [ phrases.causeIntro
-            <> T.intercalate
-              phrases.causeSep
-              [phrases.caused f (factName f) <> phrases.at <> ref st r | (st, r, f) <- cs]
-        ]
+      [ phrases.lead (ref st r) (phrases.violates f (factName f))
+      | Violated {step = st, rule = r, fact = f} <- clauses
+      ]
     outcome =
       [ phrases.but <> worded
       | c <- clauses,
@@ -112,3 +109,10 @@ paragraph phrases glyphs trace blame =
             | otherwise -> []
           _ -> []
       ]
+
+    -- One indented bullet per justification, chronological (oldest first).
+    bullets =
+      [ PP.indent 2 (bullet <+> reflow (phrases.caused f (factName f) <> phrases.at <> ref st r))
+      | (st, r, f) <- reverse sinces
+      ]
+    sinces = [(st, r, f) | Since {step = st, rule = r, fact = f} <- clauses]

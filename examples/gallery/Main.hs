@@ -11,11 +11,11 @@
 --   3. file handles — the flagship citation ledger: a use-after-close bug
 --      whose /minimal/ counterexample needs an unrelated open between the
 --      write and the close, so the ledger shows the full vocabulary — a
---      three-edge rail, an elision row, a lineage-linked lifeline across
+--      three-edge link, an elision row, a lineage-linked lifeline across
 --      two pools ('Pool.transfer'), named values, and an elided-lifeline
 --      footer. Printed in unicode and ascii, beside today's wired report.
 --   4. poked value — the ledger's degradation vocabulary: more citations
---      than the rail budget (numeric fallback), a prelude-born subject,
+--      than the link budget (numeric fallback), a prelude-born subject,
 --      and a second lifeline that survives shrinking
 --
 -- Run with @just gallery@ from the repo root (source
@@ -52,7 +52,7 @@ main = do
   runScenario "1: stack palindrome — === diff, spliced" (Stateful.run palindromeMachine)
   runScenario "2: warehouse — realistic interleaving, spliced" (Stateful.run warehouseMachine)
   runLedgerScenario True "3: file handles — use-after-close, citation ledger" (Stateful.run fileHandleMachine)
-  runLedgerScenario False "4: poked value — rail overflow, prelude birth" (Stateful.run overflowMachine)
+  runLedgerScenario False "4: poked value — link overflow, prelude birth" (Stateful.run overflowMachine)
 
 runScenario :: Text -> Property () -> IO ()
 runScenario title prop = showReport title =<< check defaultSettings prop
@@ -242,7 +242,7 @@ warehouseMachine =
 -- closed handle returns stale bytes. The resize is what makes the minimal
 -- counterexample visually rich: it must keep an unrelated @open@ between
 -- the write and the close (an elision row and a second lifeline that
--- shrinking cannot remove), plus the full born\/touched\/consumed rail.
+-- shrinking cannot remove), plus the full born\/touched\/consumed link.
 data FileModel = FileModel
   { openHandles :: Pool Int,
     closedHandles :: Pool Int,
@@ -308,9 +308,9 @@ fileHandleMachine =
       invariants = []
     }
 
--- * Scenario 4: poked value (rail overflow)
+-- * Scenario 4: poked value (link overflow)
 
--- | More citations than the rail budget (numeric fallback) plus a second
+-- | More citations than the link budget (numeric fallback) plus a second
 -- lifeline that must survive shrinking (the elided-lifelines footer). The
 -- subject is registered in @machine.initial@, so its birth lands in the
 -- prelude step.
@@ -344,7 +344,7 @@ overflowMachine =
       invariants =
         [ -- The 'lastWasPoke' conjunct pins the failing step to a poke of
           -- the subject (rather than the decoy), so the failure cites the
-          -- subject's full touch history — more than the rail budget.
+          -- subject's full touch history — more than the link budget.
           Stateful.Invariant "few_pokes" \m ->
             assert
               (not (m.pokes >= 5 && m.decoyed && m.lastWasPoke))

@@ -14,7 +14,7 @@
 --      touches: an elision row and the elided-lifelines footer
 --   6. a pipeline transferring jobs across three pools — the works: one
 --      lifeline across pending→running→done ('Pool.transfer' lineage), a
---      full three-edge rail, elision, footer, a verdict quoting the rule's
+--      full three-edge link, elision, footer, a verdict quoting the rule's
 --      'Stateful.respond', and the stored-example reproduction line
 --
 -- Run with @just tour@ from the repo root (source splicing
@@ -88,7 +88,7 @@ main = do
       [ "One job crosses three pools (pending → running → done) as a single",
         "lifeline: Pool.transfer declares the identity link, and the report",
         "words each hop as a transfer — ◌ (death) is reserved for consumption",
-        "without a continuation. Full rail, elision, footer, a quoted respond,",
+        "without a continuation. Full link, elision, footer, a quoted respond,",
         "and the stored-example line."
       ]
       =<< check

@@ -44,7 +44,7 @@ import Numeric (showHex)
 import System.Environment (lookupEnv)
 import System.IO (Handle, hGetEncoding)
 
--- | One abstract ledger cell. Gutter cells and rail cells occupy disjoint
+-- | One abstract ledger cell. Gutter cells and link cells occupy disjoint
 -- regions of a row, so the ascii table only needs injectivity within each
 -- family (a corner @'@ and a dead lane @'@ could never be confused; they
 -- cannot share a column).
@@ -58,25 +58,28 @@ data Cell
   | EdgeDead
   | EdgeElided
   | HistoryEnd
-  | -- Rail cells
-    RailOrigin
-  | RailHoriz
-  | RailVert
-  | RailElided
-  | -- | Junction continuing downward (failure-first origin row).
-    RailTeeDown
-  | -- | Junction continuing upward (chronological origin row).
-    RailTeeUp
-  | -- | Corner entering from above (chronological cited row).
-    RailCornerDown
-  | -- | Corner entering from below (failure-first cited row).
-    RailCornerUp
-  | RailArrow
+  | -- Link cells
+    LinkOrigin
+  | LinkHorizontal
+  | LinkVertical
+  | LinkElided
+  | -- | Origin-row junction: an inner column continues down to its cited row.
+    LinkTeeDown
+  | -- | Unused since the ledger became failure-first only; retained so the
+    -- link-cell family stays complete (transliteration, injectivity pins).
+    LinkTeeUp
+  | -- | Origin-row corner: the outermost column turns down.
+    LinkCornerDown
+  | -- | Cited-row corner: the column turns up-left into the arrowhead.
+    LinkCornerUp
+  | LinkArrow
   | -- Text-region sigils
     ElidedMark
   | Ellipsis
   | NumericCite
   | ResponseArrow
+  | -- | The verdict list's justification bullet.
+    VerdictBullet
   | Blank
   deriving stock (Show, Eq, Ord, Enum, Bounded)
 
@@ -103,19 +106,20 @@ unicode =
         EdgeDead -> "┊"
         EdgeElided -> "┆"
         HistoryEnd -> "~"
-        RailOrigin -> "●"
-        RailHoriz -> "─"
-        RailVert -> "│"
-        RailElided -> "┆"
-        RailTeeDown -> "┬"
-        RailTeeUp -> "┴"
-        RailCornerDown -> "╮"
-        RailCornerUp -> "╯"
-        RailArrow -> "◀"
+        LinkOrigin -> "●"
+        LinkHorizontal -> "─"
+        LinkVertical -> "│"
+        LinkElided -> "┆"
+        LinkTeeDown -> "┬"
+        LinkTeeUp -> "┴"
+        LinkCornerDown -> "╮"
+        LinkCornerUp -> "╯"
+        LinkArrow -> "◀"
         ElidedMark -> "▸"
         Ellipsis -> "⋯"
         NumericCite -> "←"
         ResponseArrow -> "→"
+        VerdictBullet -> "•"
         Blank -> " ",
       valueName = \label poolOrd valOrd ->
         maybe (poolLetter poolOrd) id label <> subscript valOrd
@@ -124,8 +128,8 @@ unicode =
 -- | The escape hatch for windows-1252 pipelines, exotic log processors, and
 -- @LANG=C@ consumers. Checkpoint-3 picks: @◌ → %@ (a digit-like @0@ next to
 -- the step-number column read as part of the number) and @┊ → .@ (completing
--- the density gradient @| : .@ that mirrors @│ ┆ ┊@; the rail corner also
--- maps to @.@ but gutter and rail are disjoint families).
+-- the density gradient @| : .@ that mirrors @│ ┆ ┊@; the link corner also
+-- maps to @.@ but gutter and link are disjoint families).
 ascii :: GlyphTable
 ascii =
   GlyphTable
@@ -138,19 +142,20 @@ ascii =
         EdgeDead -> "."
         EdgeElided -> ":"
         HistoryEnd -> "~"
-        RailOrigin -> "*"
-        RailHoriz -> "-"
-        RailVert -> "|"
-        RailElided -> ":"
-        RailTeeDown -> "+"
-        RailTeeUp -> "+"
-        RailCornerDown -> "."
-        RailCornerUp -> "'"
-        RailArrow -> "<"
+        LinkOrigin -> "*"
+        LinkHorizontal -> "-"
+        LinkVertical -> "|"
+        LinkElided -> ":"
+        LinkTeeDown -> "+"
+        LinkTeeUp -> "+"
+        LinkCornerDown -> "."
+        LinkCornerUp -> "'"
+        LinkArrow -> "<"
         ElidedMark -> ">"
         Ellipsis -> "..."
         NumericCite -> "<-"
         ResponseArrow -> "->"
+        VerdictBullet -> "-"
         Blank -> " ",
       valueName = \label poolOrd valOrd ->
         maybe (poolLetter poolOrd) id label <> T.pack (show valOrd)
@@ -159,7 +164,7 @@ ascii =
 -- | A value's display name, resolved through its lineage root: the pool's
 -- 'Hegel.Pool.named' label (or its birth-order letter) plus the value's
 -- birth-order ordinal — one name for one logical value, across transfers.
--- Shared by the ledger and the verdict paragraph.
+-- Shared by the ledger and the verdict list.
 -- Defined as @\\tbl trace -> \\v -> …@ so callers that bind
 -- @nameOf = displayName tbl trace@ share the precomputed per-trace name
 -- table across every lookup (the renderers call this per touch, per row).
