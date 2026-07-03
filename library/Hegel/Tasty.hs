@@ -19,7 +19,9 @@ import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Database (Database (..))
 import Hegel.Internal.DatabaseKey (propKey)
 import Hegel.Property.Internal (Property)
-import Hegel.Report (Report (..), Result (..), renderReportRich, renderReportRichAnsi)
+import Hegel.Report (Report (..), Result (..), renderReportRichAnsiWith, renderReportRichWith)
+import Hegel.Report.Glyph qualified as Glyph
+import Hegel.Report.Ledger qualified as Ledger
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..), defaultSettings, withDatabaseKey)
 import System.Environment (lookupEnv)
@@ -37,8 +39,14 @@ instance IsTest HegelTest where
   run opts (HegelTest settings prop) _progress = do
     report <- check settings prop
     useColor <- resolveColor (lookupOption opts)
-    let render = if useColor then renderReportRichAnsi else renderReportRich
-    rendered <- T.unpack <$> render report
+    pref <- Glyph.preference
+    let ledgerOpts = Ledger.defaultOptions (Glyph.table pref)
+        render = if useColor then renderReportRichAnsiWith ledgerOpts else renderReportRichWith ledgerOpts
+        -- The ascii table's 7-bit guarantee covers user text too.
+        clean = case pref of
+          Glyph.PreferAscii -> Glyph.sevenBitClean
+          Glyph.PreferUnicode -> id
+    rendered <- T.unpack . clean <$> render report
     pure case report.result of
       Ok -> testPassed rendered
       _ -> testFailed rendered

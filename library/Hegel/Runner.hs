@@ -75,7 +75,16 @@ check settings prop =
           -- The run itself failed (a health check, a nondeterministic test, an
           -- engine panic) and produced no verdict on the property.
           RunErrored -> pure (Aborted (UnhealthyInput (fromMaybe "the run failed" outcome.runError)))
-        pure Report {result, stats = Stats {valid = nValid, invalid = nInvalid}}
+        pure
+          Report
+            { result,
+              stats = Stats {valid = nValid, invalid = nInvalid},
+              -- The reproduction surface, for the failure footer: only a
+              -- persisted key is honest to point at.
+              databaseKey = case settings.database of
+                DatabaseDisabled -> Nothing
+                _ -> settings.databaseKey
+            }
 
 -- * Settings
 
@@ -241,7 +250,7 @@ reconstructProperty ctx prop s blob =
       Right () -> diverged
   where
     diverged =
-      Aborted (Errored (toException (userError "failure reported but the property did not reproduce it on replay")))
+      Aborted (ReplayDiverged "the engine reported a failure, but its stored example passed (or discarded) on replay")
 
 -- * Per-case loop
 

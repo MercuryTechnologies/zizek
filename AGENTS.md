@@ -30,9 +30,9 @@ Minimum supported GHC version is 9.10 (enforced in CI and `zizek.cabal`). If you
 - `library/Hegel.hs` — Public API: `prop`/`forEach`/`forEachWith`; re-exports `Gen`, settings, database, reports, phases, and assertions
 - `library/Hegel/Property.hs` — Property monad public API: `PropertyT`/`Property`, `forAll`/`forAllWith`/`forAllSilent`, `annotate`/`footnote`, `assume`/`discard`, `check`/`check_`, `assert`/`failure`, `(===)`/`(/==)`. Internals in `library/Hegel/Property/Internal.hs`
 - `library/Hegel/Stateful.hs` — stateful (model-based) testing: `Machine`/`Rule`/`Invariant` and `run`, layered on `PropertyT` (see Stateful Testing below)
-- `library/Hegel/Pool.hs` — engine-managed pools of values for stateful rules to draw from; an empty-pool draw discards the case
-- `library/Hegel/Report.hs` — `Report`/`Result`/`Stats` plus the plain/ANSI renderers: what a property run produces
-- `library/Hegel/Report/*.hs` — the rich source-splicing renderer: `Ann` (annotations/styles), `Discovery` (declaration lookup), `Source` (splicing/layout), `Span`, `Note` (journal entries), `Journal` (depth regrouping + structured journal rendering), `Stateful` (splices the failing step's journal into source; eyeball via `cabal run stateful-report-gallery`)
+- `library/Hegel/Pool.hs` — engine-managed pools of values for stateful rules to draw from; an empty-pool draw discards the case. `named` labels a pool's values for the report; `transfer` moves a value between pools with the identity link declared (one lifeline across pools)
+- `library/Hegel/Report.hs` — `Report`/`Result`/`Stats` plus the plain/ANSI renderers: what a property run produces; for pool-bearing stateful failures the rich path composes the trace report (verdict + ledger + splice + footer) via a pinned degradation ladder
+- `library/Hegel/Report/*.hs` — the rich renderers: `Ann` (annotations/styles), `Discovery` (declaration lookup), `Source` (splicing/layout), `Span`, `Note` (journal entries), `Journal` (depth regrouping + structured rendering), `Stateful` (the failing step's source splice), and the trace layer — `Trace` (the versioned IR zipping journal + pool events on their shared clock), `Blame` (the citation tree both renderers project), `Ledger` (the citation-ledger layout), `Verdict` (the prose proof), `Glyph`/`Phrase` (glyph and phrase tables — cells/words applied last; `HEGEL_GLYPHS` + encoding detection pick ascii). Eyeball via `cabal run stateful-report-gallery`; design record in `notes/decisions/stateful-trace-rendering.md`
 - `library/Hegel/Diff.hs` — structural and line-level diffs backing `(===)` failures
 - `library/Hegel/Assertion.hs` — `assert`/`failure` (`MonadIO`-polymorphic, call-stack-aware), failure-origin formatting
 - `library/Hegel/Hspec.hs`, `library/Hegel/Tasty.hs` — framework integrations with automatic database keying (see Framework Integrations below)
@@ -43,6 +43,7 @@ Minimum supported GHC version is 9.10 (enforced in CI and `zizek.cabal`). If you
 - `library/Hegel/Gen/Builder.hs` — `Build`, `HasMin`, `HasMax`, `HasSize` typeclasses
 - `library/Hegel/Gen/*.hs` — per-category builders (bool, integer, float, binary, char, text, regex, uri, uuid, list, set, map, …)
 - `library/Hegel/Collection.hs` — `libhegel`-managed variable-length collection handle, used by the list/set/map generators
+- `library/Hegel/Internal/Event.hs` — the per-case pool-event stream and the `Clock` it shares with the note journal; recording only in the final reconstruction replay
 - `library/Hegel/Internal/FFI.hsc` — raw `foreign import ccall` bindings to `libhegel`: all `hegel_*` C functions, opaque handle types, `HEGEL_*` pattern synonyms, and bracket helpers
 - `library/Hegel/Internal/TestCase.hs` — the `TestCase` handle (context + `hegel_test_case_t*` pointer) plus `markComplete`/`Status`
 - `library/Hegel/Internal/DataSource.hs` — the generator-facing engine channel: `generate`, spans (`startSpan`/`stopSpan`, `Label`), collections, pools, state machines

@@ -19,9 +19,10 @@
 --      and a second lifeline that survives shrinking
 --
 -- Run with @cabal run stateful-report-gallery@ from the repo root (source
--- splicing resolves @srcLocFile@ relative to the working directory). The
--- ledger renderings are not yet wired into the default report
--- (gallery-first prototyping; @notes\/roadmap\/01-stateful-trace-rendering.md@).
+-- splicing resolves @srcLocFile@ relative to the working directory).
+-- Scenarios 3–4 render through the same wired path as 1–2: the composed
+-- trace report (verdict, ledger, freeze-frame splice, footer) is what
+-- 'renderReportRichAnsi' now produces for pool-bearing stateful failures.
 --
 -- Always exits 0; this is an eyeballing harness, not an assertion.
 module Main (main) where
@@ -37,14 +38,9 @@ import Hegel.Gen qualified as Gen
 import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (Property, annotate, assume, forAll, (===))
-import Hegel.Report (Report (..), Result (..), renderReportRichAnsi, renderValue)
-import Hegel.Report.Ann (docToAnsi)
-import Hegel.Report.Blame qualified as Blame
+import Hegel.Report (Report (..), renderReportRichAnsi, renderReportRichAnsiWith, renderValue)
 import Hegel.Report.Glyph qualified as Glyph
 import Hegel.Report.Ledger qualified as Ledger
-import Hegel.Report.Phrase qualified as Phrase
-import Hegel.Report.Trace qualified as Trace
-import Hegel.Report.Verdict qualified as Verdict
 import Hegel.Property.Internal (Env (..), askEnv)
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
@@ -67,33 +63,19 @@ showReport title report = do
   T.putStrLn ("\n━━━━━ scenario " <> title <> " ━━━━━")
   T.putStrLn =<< renderReportRichAnsi report
 
--- | The ledger eyeball harness: the citation ledger (failure-first — the
--- decided default; the chronological variant is pinned in the unit tests),
--- optionally its ascii table, then today's wired renderer for comparison.
+-- | The trace scenarios through the /wired/ path — 'renderReportRichAnsi'
+-- now composes the verdict paragraph, citation ledger, freeze-frame splice,
+-- and footer itself — plus the ascii table via the options variant.
 runLedgerScenario :: Bool -> Text -> Property () -> IO ()
 runLedgerScenario withAscii title prop = do
   report <- check defaultSettings prop
-  T.putStrLn ("\n━━━━━ scenario " <> title <> " ━━━━━")
-  case report.result of
-    Counterexample {notes, events} -> do
-      let trace = Trace.build notes events
-      case Blame.analyze trace of
-        Nothing -> T.putStrLn "(no blame: nothing to cite)"
-        Just blame -> do
-          let render opts = T.putStrLn (docToAnsi (Ledger.ledgerDoc opts trace blame) <> "\n")
-          case Verdict.verdictDoc Phrase.english Glyph.unicode trace blame of
-            Nothing -> pure ()
-            Just verdict -> T.putStrLn (docToAnsi verdict <> "\n")
-          T.putStrLn "── citation ledger ──"
-          render (Ledger.defaultOptions Glyph.unicode)
-          if withAscii
-            then do
-              T.putStrLn "── citation ledger · ascii ──"
-              render (Ledger.defaultOptions Glyph.ascii)
-            else pure ()
-    _ -> pure ()
-  T.putStrLn "── today's wired renderer ──"
-  T.putStrLn =<< renderReportRichAnsi report
+  showReport title report
+  if withAscii
+    then do
+      T.putStrLn "── ascii ──"
+      T.putStrLn . Glyph.sevenBitClean
+        =<< renderReportRichAnsiWith (Ledger.defaultOptions Glyph.ascii) report
+    else pure ()
 
 -- | Naive count-with-noun pluralization for demo messages:
 -- @pluralize 1 "apple" = "1 apple"@, @pluralize 3 "apple" = "3 apples"@.

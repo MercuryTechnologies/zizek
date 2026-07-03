@@ -17,7 +17,7 @@ where
 import Data.Char qualified as Char
 import Data.Text (Text)
 import Data.Text qualified as T
-import Hegel.Report.Blame (Fact (..))
+import Hegel.Report.Blame (Fact (..), Phenomenon (..))
 
 -- | Fact-clause fields take the /resolved display name/ of the fact's value.
 data PhraseTable = PhraseTable
@@ -53,7 +53,10 @@ data PhraseTable = PhraseTable
     -- @\"1 lifeline elided (h₂ · 1 step)\"@.
     elidedLifelines :: Int -> [Text] -> Maybe Int -> Text,
     -- | The numeric citation fallback (sans sigil): @\"cites 5, 4, 1\"@.
-    cites :: [Text] -> Text
+    cites :: [Text] -> Text,
+    -- | The headline chip for a matched phenomenon:
+    -- @\"pattern: use-after-consume\"@.
+    phenomenon :: Phenomenon -> Text
   }
 
 english :: PhraseTable
@@ -86,7 +89,9 @@ english =
           <> T.unwords names
           <> maybe "" (\k -> " · " <> counted k "step") mSteps
           <> ")",
-      cites = \steps -> "cites " <> T.intercalate ", " steps
+      cites = \steps -> "cites " <> T.intercalate ", " steps,
+      phenomenon = \case
+        UseAfterConsume -> "pattern: use-after-consume"
     }
   where
     counted :: Int -> Text -> Text

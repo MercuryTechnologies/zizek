@@ -1,14 +1,14 @@
-# Stateful trace rendering — design explorations
+# Stateful trace rendering — design explorations & deferred work
 
-> **Roadmap: next up** — begins once the final pieces of the
-> profiling/optimization pass (`notes/decisions/profiling-harness.md`) land.
-
-Design-session record (2026-07-02), **nothing here is implemented**. Companion
-to `notes/decisions/stateful-reporting.md`, which records what *is* built
-(plain, rich-Timeline, rich-Aggregate). This note captures a renderer design
-space for the next generation of stateful failure reports: conveying the
-*progression* of events and the *causal chain* that produced a failure, not
-just the step list.
+Design-session record (2026-07-02). **The first slice shipped** — event
+stream, trace/blame IR, citation ledger, verdict paragraph, composed report,
+`Pool.transfer`/`named` — and is recorded in
+`notes/decisions/stateful-trace-rendering.md` (decisions there are not to be
+re-litigated; the "landed" paragraphs in the decided-plan section below are
+the fuller build log). This note remains the home of the design space, the
+survey material, and everything **deferred**: R1 lanes, R2 obligation lanes
+(zizek-side; see N3), F2–F5, O1–O5, the N-series, the recorded code debts
+(A2/A4/A5), and the engine asks (`pool_remove`).
 
 Running example used throughout: a file-handle machine where `open` puts a
 handle in a `Hegel.Pool`, `write`/`read`/`transfer` draw from it, `close`

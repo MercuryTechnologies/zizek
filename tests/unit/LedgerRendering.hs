@@ -21,10 +21,12 @@ import Hegel.Report
     NoteKind (..),
     Report (..),
     Result (..),
+    Stats (..),
     Var (..),
+    renderReportRich,
   )
 import Hegel.Report.Ann (docToText)
-import Hegel.Report.Blame (Blame)
+import Hegel.Report.Blame (Blame, Citation (..), Fact (..))
 import Hegel.Report.Blame qualified as Blame
 import Hegel.Report.Glyph (Cell (..), GlyphTable (..))
 import Hegel.Report.Glyph qualified as Glyph
@@ -36,6 +38,7 @@ import Hegel.Report.Verdict qualified as Verdict
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
+import System.Environment (setEnv, unsetEnv)
 import Test.Hspec
 
 -- ---------------------------------------------------------------------------
@@ -249,7 +252,60 @@ spec = do
       let railCells = [RailOrigin, RailHoriz, RailVert, RailElided, RailTeeDown, RailCornerDown, RailCornerUp, RailArrow]
       distinctUnder Glyph.ascii railCells `shouldBe` True
 
+  describe "composed report (the wired ladder)" do
+    it "rung 1: a pool-free stateful failure keeps today's layout exactly" do
+      let report = reportOf [] (fst uacFixture)
+      out <- renderReportRich report
+      out `shouldNotSatisfy` T.isInfixOf "◀"
+      out `shouldNotSatisfy` T.isInfixOf "was consumed at"
+      out `shouldNotSatisfy` T.isInfixOf "stored:"
+
+    it "rung 3: pool context composes verdict, ledger, splice, and footer" do
+      let (notes, events) = uacFixture
+          report = (reportOf events notes) {databaseKey = Just "some-key"}
+      out <- renderReportRich report
+      out `shouldSatisfy` T.isInfixOf "Step 8 (read) touched v₁ after its death"
+      out `shouldSatisfy` T.isInfixOf "◀─────╯"
+      -- The freeze-frame panel (fixture notes carry no locs, so its lines
+      -- are the structured fallbacks).
+      out `shouldSatisfy` T.isInfixOf "  Step 8: read"
+      out `shouldSatisfy` T.isInfixOf "✗ read returned stale bytes"
+      out `shouldSatisfy` T.isInfixOf "stored: some-key — replays automatically next run"
+
+    it "the footer only renders when a database key exists" do
+      out <- renderReportRich (uncurry (flip reportOf) uacFixture)
+      out `shouldNotSatisfy` T.isInfixOf "stored:"
+
+  describe "glyph preference" do
+    it "HEGEL_GLYPHS overrides detection in both directions" do
+      setEnv "HEGEL_GLYPHS" "ascii"
+      p1 <- Glyph.preference
+      setEnv "HEGEL_GLYPHS" "unicode"
+      p2 <- Glyph.preference
+      unsetEnv "HEGEL_GLYPHS"
+      (p1, p2) `shouldBe` (Glyph.PreferAscii, Glyph.PreferUnicode)
+
+    it "sevenBitClean transliterates known glyphs and escapes only the unknown" do
+      -- Cells and chrome map to their ascii forms; genuinely foreign user
+      -- text (here: a CJK character) falls back to an escape.
+      Glyph.sevenBitClean "✗ v₁ ┃ · — 好" `shouldBe` "x v1 | . -- \\x597d"
+
   describe "end to end (engine)" do
+    it "transfer reconnects the chain on a real machine (citations reach pre-transfer steps)" do
+      report <- check defaultSettings (Stateful.run transferMachine)
+      case report.result of
+        Counterexample {notes, events} -> do
+          let t = Trace.build notes events
+          case Blame.analyze t of
+            Nothing -> expectationFailure "expected blame"
+            Just b -> do
+              -- The failing read touches the closed-pool var; the chain must
+              -- cite the open-pool var's consumption *and* its birth.
+              let facts = [c.fact | c <- Blame.citations b]
+              [() | ConsumedAt _ <- facts] `shouldSatisfy` (not . null)
+              [() | BornAt _ <- facts] `shouldSatisfy` (not . null)
+        other -> expectationFailure ("expected Counterexample, got: " <> show other)
+
     it "a real pool machine renders a ledger with a failure row and rail" do
       report <- check defaultSettings (Stateful.run eventfulMachine)
       case report.result of
@@ -263,6 +319,22 @@ spec = do
               out `shouldSatisfy` T.isInfixOf "●"
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
+-- | A synthetic stateful counterexample report over the fixture streams.
+reportOf :: [Event] -> [Note] -> Report
+reportOf events notes =
+  Report
+    { result =
+        Counterexample
+          { message = "read returned stale bytes",
+            notes,
+            events,
+            loc = Nothing,
+            diff = Nothing
+          },
+      stats = Stats {valid = 1, invalid = 0},
+      databaseKey = Nothing
+    }
+
 -- | Undo paragraph reflow for comparison.
 unwrap :: Text -> Text
 unwrap = T.unwords . T.words
@@ -271,6 +343,31 @@ unwrap = T.unwords . T.words
 distinctUnder :: GlyphTable -> [Cell] -> Bool
 distinctUnder table cells =
   and [table.cell a /= table.cell b | (i, a) <- zip [0 :: Int ..] cells, (j, b) <- zip [0 ..] cells, i /= j]
+
+-- | A two-pool transfer machine: read_closed fails on any transferred
+-- handle, so the minimal counterexample is open → close (transfer) → read.
+transferMachine :: Stateful.Machine (Pool.Pool Int, Pool.Pool Int) IO
+transferMachine =
+  Stateful.Machine
+    { initial = do
+        env <- askEnv
+        open <- liftIO (Pool.named "h" env.testCase)
+        closed <- liftIO (Pool.named "c" env.testCase)
+        pure (open, closed),
+      rules =
+        [ Stateful.Rule "open" \m@(open, _) -> do
+            liftIO (Pool.add open 1)
+            pure m,
+          Stateful.Rule "close" \m@(open, closed) -> do
+            _ <- forAll (Pool.transfer open closed)
+            pure m,
+          Stateful.Rule "read_closed" \m@(_, closed) -> do
+            _ <- forAll (Pool.valuesReusable closed)
+            assert False "reads of closed handles always fail (bug)"
+            pure m
+        ],
+      invariants = []
+    }
 
 -- ---------------------------------------------------------------------------
 -- Engine fixture (the TraceIR machine, kept local so the suites stay

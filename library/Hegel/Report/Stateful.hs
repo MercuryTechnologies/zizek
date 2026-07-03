@@ -6,6 +6,7 @@
 -- @notes\/decisions\/stateful-reporting.md@.
 module Hegel.Report.Stateful
   ( statefulDoc,
+    failingGroupDoc,
     noteFiles,
     isStepJournal,
   )
@@ -75,6 +76,15 @@ statefulDoc decls message notes loc diff
         ( maybe [] (\d -> [PP.vsep (diffDocs d)]) diff
             <> maybe [] (\l -> [PP.annotate LocAnn ("at" <+> locDoc l)]) loc
         )
+
+-- | The failing step alone, spliced — the composed trace report's
+-- freeze-frame panel (the ledger carries every other step's story).
+-- 'Nothing' when no group carries the in-band 'Failure'.
+failingGroupDoc :: Declarations -> [Note] -> Maybe (Doc Ann)
+failingGroupDoc decls notes =
+  case [g | g <- fst (toGroups notes), groupHasFailure g] of
+    (g : _) -> Just (groupDoc decls g)
+    [] -> Nothing
 
 -- | Does this group's subtree carry the in-band 'Failure'?
 groupHasFailure :: Group -> Bool

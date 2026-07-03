@@ -56,11 +56,11 @@ spec :: Spec
 spec = do
   describe "renderReport" $ do
     it "renders a passing run" $ do
-      renderReport Report {result = Ok, stats = Stats {valid = 100, invalid = 0}}
+      renderReport Report {result = Ok, stats = Stats {valid = 100, invalid = 0}, databaseKey = Nothing}
         `shouldBe` "OK, passed 100 tests"
 
     it "renders discard counts" $ do
-      renderReport Report {result = Ok, stats = Stats {valid = 100, invalid = 3}}
+      renderReport Report {result = Ok, stats = Stats {valid = 100, invalid = 3}, databaseKey = Nothing}
         `shouldBe` "OK, passed 100 tests (3 discarded)"
 
     it "renders a counterexample with numbered draws, footnotes last" $ do
@@ -77,7 +77,7 @@ spec = do
                 loc = Just aLoc,
                 diff = Nothing
               }
-          report = Report {result, stats = Stats {valid = 12, invalid = 1}}
+          report = Report {result, stats = Stats {valid = 12, invalid = 1}, databaseKey = Nothing}
       T.lines (renderReport report)
         `shouldBe` [ "failed after 12 tests (1 discarded)",
                      "sum stays small",
@@ -97,7 +97,7 @@ spec = do
                 loc = Just aLoc,
                 diff = Just [LineRemoved "old", LineAdded "new"]
               }
-          report = Report {result, stats = Stats {valid = 5, invalid = 0}}
+          report = Report {result, stats = Stats {valid = 5, invalid = 0}, databaseKey = Nothing}
       T.lines (renderReport report)
         `shouldBe` [ "failed after 5 tests",
                      "=== failed, values are not equal",
@@ -131,7 +131,7 @@ spec = do
                 loc = Just aLoc,
                 diff = Just [LineRemoved "Stack [ 1 , 0 ]", LineAdded "Stack [ 0 , 1 ]"]
               }
-          report = Report {result, stats = Stats {valid = 5038, invalid = 0}}
+          report = Report {result, stats = Stats {valid = 5038, invalid = 0}, databaseKey = Nothing}
       T.lines (renderReport report)
         `shouldBe` [ "failed after 5038 tests",
                      "  Initial invariant check.",
@@ -160,7 +160,7 @@ spec = do
                 loc = Just aLoc,
                 diff = Nothing
               }
-          report = Report {result, stats = Stats {valid = 11, invalid = 0}}
+          report = Report {result, stats = Stats {valid = 11, invalid = 0}, databaseKey = Nothing}
       T.lines (renderReport report)
         `shouldBe` [ "failed after 11 tests",
                      "  Initial invariant check.",
@@ -184,7 +184,7 @@ spec = do
                 loc = Nothing,
                 diff = Nothing
               }
-          report = Report {result, stats = Stats {valid = 1, invalid = 0}}
+          report = Report {result, stats = Stats {valid = 1, invalid = 0}, databaseKey = Nothing}
       T.lines (renderReport report)
         `shouldBe` [ "failed after 1 tests",
                      "boom",
@@ -209,7 +209,7 @@ spec = do
                 loc = Just aLoc,
                 diff = Nothing
               }
-          report = Report {result, stats = Stats {valid = 1, invalid = 0}}
+          report = Report {result, stats = Stats {valid = 1, invalid = 0}, databaseKey = Nothing}
       T.lines (renderReport report)
         `shouldBe` [ "failed after 1 tests",
                      "  Step 1: push",
@@ -233,7 +233,7 @@ spec = do
                 loc = Nothing,
                 diff = Nothing
               }
-          report = Report {result, stats = Stats {valid = 1, invalid = 0}}
+          report = Report {result, stats = Stats {valid = 1, invalid = 0}, databaseKey = Nothing}
       T.lines (renderReport report)
         `shouldBe` [ "failed after 1 tests",
                      "boom",
@@ -242,7 +242,7 @@ spec = do
                    ]
 
     it "renders gave-up and aborted verdicts" $ do
-      renderReport Report {result = GaveUp "no valid examples", stats = Stats {valid = 0, invalid = 7}}
+      renderReport Report {result = GaveUp "no valid examples", stats = Stats {valid = 0, invalid = 7}, databaseKey = Nothing}
         `shouldBe` "gave up after 0 tests (7 discarded): no valid examples"
       renderReport (aborted (UnhealthyInput "filter too much"))
         `shouldBe` "aborted: health check failed: filter too much"
@@ -311,7 +311,7 @@ spec = do
                 loc = Nothing,
                 diff = Just [LineRemoved "old", LineAdded "new"]
               }
-          report = Report {result, stats = Stats {valid = 1, invalid = 0}}
+          report = Report {result, stats = Stats {valid = 1, invalid = 0}, databaseKey = Nothing}
       let plain = T.unpack (renderReport report)
           ansi = T.unpack (renderReportAnsi report)
       ansi `shouldNotBe` plain
@@ -328,7 +328,7 @@ spec = do
                 loc = Nothing,
                 diff = Nothing
               }
-          report = Report {result, stats = Stats {valid = 3, invalid = 0}}
+          report = Report {result, stats = Stats {valid = 3, invalid = 0}, databaseKey = Nothing}
       rich <- renderReportRich report
       -- The note's location sits inside the `spec` declaration of this very
       -- file, so the source listing should include the marked line.
@@ -350,7 +350,7 @@ spec = do
                 loc = Just aLoc,
                 diff = Nothing
               }
-          report = Report {result, stats = Stats {valid = 4, invalid = 0}}
+          report = Report {result, stats = Stats {valid = 4, invalid = 0}, databaseKey = Nothing}
       rich <- renderReportRich report
       rich `shouldBe` renderReport report
 
@@ -369,7 +369,7 @@ spec = do
                 loc = Just failLoc,
                 diff = Nothing
               }
-          report = Report {result, stats = Stats {valid = 3, invalid = 0}}
+          report = Report {result, stats = Stats {valid = 3, invalid = 0}, databaseKey = Nothing}
       rich <- renderReportRich report
       -- The step header stays on the spine; the draw and the failure splice
       -- into this very declaration, under one listing header.
@@ -393,7 +393,7 @@ spec = do
                 loc = Just goodLoc,
                 diff = Nothing
               }
-          report = Report {result, stats = Stats {valid = 3, invalid = 0}}
+          report = Report {result, stats = Stats {valid = 3, invalid = 0}, databaseKey = Nothing}
       rich <- renderReportRich report
       -- The failure splices; the unreadable draw keeps its structured line.
       ("stateful-mix-marker" `T.isInfixOf` rich) `shouldBe` True
@@ -418,7 +418,7 @@ spec = do
                 loc = Nothing,
                 diff = Nothing
               }
-          report = Report {result, stats = Stats {valid = 3, invalid = 0}}
+          report = Report {result, stats = Stats {valid = 3, invalid = 0}, databaseKey = Nothing}
       rich <- renderReportRich report
       rich `shouldBe` renderReport report
 
@@ -459,13 +459,14 @@ spec = do
 
   describe "throwOnFailure" $ do
     it "is silent on Ok" $ do
-      throwOnFailure Report {result = Ok, stats = Stats {valid = 1, invalid = 0}}
+      throwOnFailure Report {result = Ok, stats = Stats {valid = 1, invalid = 0}, databaseKey = Nothing}
 
     it "throws PropertyFailed on a counterexample" $ do
       let report =
             Report
               { result = Counterexample {message = "boom", notes = [], events = [], loc = Nothing, diff = Nothing},
-                stats = Stats {valid = 1, invalid = 0}
+                stats = Stats {valid = 1, invalid = 0},
+                databaseKey = Nothing
               }
       throwOnFailure report `shouldThrow` \PropertyFailed {message} -> message == "boom"
 
