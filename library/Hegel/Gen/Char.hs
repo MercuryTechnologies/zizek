@@ -33,8 +33,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Internal.CBOR (ParseError (..), hegelText)
-import Hegel.Internal.Schema (CharacterFields (..), TextSchema (..), defaultCharacterFields)
+import Hegel.Internal.Foreign.CBOR (ParseError (..), hegelText)
+import Hegel.Internal.Foreign.Schema (CharacterFields (..), TextSchema (..), defaultCharacterFields)
 
 -- | Builder for a single Unicode character. Character constraints are
 -- optional; absent fields impose no restriction beyond surrogate exclusion.

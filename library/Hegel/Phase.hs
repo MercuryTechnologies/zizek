@@ -5,7 +5,7 @@ module Hegel.Phase
 where
 
 import Data.Word (Word32)
-import Hegel.Internal.FFI
+import Hegel.Internal.Foreign.Raw
   ( pattern HEGEL_PHASE_EXPLICIT,
     pattern HEGEL_PHASE_GENERATE,
     pattern HEGEL_PHASE_REUSE,

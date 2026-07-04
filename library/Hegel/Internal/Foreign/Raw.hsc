@@ -25,7 +25,7 @@
 -- fallible call overwrites the stored message.
 --
 -- The runner drives a whole run from one bound thread (see 'withContext').
-module Hegel.Internal.FFI
+module Hegel.Internal.Foreign.Raw
   ( -- * Opaque handle phantoms
     -- $handles
     HegelContext,

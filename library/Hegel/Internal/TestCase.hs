@@ -28,9 +28,9 @@ import Data.Sequence qualified as Seq
 import Data.Text (Text)
 import Foreign (Ptr, nullPtr)
 import Foreign.C.Types (CInt)
-import Hegel.Internal.CString qualified as CString
 import Hegel.Internal.Event (Event)
-import Hegel.Internal.FFI
+import Hegel.Internal.Foreign.CString qualified as CString
+import Hegel.Internal.Foreign.Raw
 import Hegel.Internal.Tick qualified as Tick
 import UnliftIO.IORef (IORef, newIORef)
 import Witch qualified

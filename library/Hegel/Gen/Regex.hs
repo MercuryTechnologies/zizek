@@ -22,8 +22,8 @@ import Data.Text (Text)
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Char (CharBuilder, toCharacterFields)
 import Hegel.Gen.Internal (basic)
-import Hegel.Internal.CBOR (ParseError (..), hegelText)
-import Hegel.Internal.Schema qualified as Schema
+import Hegel.Internal.Foreign.CBOR (ParseError (..), hegelText)
+import Hegel.Internal.Foreign.Schema qualified as Schema
 
 -- | Builder for a regex-constrained 'Text' generator.
 data RegexBuilder = RegexBuilder

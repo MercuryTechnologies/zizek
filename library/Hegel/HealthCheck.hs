@@ -5,7 +5,7 @@ module Hegel.HealthCheck
 where
 
 import Data.Word (Word32)
-import Hegel.Internal.FFI
+import Hegel.Internal.Foreign.Raw
   ( pattern HEGEL_HC_FILTER_TOO_MUCH,
     pattern HEGEL_HC_LARGE_INITIAL_TEST_CASE,
     pattern HEGEL_HC_TEST_CASES_TOO_LARGE,

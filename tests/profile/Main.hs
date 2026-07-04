@@ -210,7 +210,7 @@ baselineProperty = void (forAllSilent (Gen.int & Gen.build))
 
 -- | Per-draw round-trip cost with minimal payloads: schema CBOR encode,
 -- @hegel_generate@, result decode, and the marshalling copies in
--- 'Hegel.Internal.FFI.generate'. 'forAllSilent' keeps journaling out of the
+-- 'Hegel.Internal.Foreign.Raw.generate'. 'forAllSilent' keeps journaling out of the
 -- measurement.
 drawsProperty :: Property ()
 drawsProperty = replicateM_ 100 (forAllSilent smallInt)

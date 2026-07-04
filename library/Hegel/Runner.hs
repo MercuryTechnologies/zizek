@@ -19,9 +19,9 @@ import Foreign.C.Types (CBool (..), CInt, CSize)
 import Hegel.Assertion (originOf)
 import Hegel.Database (Database (..))
 import Hegel.HealthCheck (HealthCheck)
-import Hegel.Internal.CString qualified as CString
 import Hegel.Internal.Control (ControlSignal (..), MalformedTest, catchControl, isControlSignal)
-import Hegel.Internal.FFI
+import Hegel.Internal.Foreign.CString qualified as CString
+import Hegel.Internal.Foreign.Raw
 import Hegel.Internal.TestCase (Handle (..), Status (..), TestCase, markComplete, mkTestCase)
 import Hegel.Internal.Tick qualified as Tick
 import Hegel.Phase (Phase)

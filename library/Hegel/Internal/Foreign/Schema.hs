@@ -11,7 +11,7 @@
 -- Records are accessed via 'OverloadedRecordDot'; field selectors are
 -- suppressed ('NoFieldSelectors') so that field names don't escape into
 -- call sites and conflict with identically-named builder modifier functions.
-module Hegel.Internal.Schema
+module Hegel.Internal.Foreign.Schema
   ( -- * Leaf schemas (produced by generator modules)
     BoolSchema,
     bool,
@@ -54,7 +54,7 @@ import CBOR.Value (Value (..))
 import Data.Default.Class (Default (..))
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
-import Hegel.Internal.CBOR (buildMap, (.=), (.=?))
+import Hegel.Internal.Foreign.CBOR (buildMap, (.=), (.=?))
 import Prelude hiding (map)
 
 -- | Boolean schema.

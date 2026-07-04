@@ -5,7 +5,7 @@ module Hegel.Verbosity
 where
 
 import Foreign.C.Types (CInt)
-import Hegel.Internal.FFI
+import Hegel.Internal.Foreign.Raw
   ( pattern HEGEL_VERBOSITY_DEBUG,
     pattern HEGEL_VERBOSITY_NORMAL,
     pattern HEGEL_VERBOSITY_QUIET,

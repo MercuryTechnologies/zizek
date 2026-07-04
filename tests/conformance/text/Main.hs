@@ -8,8 +8,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Generics (Generic)
 import Hegel.Gen.Internal (basic)
-import Hegel.Internal.CBOR (ParseError, hegelText)
-import Hegel.Internal.Schema (CharacterFields (..), TextSchema (..))
+import Hegel.Internal.Foreign.CBOR (ParseError, hegelText)
+import Hegel.Internal.Foreign.Schema (CharacterFields (..), TextSchema (..))
 
 data Params = Params
   { pMinSize :: Int,

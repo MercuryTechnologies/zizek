@@ -25,8 +25,8 @@ import Data.Maybe (isJust)
 import GHC.Float (double2Float, float2Double)
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Internal.CBOR (ParseError (..))
-import Hegel.Internal.Schema (FloatSchema (..))
+import Hegel.Internal.Foreign.CBOR (ParseError (..))
+import Hegel.Internal.Foreign.Schema (FloatSchema (..))
 
 data FloatBuilder a = FloatBuilder
   { bMin :: Maybe a,
