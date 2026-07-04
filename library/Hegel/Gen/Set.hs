@@ -13,7 +13,7 @@ where
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Hegel.Collection qualified as Collection
-import Hegel.Gen.Builder (Build (..), HasSize (..), requireOrdered)
+import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw)
 import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
 
@@ -32,29 +32,26 @@ instance HasSize (SetBuilder a) where
   maxSize n b = b {sMaxSize = Just n}
 
 instance (Ord a) => Build (SetBuilder a) (Set a) where
-  build b = case b.sMaxSize of
-    Just hi -> requireOrdered "Gen.set" b.sMinSize hi go
-    Nothing -> go
-    where
-      go = Draw $ \tc -> do
-        startSpan tc LabelList
-        -- See Note [Variable-size mode required for reject] in Hegel.Collection.
-        let poolMax = case b.sMaxSize of
-              Nothing -> Nothing
-              Just mx -> Just (Prelude.max (b.sMinSize + 1) mx)
-        coll <- Collection.new tc b.sMinSize poolMax
-        let loop acc = do
-              keepGoing <- Collection.more coll
-              if not keepGoing
-                then pure acc
-                else do
-                  x <- draw tc b.sElement
-                  if Set.member x acc
-                    then Collection.reject coll (Just "duplicate element") *> loop acc
-                    else loop (Set.insert x acc)
-        result <- loop Set.empty
-        let trimmed = case b.sMaxSize of
-              Just mx | Set.size result > mx -> Set.take mx result
-              _ -> result
-        stopSpan tc False
-        pure trimmed
+  build b = Draw $ \tc -> do
+    checkSizeBounds "Hegel.Gen.Set" b.sMinSize b.sMaxSize
+    startSpan tc LabelList
+    -- See Note [Variable-size mode required for reject] in Hegel.Collection.
+    let poolMax = case b.sMaxSize of
+          Nothing -> Nothing
+          Just mx -> Just (Prelude.max (b.sMinSize + 1) mx)
+    coll <- Collection.new tc b.sMinSize poolMax
+    let loop acc = do
+          keepGoing <- Collection.more coll
+          if not keepGoing
+            then pure acc
+            else do
+              x <- draw tc b.sElement
+              if Set.member x acc
+                then Collection.reject coll (Just "duplicate element") *> loop acc
+                else loop (Set.insert x acc)
+    result <- loop Set.empty
+    let trimmed = case b.sMaxSize of
+          Just mx | Set.size result > mx -> Set.take mx result
+          _ -> result
+    stopSpan tc False
+    pure trimmed

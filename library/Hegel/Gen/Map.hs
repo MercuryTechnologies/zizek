@@ -13,7 +13,7 @@ where
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Hegel.Collection qualified as Collection
-import Hegel.Gen.Builder (Build (..), HasSize (..), requireOrdered)
+import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw)
 import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
 import Prelude hiding (map)
@@ -34,31 +34,28 @@ instance HasSize (MapBuilder k v) where
   maxSize n b = b {mMaxSize = Just n}
 
 instance (Ord k) => Build (MapBuilder k v) (Map k v) where
-  build b = case b.mMaxSize of
-    Just hi -> requireOrdered "Gen.map" b.mMinSize hi go
-    Nothing -> go
-    where
-      go = Draw $ \tc -> do
-        startSpan tc LabelMap
-        -- See Note [Variable-size mode required for reject] in Hegel.Collection.
-        let poolMax = case b.mMaxSize of
-              Nothing -> Nothing
-              Just mx -> Just (Prelude.max (b.mMinSize + 1) mx)
-        coll <- Collection.new tc b.mMinSize poolMax
-        let loop acc = do
-              keepGoing <- Collection.more coll
-              if not keepGoing
-                then pure acc
+  build b = Draw $ \tc -> do
+    checkSizeBounds "Hegel.Gen.Map" b.mMinSize b.mMaxSize
+    startSpan tc LabelMap
+    -- See Note [Variable-size mode required for reject] in Hegel.Collection.
+    let poolMax = case b.mMaxSize of
+          Nothing -> Nothing
+          Just mx -> Just (Prelude.max (b.mMinSize + 1) mx)
+    coll <- Collection.new tc b.mMinSize poolMax
+    let loop acc = do
+          keepGoing <- Collection.more coll
+          if not keepGoing
+            then pure acc
+            else do
+              k <- draw tc b.mKeys
+              if Map.member k acc
+                then Collection.reject coll (Just "duplicate key") *> loop acc
                 else do
-                  k <- draw tc b.mKeys
-                  if Map.member k acc
-                    then Collection.reject coll (Just "duplicate key") *> loop acc
-                    else do
-                      v <- draw tc b.mValues
-                      loop (Map.insert k v acc)
-        result <- loop Map.empty
-        let trimmed = case b.mMaxSize of
-              Just mx | Map.size result > mx -> Map.take mx result
-              _ -> result
-        stopSpan tc False
-        pure trimmed
+                  v <- draw tc b.mValues
+                  loop (Map.insert k v acc)
+    result <- loop Map.empty
+    let trimmed = case b.mMaxSize of
+          Just mx | Map.size result > mx -> Map.take mx result
+          _ -> result
+    stopSpan tc False
+    pure trimmed

@@ -9,7 +9,9 @@ module Hegel.Gen.Bool
   )
 where
 
-import Hegel.Gen.Builder (Build (..))
+import Control.Exception (throwIO)
+import Data.Text qualified as T
+import Hegel.Gen.Builder (Build (..), GenValidationError (..))
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (drawBool)
 
@@ -24,10 +26,23 @@ newtype BoolBuilder = BoolBuilder
 bool :: BoolBuilder
 bool = BoolBuilder {probability = 0.5}
 
--- | Bias the draw toward 'True' with the given probability (clamped to
--- @[0,1]@ by the engine).
+-- | Bias the draw toward 'True' with the given probability, which must be in
+-- @[0,1]@ and not NaN.
 weighted :: Double -> BoolBuilder -> BoolBuilder
 weighted p b = b {probability = p}
 
 instance Build BoolBuilder Bool where
-  build b = Draw \tc -> drawBool tc b.probability
+  build b = Draw \tc -> do
+    checkProbability b.probability
+    drawBool tc b.probability
+
+-- | Require @p@ to be a valid probability: in @[0,1]@ and not NaN.
+checkProbability :: Double -> IO ()
+checkProbability p
+  | isNaN p || p < 0 || p > 1 =
+      throwIO
+        GenValidationError
+          { context = "Hegel.Gen.Bool",
+            detail = "probability (" <> T.pack (show p) <> ") outside [0, 1]"
+          }
+  | otherwise = pure ()

@@ -19,8 +19,8 @@ import Control.Exception (SomeException, finally, throwIO, try)
 import Data.Either (isLeft)
 import Data.Function ((&))
 import Data.Int (Int64)
-import Data.Word (Word64)
-import Foreign (Ptr, alloca, nullPtr, peek)
+import Data.Word (Word64, Word8)
+import Foreign (Ptr, alloca, castPtr, nullPtr, peek, poke)
 import Foreign.C.String (withCString)
 import Foreign.C.Types (CBool (..), CDouble (..))
 import Hegel.Gen qualified as Gen
@@ -48,6 +48,7 @@ spec = do
   genMachinerySpec
   completionSpec
   asyncTeardownSpec
+  slotSpec
   wireEnumCoverageSpec
 
 -- * Helpers over the out-parameter calling convention
@@ -281,3 +282,25 @@ asyncTeardownSpec = describe "async teardown" $ do
           _ <- drawBooleanRaw ctx tc
           throwIO (userError "bail mid-case")
         r `shouldSatisfy` isLeft
+
+-- | 'withSlotOf'\/'withSlotBytes' assert the pointee fits the shared 'Slot'
+-- buffer rather than silently overrunning it (the mistake the UUID capacity
+-- near-miss demonstrated — see 'Slot's haddock). Confirms the guard actually
+-- fires, not just that ordinary in-bounds usage still works.
+slotSpec :: Spec
+slotSpec = describe "Slot capacity guard" $ do
+  it "withSlotOf round-trips an in-bounds Storable value" $ do
+    slot <- newSlot
+    withSlotOf slot \p -> poke p (12345 :: Int64)
+    v <- withSlotOf slot (peek :: Ptr Int64 -> IO Int64)
+    v `shouldBe` 12345
+
+  it "withSlotBytes accepts exactly the slot's capacity" $ do
+    slot <- newSlot
+    withSlotBytes 16 slot \p -> poke (castPtr p :: Ptr Word8) 0xAB
+    v <- withSlotBytes 16 slot (peek . castPtr :: Ptr Word8 -> IO Word8)
+    v `shouldBe` 0xAB
+
+  it "withSlotBytes rejects a size larger than the slot's capacity" $ do
+    slot <- newSlot
+    (withSlotBytes 17 slot (\_ -> pure ()) :: IO ()) `shouldThrow` anyErrorCall

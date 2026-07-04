@@ -96,6 +96,7 @@ library
     Hegel.Gen.IntSet
     Hegel.Gen.Integer
     Hegel.Gen.Internal
+    Hegel.Gen.Internal.String
     Hegel.Gen.List
     Hegel.Gen.Map
     Hegel.Gen.Regex
@@ -199,6 +200,7 @@ test-suite unit
     ControlSignals
     DatabaseReplay
     Finalizers
+    GenValidation
     Golden
     Integrations
     KeyedProperties

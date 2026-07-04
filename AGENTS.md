@@ -81,6 +81,34 @@ The `Build`, `HasMin`, `HasMax`, and `HasSize` typeclasses in `Hegel.Gen.Builder
 
 Builder families beyond the sample above: `text`, `char`, `regex`, `uuid`, `uri`/`uriText`, `domain`, and the collections (`list` with `unique`, `set`/`hashSet`/`intSet`, `map`/`hashMap`/`intMap`). Choice and conditional combinators (`oneOf`, `element`, `frequency`, `filtered`, `enum`/`enumBounded`, `maybe`, `either`) are not builders — they produce `Gen` values directly, with no `& Gen.build`.
 
+## Documentation & Comment Style
+
+Haddocks and comments describe what a thing is *for* — its contract — not what the code does. These rules are ordered; earlier ones win.
+
+1. **State the contract, not the mechanism.** What a caller must satisfy and what they get back. Function-internal reasoning ("marshals to an unsigned wire type where a negative `Int` wraps", "NaN compares `False`, so the ordering check would accept it", "GHC folds the check away") belongs in the code, not the Haddock — the reader opens the source for the how.
+
+2. **Never narrate the motivating incident.** The code's present purpose is the whole story. Cut "the exact mistake the UUID near-miss caught", "since libhegel 0.28.0 … rather than clamping", "before this coverage existed, nothing tested…".
+
+3. **Define positively, not by contrast.** State what a thing *is*, not what it isn't. If a contrast isn't load-bearing, the opening positive sentence stands alone — delete the rest.
+   - Bad: `The module defining the builder, not the user-facing @Gen.text@ spelling.`
+   - Good: `The fully-qualified module of the builder that raised it, e.g. @"Hegel.Gen.Text"@.`
+
+4. **Avoid parentheses.** An aside listing examples or caveats reads better as a plain clause, or cut. Keep foreign syntax out (no Rust `4..=255` in a Haskell Haddock — write `in @[4, 255]@`).
+
+5. **Avoid em-dashes; don't launder them.** Swapping an em-dash for a colon or semicolon is not a fix. Rephrase so the sentence runs without the interruption. A comma-offset mid-sentence interjection ("but only when both bounds are set, for builders where…") reads badly — rewrite it to flow.
+
+6. **Prefer one sentence.** Condense before adding a second.
+
+7. **Visual weight matches content weight.** One idea, one line-group. A second sentence that earns its place earns its own paragraph — set it off with a blank `--` line. A sentence that can't justify that weight gets cut.
+   - Bad: `Require @n >= 0@, throwing 'GenValidationError' otherwise. Size bounds marshal to unsigned wire types, where a negative 'Int' silently wraps to a huge value.`
+   - Good: `Require @n >= 0@ for a size or codepoint bound, throwing 'GenValidationError' otherwise.`
+
+8. **No internal references leak into shipped docs.** Never cite `notes/` paths, `AGENTS.md`, or other repo-internal conventions from a Haddock or comment. Point at code and public API only.
+
+9. **Don't restate the module path.** A module under `Hegel.Internal.*` is already marked internal by its name, so it needs no `__Internal module.__` banner or "may change without notice" boilerplate. Lead with the one-line summary of what it provides.
+
+Genuine invariants and warnings stay: why `finally` must guard a buffer free, why an exclusive bound has to be strictly ordered. The test is whether the reader needs it to *use* the thing correctly, not to understand how it works inside.
+
 ## Architecture
 
 ### How It Works

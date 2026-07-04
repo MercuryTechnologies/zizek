@@ -2,26 +2,26 @@
 
 -- | Low-level FFI bindings to @libhegel@ (@hegeltest-c@).
 --
--- __Internal module.__ Implementation substrate of @zizek@ itself, exposed so
--- you can reach past the public API when you must; it is not part of the
--- stable public interface and may change without notice.
---
--- Every @hegel_*@ function from @hegel.h@ is exposed as a
+-- Most @hegel_*@ functions from @hegel.h@ are exposed as a
 -- 'foreign import ccall' declaration together with phantom types representing
 -- handles to C constructs, error-code pattern synonyms, and bracket helpers.
 --
--- __Calling convention__: every @libhegel@ entry point (except
--- 'hegel_context_new' and 'hegel_context_last_error') takes a
--- @hegel_context_t*@ as its first argument and returns a @hegel_result_t@
--- ('HEGEL_OK' is zero; negatives are errors).
+-- Not yet bound: @hegel_generate_date@\/@_time@\/@_datetime@,
+-- @hegel_generate_ipv4@\/@_ipv6@, and @hegel_test_case_clone@.
 --
--- Anything else a call produces (e.g. a handle, a string, a count) is written
--- through a trailing out-parameter.
+-- __Calling convention__: every @libhegel@ entry point takes a
+-- @hegel_context_t*@ as its first argument and returns a @hegel_result_t@,
+-- where 'HEGEL_OK' is zero and negatives are errors.
+--
+-- 'hegel_context_new' and 'hegel_context_last_error' are the exceptions.
+--
+-- Anything else a call produces is written through a trailing out-parameter.
 --
 -- __Error reporting__: a failed call records its diagnostic on the
--- caller-supplied 'HegelContext' rather than in thread-local state; read the
--- most recent message with 'hegel_context_last_error' (or 'throwOnError',
--- which does this for you).
+-- caller-supplied 'HegelContext' rather than in thread-local state.
+--
+-- Read the most recent message with 'hegel_context_last_error', or let
+-- 'throwOnError' read and raise it for you.
 --
 -- A single context must not be used concurrently from multiple threads, as each
 -- fallible call overwrites the stored message.
@@ -58,6 +58,7 @@ module Hegel.Internal.Foreign.Raw
     pattern HEGEL_E_ALREADY_COMPLETE,
     pattern HEGEL_E_NOT_COMPLETE,
     pattern HEGEL_E_INTERNAL,
+    pattern HEGEL_E_CONCURRENT_USE,
 
     -- * Phase bitmask pattern synonyms
     -- $phases
@@ -217,7 +218,8 @@ module Hegel.Internal.Foreign.Raw
     withRun,
     Slot,
     newSlot,
-    withSlot,
+    withSlotOf,
+    withSlotBytes,
     failureReproductionBlob,
     withTestCaseFromBlob,
   )
@@ -345,6 +347,13 @@ instance Exception HegelError where
 --
 -- Match on these directly, or let 'throwOnError' translate any non-zero
 -- code into a 'HegelError'.
+--
+-- 'HEGEL_E_CONCURRENT_USE' is returned by the draw primitives when one
+-- @hegel_test_case_t*@ handle is driven from two threads at once.
+--
+-- This library drives every test case from a single bound thread, so it never
+-- triggers, yet the closed-world guard in @cbits/wire_enum_guard.c@ still
+-- checks it against @hegel.h@.
 
 pattern HEGEL_OK :: CInt
 pattern HEGEL_OK = (#const HEGEL_OK)
@@ -372,6 +381,9 @@ pattern HEGEL_E_NOT_COMPLETE = (#const HEGEL_E_NOT_COMPLETE)
 
 pattern HEGEL_E_INTERNAL :: CInt
 pattern HEGEL_E_INTERNAL = (#const HEGEL_E_INTERNAL)
+
+pattern HEGEL_E_CONCURRENT_USE :: CInt
+pattern HEGEL_E_CONCURRENT_USE = (#const HEGEL_E_CONCURRENT_USE)
 
 -- $phases
 --
@@ -421,6 +433,12 @@ pattern HEGEL_HC_LARGE_INITIAL_TEST_CASE = (#const HEGEL_HC_LARGE_INITIAL_TEST_C
 -- structure it represents (e.g. list, set, map, tuple, filter).
 --
 -- The engine uses these labels to shrink generated values intelligently.
+--
+-- Only the 16 values mirrored by 'Hegel.Internal.DataSource.Label' have a
+-- synonym here: the client-side spans this library itself opens.
+--
+-- Labels 17 through 30 are spans the engine emits internally around its own
+-- typed-draw primitives, so nothing here constructs or matches them.
 
 pattern HEGEL_LABEL_LIST :: Word64
 pattern HEGEL_LABEL_LIST = (#const HEGEL_LABEL_LIST)
@@ -799,7 +817,9 @@ foreign import ccall unsafe "hegel_pool_add"
 
 -- | Draw a variable from the pool.
 --
--- Returns 'HEGEL_E_STOP_TEST' when the pool is empty.
+-- Returns 'HEGEL_E_ASSUME' when the pool is empty, which
+-- 'Hegel.Internal.DataSource.poolGenerate' turns into an
+-- 'Hegel.Internal.Control.AssumeRejected' discard.
 foreign import ccall unsafe "hegel_pool_generate"
   hegel_pool_generate
     :: Ptr HegelContext
@@ -1335,23 +1355,43 @@ withTestCaseFromBlob ctx s blob action =
 -- (of any shape) left behind, and every draw either reads the out-param
 -- only after a successful return code or throws before reading it at all —
 -- there is no path that observes stale content from an earlier use.
---
--- Sized 'max (2 * wordBytes) 16' rather than bare '2 * wordBytes': the
--- two-word structs are always word-sized fields so '2 * wordBytes' alone
--- would suffice for them, but the UUID buffer's 16 bytes is a fixed wire
--- size independent of the host's word width. On 64-bit the two happen to
--- coincide (16 either way); the 'max' makes that a guarantee rather than a
--- coincidence that would silently under-allocate on a 32-bit host.
 newtype Slot = Slot (ForeignPtr Word8)
+
+-- | 'Slot's byte capacity: 'max (2 * wordBytes) 16' rather than bare
+-- @2 * wordBytes@. The two-word result structs are always word-sized fields,
+-- so @2 * wordBytes@ alone would suffice for them, but the UUID buffer's 16
+-- bytes is a fixed wire size independent of the host's word width. On 64-bit
+-- the two happen to coincide (16 either way); the 'max' makes that a
+-- guarantee rather than a coincidence that would silently under-allocate on
+-- a 32-bit host.
+slotCapacity :: Int
+slotCapacity = max (2 * wordBytes) 16
 
 -- | Allocate a 'Slot'. Pinned and GC-managed; no finalizer needed.
 newSlot :: IO Slot
-newSlot = Slot <$> mallocForeignPtrBytes (max (2 * wordBytes) 16)
+newSlot = Slot <$> mallocForeignPtrBytes slotCapacity
 
--- | Use the slot as a single out-parameter. The pointee must fit within the
--- slot's allocation — see 'Slot's haddock for the shapes that covers.
-withSlot :: Slot -> (Ptr a -> IO b) -> IO b
-withSlot (Slot slot) k = withForeignPtr slot (k . castPtr)
+-- | Use the slot as a single out-parameter of a 'Storable' type no larger
+-- than 'slotCapacity'.
+withSlotOf :: forall a b. (Storable a) => Slot -> (Ptr a -> IO b) -> IO b
+withSlotOf (Slot slot) k
+  | sizeOf (undefined :: a) <= slotCapacity = withForeignPtr slot (k . castPtr)
+  | otherwise =
+      error $
+        "withSlotOf: "
+          <> show (sizeOf (undefined :: a))
+          <> "-byte pointee exceeds the "
+          <> show slotCapacity
+          <> "-byte Slot"
+
+-- | Use the slot as a raw byte buffer of the given size, which must not
+-- exceed 'slotCapacity'.
+withSlotBytes :: Int -> Slot -> (Ptr a -> IO b) -> IO b
+withSlotBytes n (Slot slot) k
+  | n <= slotCapacity = withForeignPtr slot (k . castPtr)
+  | otherwise =
+      error $
+        "withSlotBytes: " <> show n <> " bytes exceeds the " <> show slotCapacity <> "-byte Slot"
 
 -- | Byte size of one machine word: a pointer, or a @size_t@ ('CSize')
 -- length — the same width either way on every platform @libhegel@ targets.

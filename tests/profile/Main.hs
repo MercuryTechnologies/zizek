@@ -1,6 +1,5 @@
 -- | Profiling scenarios: deterministic, named workloads that isolate the
--- Haskell-side hot paths. See @notes/decisions/profiling-harness.md@ for the
--- full scenario table and the guide to interpreting the captured profiles.
+-- Haskell-side hot paths.
 --
 -- Run via @just profile-run \<scenario\>@ (smoke test on the dev build),
 -- @just profile-space \<scenario\>@ (.prof\/heap\/eventlog capture on the

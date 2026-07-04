@@ -12,7 +12,7 @@ module Hegel.Gen.Text
 where
 
 import Data.Text (Text)
-import Hegel.Gen.Builder (Build (..), HasSize (..), requireOrdered)
+import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (buildTextGen, drawString)
 import System.IO.Unsafe (unsafePerformIO)
@@ -31,11 +31,10 @@ instance HasSize TextBuilder where
   maxSize n b = b {bMaxSize = Just n}
 
 instance Build TextBuilder Text where
-  build b = case b.bMaxSize of
-    Just hi -> requireOrdered "Gen.text" b.bMinSize hi go
-    Nothing -> go
+  build b = Draw \tc -> do
+    checkSizeBounds "Hegel.Gen.Text" b.bMinSize b.bMaxSize
+    drawString tc genFP
     where
-      go = Draw \tc -> drawString tc genFP
       genFP = unsafePerformIO gen
       {-# NOINLINE genFP #-}
       -- No codec\/codepoint\/category restriction beyond excluding

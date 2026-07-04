@@ -2,8 +2,7 @@
 -- source declaration — the source splice the composed event-log report renders
 -- after the log (the log carries every other step's story). Backs
 -- 'Hegel.Report.renderReportRich' for step journals; eyeball via the @gallery@
--- example (`just gallery`). Layout rationale (and the deleted @Aggregate@
--- alternative) is recorded in @notes\/decisions\/stateful-reporting.md@.
+-- example (`just gallery`).
 module Hegel.Report.Stateful
   ( failingGroupDoc,
     noteFiles,

@@ -14,7 +14,7 @@ import Data.HashSet (HashSet)
 import Data.HashSet qualified as HashSet
 import Data.Hashable (Hashable)
 import Hegel.Collection qualified as Collection
-import Hegel.Gen.Builder (Build (..), HasSize (..), requireOrdered)
+import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw)
 import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
 
@@ -33,29 +33,26 @@ instance HasSize (HashSetBuilder a) where
   maxSize n b = b {sMaxSize = Just n}
 
 instance (Hashable a) => Build (HashSetBuilder a) (HashSet a) where
-  build b = case b.sMaxSize of
-    Just hi -> requireOrdered "Gen.hashSet" b.sMinSize hi go
-    Nothing -> go
-    where
-      go = Draw $ \tc -> do
-        startSpan tc LabelList
-        -- See Note [Variable-size mode required for reject] in Hegel.Collection.
-        let poolMax = case b.sMaxSize of
-              Nothing -> Nothing
-              Just mx -> Just (Prelude.max (b.sMinSize + 1) mx)
-        coll <- Collection.new tc b.sMinSize poolMax
-        let loop acc = do
-              keepGoing <- Collection.more coll
-              if not keepGoing
-                then pure acc
-                else do
-                  x <- draw tc b.sElement
-                  if HashSet.member x acc
-                    then Collection.reject coll (Just "duplicate element") *> loop acc
-                    else loop (HashSet.insert x acc)
-        result <- loop HashSet.empty
-        let trimmed = case b.sMaxSize of
-              Just mx | HashSet.size result > mx -> HashSet.fromList (take mx (HashSet.toList result))
-              _ -> result
-        stopSpan tc False
-        pure trimmed
+  build b = Draw $ \tc -> do
+    checkSizeBounds "Hegel.Gen.HashSet" b.sMinSize b.sMaxSize
+    startSpan tc LabelList
+    -- See Note [Variable-size mode required for reject] in Hegel.Collection.
+    let poolMax = case b.sMaxSize of
+          Nothing -> Nothing
+          Just mx -> Just (Prelude.max (b.sMinSize + 1) mx)
+    coll <- Collection.new tc b.sMinSize poolMax
+    let loop acc = do
+          keepGoing <- Collection.more coll
+          if not keepGoing
+            then pure acc
+            else do
+              x <- draw tc b.sElement
+              if HashSet.member x acc
+                then Collection.reject coll (Just "duplicate element") *> loop acc
+                else loop (HashSet.insert x acc)
+    result <- loop HashSet.empty
+    let trimmed = case b.sMaxSize of
+          Just mx | HashSet.size result > mx -> HashSet.fromList (take mx (HashSet.toList result))
+          _ -> result
+    stopSpan tc False
+    pure trimmed

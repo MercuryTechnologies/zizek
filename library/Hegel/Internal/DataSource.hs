@@ -1,19 +1,18 @@
 -- | The generator-facing engine channel: the per-test-case operations a
 -- generator draws from.
 --
--- __Internal module.__ Implementation substrate of @zizek@ itself, exposed so
--- you can reach past the public API when you must; it is not part of the
--- stable public interface and may change without notice.
+-- These are plain functions over a 'TestCase', with no @DataSource@ typeclass
+-- to implement, since libhegel is the only engine.
 --
--- These are plain functions over a 'TestCase' (libhegel is the only engine, so
--- there is no @DataSource@ typeclass to implement). There is one typed draw
--- per primitive (see 'Hegel.Internal.Foreign.Raw'\'s @$typeddraws@ section);
--- there is no server-side compound generation — lists, sets, maps, tuples,
--- and choices are composed client-side from spans + collections (see
--- "Hegel.Collection" and "Hegel.Gen.Internal"). String draws
--- ('drawString') go through a caller-owned 'HegelStringGenerator' handle
--- built once by a @build*Gen@ constructor and drawn from any number of times.
--- This is also the home for pools and state machines.
+-- Each primitive has one typed draw, and the engine does no compound
+-- generation, so lists, sets, maps, tuples, and choices are composed
+-- client-side from spans and collections in "Hegel.Collection" and
+-- "Hegel.Gen.Internal".
+--
+-- String draws go through a caller-owned 'HegelStringGenerator' handle, built
+-- once by a @build*Gen@ constructor and drawn from any number of times.
+--
+-- Pools and state machines also live here.
 module Hegel.Internal.DataSource
   ( -- * Generation
     HegelStringGenerator,
@@ -61,7 +60,7 @@ module Hegel.Internal.DataSource
   )
 where
 
-import Control.Exception (Exception, throwIO)
+import Control.Exception (Exception, finally, throwIO)
 import Control.Monad (void)
 import Data.Bits (bit, shiftL, shiftR, testBit, (.&.))
 import Data.ByteString (ByteString)
@@ -106,7 +105,7 @@ handleReturnCode tc rc = throwOnError tc.handle.ctx rc
 -- Throws 'TestStopped' on exhaustion.
 drawBool :: TestCase -> Double -> IO Bool
 drawBool tc p =
-  withSlot tc.slot \outValue -> do
+  withSlotOf tc.slot \outValue -> do
     -- has_forced = 0: forced-draw support is unused (see 'hegel_generate_boolean').
     hegel_generate_boolean tc.handle.ctx tc.handle.ptr (CDouble p) (CBool 0) (CBool 0) outValue
       >>= handleReturnCode tc
@@ -123,7 +122,7 @@ drawInteger :: TestCase -> Integer -> Integer -> IO Integer
 drawInteger tc lo hi
   | fitsInt64 lo,
     fitsInt64 hi =
-      withSlot tc.slot \outValue -> do
+      withSlotOf tc.slot \outValue -> do
         hegel_generate_integer tc.handle.ctx tc.handle.ptr (fromInteger lo) (fromInteger hi) outValue
           >>= handleReturnCode tc
         toInteger <$> (peek outValue :: IO Int64)
@@ -203,7 +202,7 @@ data FloatSpec = FloatSpec
 -- Throws 'TestStopped' on exhaustion.
 drawFloat :: TestCase -> Word32 -> FloatSpec -> IO Double
 drawFloat tc width spec =
-  withSlot tc.slot \outValue -> do
+  withSlotOf tc.slot \outValue -> do
     hegel_generate_float
       tc.handle.ctx
       tc.handle.ptr
@@ -224,12 +223,18 @@ drawFloat tc width spec =
 -- Throws 'TestStopped' on exhaustion.
 drawBytes :: TestCase -> Word64 -> Word64 -> IO ByteString
 drawBytes tc lo hi =
-  withSlot tc.slot \outResult -> do
+  withSlotOf tc.slot \outResult -> do
     hegel_generate_bytes tc.handle.ctx tc.handle.ptr lo hi outResult >>= handleReturnCode tc
-    result <- peek outResult
-    bs <- BS.packCStringLen (castPtr result.resultData, fromIntegral result.resultLen)
-    _ <- hegel_generate_bytes_result_free tc.handle.ctx outResult
-    pure bs
+    -- 'finally': a successful draw leaves an engine-allocated buffer that only
+    -- the free call releases, and 'BS.packCStringLen' or an async exception
+    -- can throw between the draw and the free.
+    --
+    -- '_result_free' is documented safe on a zeroed struct, so running it
+    -- unconditionally cannot double-free.
+    let unpack = do
+          result <- peek outResult
+          BS.packCStringLen (castPtr result.resultData, fromIntegral result.resultLen)
+    unpack `finally` void (hegel_generate_bytes_result_free tc.handle.ctx outResult)
 
 -- | Draw a UUID as 16 big-endian bytes. 'Just' pins the RFC 4122 version
 -- nibble (and the RFC 4122 variant nibble); 'Nothing' draws uniformly
@@ -238,7 +243,7 @@ drawBytes tc lo hi =
 -- Throws 'TestStopped' on exhaustion.
 drawUuid :: TestCase -> Maybe Word8 -> IO ByteString
 drawUuid tc mVersion =
-  withSlot tc.slot \outBytes -> do
+  withSlotBytes 16 tc.slot \outBytes -> do
     hegel_generate_uuid
       tc.handle.ctx
       tc.handle.ptr
@@ -256,11 +261,15 @@ drawUuid tc mVersion =
 drawString :: TestCase -> ForeignPtr HegelStringGenerator -> IO Text
 drawString tc genFP =
   withForeignPtr genFP \genPtr ->
-    withSlot tc.slot \outResult -> do
+    withSlotOf tc.slot \outResult -> do
       hegel_generate_string tc.handle.ctx tc.handle.ptr genPtr outResult >>= handleReturnCode tc
-      result <- peek outResult
-      bs <- BS.packCStringLen (result.resultData, fromIntegral result.resultLen)
-      _ <- hegel_generate_string_result_free tc.handle.ctx outResult
+      -- See 'drawBytes's comment: 'finally' guards the same
+      -- draw-then-free-the-engine-buffer window against a throwing
+      -- 'BS.packCStringLen' or an async exception.
+      let unpack = do
+            result <- peek outResult
+            BS.packCStringLen (result.resultData, fromIntegral result.resultLen)
+      bs <- unpack `finally` void (hegel_generate_string_result_free tc.handle.ctx outResult)
       case TE.decodeUtf8' bs of
         Right t -> pure t
         Left err ->
@@ -500,7 +509,7 @@ instance Exception InvariantViolation
 -- Throws 'TestStopped' on exhaustion.
 newCollection :: TestCase -> Int -> Maybe Int -> IO Int
 newCollection tc minSz maxSz =
-  withSlot tc.slot \outId -> do
+  withSlotOf tc.slot \outId -> do
     hegel_new_collection tc.handle.ctx tc.handle.ptr (fromIntegral minSz) (maybe maxBound fromIntegral maxSz) outId
       >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
@@ -510,7 +519,7 @@ newCollection tc minSz maxSz =
 -- Throws 'TestStopped' on exhaustion.
 collectionMore :: TestCase -> Int -> IO Bool
 collectionMore tc cid =
-  withSlot tc.slot \outMore -> do
+  withSlotOf tc.slot \outMore -> do
     hegel_collection_more tc.handle.ctx tc.handle.ptr (fromIntegral cid) outMore >>= handleReturnCode tc
     (/= 0) . (\(CBool b) -> b) <$> peek outMore
 
@@ -534,7 +543,7 @@ collectionReject tc cid mWhy =
 -- Throws 'TestStopped' on exhaustion.
 newPool :: TestCase -> IO Int
 newPool tc =
-  withSlot tc.slot \outId -> do
+  withSlotOf tc.slot \outId -> do
     hegel_new_pool tc.handle.ctx tc.handle.ptr outId >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
 
@@ -554,7 +563,7 @@ poolAddFrom tc pid from = poolAddWith tc pid (Just from)
 
 poolAddWith :: TestCase -> Int -> Maybe Event.Var -> IO Int
 poolAddWith tc pid lineage = do
-  vid <- withSlot tc.slot \outId -> do
+  vid <- withSlotOf tc.slot \outId -> do
     hegel_pool_add tc.handle.ctx tc.handle.ptr (fromIntegral pid) outId >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
   Tick.record tc.recording tc.events \c ->
@@ -578,7 +587,7 @@ labelPool tc pid label =
 -- Throws 'AssumeRejected' when the pool is empty, discarding the test case.
 poolGenerate :: TestCase -> Int -> Bool -> IO Int
 poolGenerate tc pid consume = do
-  vid <- withSlot tc.slot \outId -> do
+  vid <- withSlotOf tc.slot \outId -> do
     hegel_pool_generate tc.handle.ctx tc.handle.ptr (fromIntegral pid) (CBool (if consume then 1 else 0)) outId
       >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
@@ -607,7 +616,7 @@ newStateMachine tc ruleNames invariantNames =
     withMany CString.withText invariantNames \invPtrs ->
       withArray rulePtrs \rulesArr ->
         withArray invPtrs \invArr ->
-          withSlot tc.slot \outId -> do
+          withSlotOf tc.slot \outId -> do
             hegel_new_state_machine
               tc.handle.ctx
               tc.handle.ptr
@@ -624,7 +633,7 @@ newStateMachine tc ruleNames invariantNames =
 -- Throws 'TestStopped' when the choice budget is exhausted.
 stateMachineNextRule :: TestCase -> Int -> IO Int
 stateMachineNextRule tc mid =
-  withSlot tc.slot \outIdx -> do
+  withSlotOf tc.slot \outIdx -> do
     hegel_state_machine_next_rule tc.handle.ctx tc.handle.ptr (fromIntegral mid) outIdx
       >>= handleReturnCode tc
     fromIntegral <$> (peek outIdx :: IO Int64)

@@ -6,7 +6,7 @@
 -- defend against that by detecting a non-UTF-capable handle and
 -- transliterating the rendered report to 7-bit ASCII, rather than by forcing
 -- the handle's encoding (mutating the host process's handle from a library is
--- too blunt — see @notes\/roadmap\/02-stateful-trace-rendering.md@).
+-- too blunt).
 --
 -- This module owns the output 'Preference' (the never-crash decision) and the
 -- text-cleaning pass, both independent of any glyph vocabulary. The stateful

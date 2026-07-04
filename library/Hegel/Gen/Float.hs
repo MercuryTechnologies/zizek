@@ -20,9 +20,13 @@ module Hegel.Gen.Float
   )
 where
 
+import Control.Exception (throwIO)
+import Control.Monad (when)
 import Data.Maybe (fromMaybe, isJust)
+import Data.Text (Text)
+import Data.Text qualified as T
 import GHC.Float (double2Float, float2Double)
-import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), requireOrderedMaybe)
+import Hegel.Gen.Builder (Build (..), GenValidationError (..), HasMax (..), HasMin (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (FloatSpec (..), drawFloat)
 
@@ -96,10 +100,36 @@ smallestSubnormalDouble = 5e-324
 smallestSubnormalFloat :: Double
 smallestSubnormalFloat = float2Double (encodeFloat 1 (fst (floatRange (0 :: Float)) - floatDigits (0 :: Float)))
 
+-- | Validate a 'FloatBuilder's bounds: neither may be NaN, and the lower must
+-- not exceed the upper.
+--
+-- With an exclusive bound the two must be strictly ordered, since equal
+-- endpoints would leave the range empty.
+checkFloatBounds :: (RealFloat a, Show a) => Text -> FloatBuilder a -> IO ()
+checkFloatBounds what b = do
+  checkNotNaN b.bMin
+  checkNotNaN b.bMax
+  case (b.bMin, b.bMax) of
+    (Just lo, Just hi)
+      | b.bExclMin || b.bExclMax ->
+          when (lo >= hi) $
+            throwIO
+              GenValidationError
+                { context = what,
+                  detail = "empty exclusive range: min (" <> T.pack (show lo) <> ") >= max (" <> T.pack (show hi) <> ")"
+                }
+      | otherwise -> checkOrdered what lo hi
+    _ -> pure ()
+  where
+    checkNotNaN Nothing = pure ()
+    checkNotNaN (Just x)
+      | isNaN x = throwIO GenValidationError {context = what, detail = "bound is NaN"}
+      | otherwise = pure ()
+
 instance Build (FloatBuilder Float) Float where
-  build b =
-    requireOrderedMaybe "Gen.float" b.bMin b.bMax $
-      Draw \tc -> double2Float <$> drawFloat tc 32 spec
+  build b = Draw \tc -> do
+    checkFloatBounds "Hegel.Gen.Float" b
+    double2Float <$> drawFloat tc 32 spec
     where
       (allowNan, allowInf) = effectiveFlags b
       spec =
@@ -114,9 +144,9 @@ instance Build (FloatBuilder Float) Float where
           }
 
 instance Build (FloatBuilder Double) Double where
-  build b =
-    requireOrderedMaybe "Gen.double" b.bMin b.bMax $
-      Draw \tc -> drawFloat tc 64 spec
+  build b = Draw \tc -> do
+    checkFloatBounds "Hegel.Gen.Float" b
+    drawFloat tc 64 spec
     where
       (allowNan, allowInf) = effectiveFlags b
       spec =

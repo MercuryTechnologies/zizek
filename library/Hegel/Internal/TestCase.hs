@@ -1,14 +1,11 @@
 -- | The per-test-case handle and its lifecycle.
 --
--- __Internal module.__ Implementation substrate of @zizek@ itself, exposed so
--- you can reach past the public API when you must; it is not part of the
--- stable public interface and may change without notice.
+-- 'TestCase' pairs a @hegel_test_case_t*@ pointer with the @hegel_context_t*@
+-- it is driven under, with 'mkTestCase' to construct and 'markComplete' to
+-- conclude.
 --
--- Defines 'TestCase' — a @hegel_test_case_t*@ pointer paired with the
--- @hegel_context_t*@ it is driven under — plus the runner's lifecycle verbs
--- ('mkTestCase' to construct, 'markComplete' to conclude). The generator-facing
--- draw operations live in "Hegel.Internal.DataSource"; the control signals in
--- "Hegel.Internal.Control".
+-- The generator-facing draw operations live in "Hegel.Internal.DataSource",
+-- the control signals in "Hegel.Internal.Control".
 module Hegel.Internal.TestCase
   ( -- * Construction
     mkTestCase,

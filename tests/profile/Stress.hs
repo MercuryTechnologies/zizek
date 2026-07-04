@@ -9,7 +9,7 @@
 -- * 'strgenChurnProperty' — the string-generator-handle worst case: every
 --   draw constructs a fresh @hegel_string_generator_regex@ handle whose
 --   character class depends on the previous value, so the per-'Gen'-value
---   caching (see @notes/migration/libhegel-0.29.md@) can never amortize —
+--   caching can never amortize —
 --   every draw pays a fresh construction, then races the GC to free the
 --   handle before the next one is built.
 -- * 'strgenHoardProperty' — the string-generator-handle retention case: two

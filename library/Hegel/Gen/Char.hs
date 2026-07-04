@@ -38,7 +38,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Word (Word32, Word64)
 import Foreign.ForeignPtr (ForeignPtr)
-import Hegel.Gen.Builder (Build (..))
+import Hegel.Gen.Builder (Build (..), checkNonNegative, checkOrderedMaybe)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (HegelStringGenerator, InvariantViolation (..), buildTextGen, drawString)
 import System.IO.Unsafe (unsafePerformIO)
@@ -155,8 +155,14 @@ categoryCode NotAssigned = "Cn"
 -- with @minSize = maxSize = 1@; 'Hegel.Gen.Regex's @alphabet@ modifier
 -- reuses this (at the same bounds — only the character set matters for an
 -- alphabet) to build the alphabet's text generator.
+--
+-- Validates 'bMinCodepoint'\/'bMaxCodepoint' here, the single point every
+-- caller routes through, before marshalling.
 buildCharTextGen :: Word64 -> Word64 -> CharBuilder -> IO (ForeignPtr HegelStringGenerator)
-buildCharTextGen minSz maxSz b =
+buildCharTextGen minSz maxSz b = do
+  checkOrderedMaybe "Hegel.Gen.Char" b.bMinCodepoint b.bMaxCodepoint
+  mapM_ (checkNonNegative "Hegel.Gen.Char") b.bMinCodepoint
+  mapM_ (checkNonNegative "Hegel.Gen.Char") b.bMaxCodepoint
   buildTextGen
     minSz
     maxSz

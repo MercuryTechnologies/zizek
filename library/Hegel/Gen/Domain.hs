@@ -17,15 +17,16 @@ module Hegel.Gen.Domain
   )
 where
 
+import Control.Exception (throwIO)
 import Data.Text (Text)
-import Data.Word (Word64)
-import Hegel.Gen.Builder (Build (..))
+import Data.Text qualified as T
+import Hegel.Gen.Builder (Build (..), GenValidationError (..))
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (buildDomainGen, drawString)
 import System.IO.Unsafe (unsafePerformIO)
 
 newtype DomainBuilder = DomainBuilder
-  { bMaxLength :: Word64
+  { bMaxLength :: Int
   }
 
 -- | Generate a random fully qualified domain name. Default max length is
@@ -33,12 +34,23 @@ newtype DomainBuilder = DomainBuilder
 domain :: DomainBuilder
 domain = DomainBuilder {bMaxLength = 255}
 
--- | Set the maximum total length of the generated domain name (4..=255).
-maxLength :: Word64 -> DomainBuilder -> DomainBuilder
+-- | Set the maximum total length of the generated domain name, in @[4, 255]@.
+maxLength :: Int -> DomainBuilder -> DomainBuilder
 maxLength n b = b {bMaxLength = n}
 
 instance Build DomainBuilder Text where
-  build b = Draw \tc -> drawString tc genFP
+  build b = Draw \tc -> do
+    checkMaxLength b.bMaxLength
+    drawString tc genFP
     where
-      genFP = unsafePerformIO (buildDomainGen b.bMaxLength)
+      genFP = unsafePerformIO (buildDomainGen (fromIntegral b.bMaxLength))
       {-# NOINLINE genFP #-}
+      checkMaxLength :: Int -> IO ()
+      checkMaxLength n
+        | n < 4 || n > 255 =
+            throwIO
+              GenValidationError
+                { context = "Hegel.Gen.Domain",
+                  detail = "maxLength (" <> T.pack (show n) <> ") outside [4, 255]"
+                }
+        | otherwise = pure ()

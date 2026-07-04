@@ -1,8 +1,9 @@
 /*
  * Closed-world guard for the libhegel C enums that zizek mirrors as Haskell
  * ADTs (Hegel.Backend, Hegel.Verbosity, Hegel.Phase, Hegel.HealthCheck,
- * Hegel.Internal.DataSource's Label, Hegel.Internal.TestCase's Status, and
- * Hegel.Runner's RunStatus).
+ * Hegel.Internal.DataSource's Label, Hegel.Internal.TestCase's Status,
+ * Hegel.Runner's RunStatus, and hegel_result_t's error-code pattern synonyms
+ * in Hegel.Internal.Foreign.Raw).
  *
  * Each function is an EXHAUSTIVE switch with no `default:`. Compiled with
  * `-Werror=switch-enum`, the build FAILS if hegel-rust adds a new enumerator
@@ -10,10 +11,11 @@
  * silently widen an enum out from under the closed ADTs.
  *
  * Parameters take the wire width our `Witch.into` produces (Word32 for
- * Backend/Verbosity/Phase/HealthCheck/Status, Word64 for Label; RunStatus is
- * read from the engine as a plain `int` and untested here) and cast to the
- * enum, so the FFI imports in tests/ffi/WireEnumCoverage.hs line up and the
- * switch still checks the enum's members.
+ * Backend/Verbosity/Phase/HealthCheck/Status, Word64 for Label; RunStatus and
+ * hegel_result_t are read from the engine as a plain `int` and untested
+ * here) and cast to the enum, so the FFI imports in
+ * tests/ffi/WireEnumCoverage.hs line up and the switch still checks the
+ * enum's members.
  */
 
 #include <hegel.h>
@@ -117,6 +119,23 @@ int hegel_guard_run_status(int x) {
     case HEGEL_RUN_STATUS_PASSED:
     case HEGEL_RUN_STATUS_FAILED:
     case HEGEL_RUN_STATUS_ERROR:
+      return 0;
+  }
+  return -1;
+}
+
+int hegel_guard_result(int x) {
+  switch ((hegel_result_t)x) {
+    case HEGEL_OK:
+    case HEGEL_E_STOP_TEST:
+    case HEGEL_E_ASSUME:
+    case HEGEL_E_BACKEND:
+    case HEGEL_E_INVALID_HANDLE:
+    case HEGEL_E_INVALID_ARG:
+    case HEGEL_E_ALREADY_COMPLETE:
+    case HEGEL_E_NOT_COMPLETE:
+    case HEGEL_E_INTERNAL:
+    case HEGEL_E_CONCURRENT_USE:
       return 0;
   }
   return -1;

@@ -2,8 +2,7 @@
 -- structured (non-source-spliced) rendering of the recovered tree.
 --
 -- The journal itself is a flat, depth-stamped @['Note']@ — an append-only
--- streaming sink that stays correct across exception boundaries (see the
--- design rationale in @notes\/01-stateful-test-reporting.md@). The tree is a
+-- streaming sink that stays correct across exception boundaries. The tree is a
 -- rendering concern, recovered here by a pure fold over the depth stamps.
 module Hegel.Report.Journal
   ( -- * Regrouping

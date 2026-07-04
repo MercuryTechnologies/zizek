@@ -14,7 +14,7 @@ import Data.HashMap.Strict (HashMap)
 import Data.HashMap.Strict qualified as HashMap
 import Data.Hashable (Hashable)
 import Hegel.Collection qualified as Collection
-import Hegel.Gen.Builder (Build (..), HasSize (..), requireOrdered)
+import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw)
 import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
 
@@ -34,31 +34,28 @@ instance HasSize (HashMapBuilder k v) where
   maxSize n b = b {mMaxSize = Just n}
 
 instance (Hashable k) => Build (HashMapBuilder k v) (HashMap k v) where
-  build b = case b.mMaxSize of
-    Just hi -> requireOrdered "Gen.hashMap" b.mMinSize hi go
-    Nothing -> go
-    where
-      go = Draw $ \tc -> do
-        startSpan tc LabelMap
-        -- See Note [Variable-size mode required for reject] in Hegel.Collection.
-        let poolMax = case b.mMaxSize of
-              Nothing -> Nothing
-              Just mx -> Just (Prelude.max (b.mMinSize + 1) mx)
-        coll <- Collection.new tc b.mMinSize poolMax
-        let loop acc = do
-              keepGoing <- Collection.more coll
-              if not keepGoing
-                then pure acc
+  build b = Draw $ \tc -> do
+    checkSizeBounds "Hegel.Gen.HashMap" b.mMinSize b.mMaxSize
+    startSpan tc LabelMap
+    -- See Note [Variable-size mode required for reject] in Hegel.Collection.
+    let poolMax = case b.mMaxSize of
+          Nothing -> Nothing
+          Just mx -> Just (Prelude.max (b.mMinSize + 1) mx)
+    coll <- Collection.new tc b.mMinSize poolMax
+    let loop acc = do
+          keepGoing <- Collection.more coll
+          if not keepGoing
+            then pure acc
+            else do
+              k <- draw tc b.mKeys
+              if HashMap.member k acc
+                then Collection.reject coll (Just "duplicate key") *> loop acc
                 else do
-                  k <- draw tc b.mKeys
-                  if HashMap.member k acc
-                    then Collection.reject coll (Just "duplicate key") *> loop acc
-                    else do
-                      v <- draw tc b.mValues
-                      loop (HashMap.insert k v acc)
-        result <- loop HashMap.empty
-        let trimmed = case b.mMaxSize of
-              Just mx | HashMap.size result > mx -> HashMap.fromList (take mx (HashMap.toList result))
-              _ -> result
-        stopSpan tc False
-        pure trimmed
+                  v <- draw tc b.mValues
+                  loop (HashMap.insert k v acc)
+    result <- loop HashMap.empty
+    let trimmed = case b.mMaxSize of
+          Just mx | HashMap.size result > mx -> HashMap.fromList (take mx (HashMap.toList result))
+          _ -> result
+    stopSpan tc False
+    pure trimmed

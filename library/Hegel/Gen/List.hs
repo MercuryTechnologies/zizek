@@ -12,7 +12,7 @@ module Hegel.Gen.List
 where
 
 import Hegel.Collection qualified as Collection
-import Hegel.Gen.Builder (Build (..), HasSize (..), requireOrdered)
+import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw)
 import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
 
@@ -39,36 +39,33 @@ instance HasSize (ListBuilder a) where
   maxSize n b = b {lMaxSize = Just n}
 
 instance Build (ListBuilder a) [a] where
-  build b = case b.lMaxSize of
-    Just hi -> requireOrdered "Gen.list" b.lMinSize hi go
-    Nothing -> go
-    where
-      go = Draw $ \tc -> do
-        startSpan tc LabelList
-        -- For unique lists, see Note [Variable-size mode required for reject]
-        -- in Hegel.Collection.
-        --
-        -- Non-unique lists don't call 'Collection.reject' so we don't need to
-        -- normalize the bounds.
-        let poolMax = case (b.lUnique, b.lMaxSize) of
-              (Just _, Just mx) -> Just (Prelude.max (b.lMinSize + 1) mx)
-              _ -> b.lMaxSize
-        coll <- Collection.new tc b.lMinSize poolMax
-        let dup = case b.lUnique of
-              Just eq -> \x xs -> any (eq x) xs
-              Nothing -> \_ _ -> False
-            loop acc = do
-              keepGoing <- Collection.more coll
-              if not keepGoing
-                then pure (reverse acc)
-                else do
-                  x <- draw tc b.lElement
-                  if dup x acc
-                    then Collection.reject coll (Just "duplicate element") *> loop acc
-                    else loop (x : acc)
-        result <- loop []
-        let trimmed = case b.lMaxSize of
-              Just mx | length result > mx -> take mx result
-              _ -> result
-        stopSpan tc False
-        pure trimmed
+  build b = Draw $ \tc -> do
+    checkSizeBounds "Hegel.Gen.List" b.lMinSize b.lMaxSize
+    startSpan tc LabelList
+    -- For unique lists, see Note [Variable-size mode required for reject]
+    -- in Hegel.Collection.
+    --
+    -- Non-unique lists don't call 'Collection.reject' so we don't need to
+    -- normalize the bounds.
+    let poolMax = case (b.lUnique, b.lMaxSize) of
+          (Just _, Just mx) -> Just (Prelude.max (b.lMinSize + 1) mx)
+          _ -> b.lMaxSize
+    coll <- Collection.new tc b.lMinSize poolMax
+    let dup = case b.lUnique of
+          Just eq -> \x xs -> any (eq x) xs
+          Nothing -> \_ _ -> False
+        loop acc = do
+          keepGoing <- Collection.more coll
+          if not keepGoing
+            then pure (reverse acc)
+            else do
+              x <- draw tc b.lElement
+              if dup x acc
+                then Collection.reject coll (Just "duplicate element") *> loop acc
+                else loop (x : acc)
+    result <- loop []
+    let trimmed = case b.lMaxSize of
+          Just mx | length result > mx -> take mx result
+          _ -> result
+    stopSpan tc False
+    pure trimmed

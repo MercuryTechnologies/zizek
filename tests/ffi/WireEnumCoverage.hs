@@ -15,6 +15,7 @@ import Foreign.C.Types (CInt (..))
 import Hegel.Backend (Backend (..))
 import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Internal.DataSource (Label (..))
+import Hegel.Internal.Foreign.Raw
 import Hegel.Internal.TestCase (Status (..))
 import Hegel.Phase (Phase (..))
 import Hegel.Verbosity (Verbosity (..))
@@ -32,6 +33,8 @@ foreign import ccall unsafe "hegel_guard_health_check" guardHealthCheck :: Word3
 foreign import ccall unsafe "hegel_guard_label" guardLabel :: Word64 -> IO CInt
 
 foreign import ccall unsafe "hegel_guard_status" guardStatus :: Word32 -> IO CInt
+
+foreign import ccall unsafe "hegel_guard_result" guardResult :: CInt -> IO CInt
 
 -- | Assert the guard recognizes (returns @0@ for) every supplied wire value.
 allRecognized :: (w -> IO CInt) -> [w] -> Expectation
@@ -73,3 +76,17 @@ wireEnumCoverageSpec = describe "wire enum coverage (conversion values vs hegel.
       )
   it "Status" $
     allRecognized guardStatus (Witch.into @Word32 <$> [Valid, Invalid, Overrun, Interesting "x"])
+  it "hegel_result_t" $
+    allRecognized
+      guardResult
+      [ HEGEL_OK,
+        HEGEL_E_STOP_TEST,
+        HEGEL_E_ASSUME,
+        HEGEL_E_BACKEND,
+        HEGEL_E_INVALID_HANDLE,
+        HEGEL_E_INVALID_ARG,
+        HEGEL_E_ALREADY_COMPLETE,
+        HEGEL_E_NOT_COMPLETE,
+        HEGEL_E_INTERNAL,
+        HEGEL_E_CONCURRENT_USE
+      ]
