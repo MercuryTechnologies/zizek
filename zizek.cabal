@@ -225,6 +225,7 @@ test-suite unit
     SourceRendering
     StandardGenerators
     Stateful
+    TestCaseClone
     TraceFixtures
     TraceModel
 

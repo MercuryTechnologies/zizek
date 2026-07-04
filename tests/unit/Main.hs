@@ -16,6 +16,7 @@ import StandardGenerators qualified
 import Stateful qualified
 import Test.Tasty (defaultMain, testGroup)
 import Test.Tasty.Hspec (testSpec)
+import TestCaseClone qualified
 import TraceModel qualified
 
 main :: IO ()
@@ -35,6 +36,7 @@ main = do
   poolEvents <- testSpec "pool events" PoolEvents.spec
   traceModel <- testSpec "trace model" TraceModel.spec
   ledger <- testSpec "event-log rendering" LogRendering.spec
+  testCaseClone <- testSpec "TestCase cloning" TestCaseClone.spec
   defaultMain
     ( testGroup
         "zizek:unit"
@@ -54,6 +56,7 @@ main = do
           finalizers,
           poolEvents,
           traceModel,
-          ledger
+          ledger,
+          testCaseClone
         ]
     )

@@ -6,8 +6,8 @@
 -- 'foreign import ccall' declaration together with phantom types representing
 -- handles to C constructs, error-code pattern synonyms, and bracket helpers.
 --
--- Not yet bound: @hegel_generate_date@\/@_time@\/@_datetime@,
--- @hegel_generate_ipv4@\/@_ipv6@, and @hegel_test_case_clone@.
+-- Not yet bound: @hegel_generate_date@\/@_time@\/@_datetime@ and
+-- @hegel_generate_ipv4@\/@_ipv6@.
 --
 -- __Calling convention__: every @libhegel@ entry point takes a
 -- @hegel_context_t*@ as its first argument and returns a @hegel_result_t@,
@@ -171,6 +171,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_state_machine_next_rule,
     hegel_target,
     hegel_mark_complete,
+    hegel_test_case_clone,
 
     -- * Typed draws
     -- $typeddraws
@@ -728,16 +729,27 @@ foreign import ccall safe "hegel_run_free"
 -- * opening and closing spans
 -- * managing collections and pools
 -- * recording targeting observations
--- * marking the case complete.
+-- * marking the case complete
+-- * cloning onto an independent stream
 --
--- Nearly all are declared @unsafe@: despite the request/reply framing, they
--- execute inline on the calling thread (the Rust worker is parked on the
--- completion ack while the caller drives the case, so the test-case mutex is
--- uncontended), never call back into Haskell, and never touch disk — database
--- persistence and shrink bookkeeping happen in the worker's run loop, behind
--- 'hegel_next_test_case'. The @safe@-call ceremony (capability
--- release\/reacquire, ~0.1–0.5µs) was a measurable fraction of the ~1.1µs
--- per-draw floor.
+-- Nearly all are declared @unsafe@. Despite the request/reply framing, they
+-- execute inline on the calling thread, never call back into Haskell, and
+-- never touch disk. Database persistence and shrink bookkeeping happen in the
+-- worker's run loop behind 'hegel_next_test_case', which never touches a live
+-- handle's own mutex. Each handle's mutex is held only by the one thread
+-- driving that handle, so under that one-thread-per-handle discipline it is
+-- never actually contended. That holds whether a family is just the single
+-- handle 'hegel_next_test_case' hands out or several more cloned off it.
+--
+-- The @safe@-call ceremony was a measurable fraction of the ~1.1µs per-draw
+-- floor, since a capability release and reacquire costs on the order of a
+-- tenth of a microsecond.
+--
+-- Cloning and completing are the two operations that reach across a family's
+-- handles, and neither blocks on that account. 'hegel_test_case_clone' fails
+-- fast with 'HEGEL_E_CONCURRENT_USE' rather than waiting when the source
+-- handle is genuinely driven from two threads at once, and a family's
+-- completion race resolves through a lock-free atomic rather than a lock.
 --
 -- Caveat, accepted: under the urandom backend (explicit 'HEGEL_BACKEND_URANDOM',
 -- or auto-selected inside Antithesis) every entropy-consuming call reads
@@ -1125,6 +1137,26 @@ foreign import ccall unsafe "hegel_mark_complete"
     -> CString -- ^ @origin@ (@NULL@ unless 'HEGEL_STATUS_INTERESTING')
     -> IO CInt
 
+-- | Clone a test case, writing a caller-owned handle onto an independent
+-- choice stream of the same case into @*out_test_case@. The clone shares the
+-- source's outcome and budget but draws from its own stream, so it can be
+-- driven concurrently from another thread without the two perturbing each
+-- other. Free the clone with 'hegel_test_case_free' like any other handle.
+--
+-- Takes the source handle's lock like a draw, so returns
+-- 'HEGEL_E_CONCURRENT_USE' if another thread is mid-operation on it, and
+-- 'HEGEL_E_ALREADY_COMPLETE' once the family has completed.
+--
+-- __NOTE__: freeing a clone does not complete its family. Some handle in
+-- the family must call 'hegel_mark_complete' before the last handle is
+-- freed, or the run cannot advance.
+foreign import ccall unsafe "hegel_test_case_clone"
+  hegel_test_case_clone
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Ptr (Ptr HegelTestCase) -- ^ out: caller-owned clone
+    -> IO CInt
+
 -- $reproduction
 --
 -- Build and free a /standalone/ test case that replays a failure blob.
@@ -1132,8 +1164,8 @@ foreign import ccall unsafe "hegel_mark_complete"
 -- == Ownership model
 --
 -- Every @hegel_test_case_t@ is __caller-owned__ and freed with
--- 'hegel_test_case_free', whether it came from 'hegel_next_test_case' or from
--- 'hegel_test_case_from_blob'.
+-- 'hegel_test_case_free', whether it came from 'hegel_next_test_case',
+-- 'hegel_test_case_from_blob', or 'hegel_test_case_clone'.
 --
 -- Prefer 'withTestCaseFromBlob' over these functions wherever possible.
 
@@ -1156,8 +1188,9 @@ foreign import ccall unsafe "hegel_test_case_from_blob"
     -> Ptr (Ptr HegelTestCase) -- ^ out: caller-owned test case
     -> IO CInt
 
--- | Free a __caller-owned__ test case, from either 'hegel_next_test_case' or
--- 'hegel_test_case_from_blob'. Safe to call with @NULL@.
+-- | Free a __caller-owned__ test case, from 'hegel_next_test_case',
+-- 'hegel_test_case_from_blob', or 'hegel_test_case_clone'. Safe to call with
+-- @NULL@.
 foreign import ccall unsafe "hegel_test_case_free"
   hegel_test_case_free :: Ptr HegelContext -> Ptr HegelTestCase -> IO CInt
 

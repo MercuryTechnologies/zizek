@@ -9,6 +9,7 @@
 module Hegel.Internal.TestCase
   ( -- * Construction
     mkTestCase,
+    withClone,
 
     -- * Test case
     Handle (..),
@@ -24,11 +25,13 @@ module Hegel.Internal.TestCase
   )
 where
 
+import Control.Exception (bracket)
+import Control.Monad (void)
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
 import Data.Word (Word32)
-import Foreign (Ptr, nullPtr)
+import Foreign (Ptr, alloca, nullPtr, peek)
 import Hegel.Internal.Event (Event, Var)
 import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
@@ -57,6 +60,37 @@ mkTestCase recording handle = do
   events <- newIORef Seq.empty
   draws <- newIORef []
   pure TestCase {handle, slot, recording, events, draws}
+
+-- | Clone @src@ and run @action@ against the clone, freeing it on every
+-- exit, including an exception.
+--
+-- The clone draws from its own independent choice stream but shares @src@'s
+-- outcome and budget, so it can be driven concurrently from another thread
+-- without perturbing @src@. It gets its own 'Slot' and event\/draw buffers
+-- from 'mkTestCase' the same way every other 'TestCase' does, and its own
+-- recording clock when @src@ is 'Tick.Active' rather than @src@'s: nothing
+-- about a clone is shared Haskell-side mutable state with the case it came
+-- from.
+--
+-- __NOTE__: the clone must not escape @action@. A clone that outlives
+-- 'withClone' without ever being completed or freed wedges the whole run
+-- (see 'hegel_test_case_clone'\'s haddock) — the bracket here is what
+-- prevents that, so do not call 'hegel_test_case_free' on the clone
+-- yourself, and do not return it out of @action@.
+withClone :: TestCase -> (TestCase -> IO a) -> IO a
+withClone src = bracket acquire release
+  where
+    acquire :: IO TestCase
+    acquire = do
+      ptr <- alloca \out -> do
+        throwOnError src.handle.ctx =<< hegel_test_case_clone src.handle.ctx src.handle.ptr out
+        peek out
+      recording <- case src.recording of
+        Tick.Silent -> pure Tick.Silent
+        Tick.Active _ -> Tick.newRecording
+      mkTestCase recording Handle {ctx = src.handle.ctx, ptr}
+    release :: TestCase -> IO ()
+    release clone = void (hegel_test_case_free clone.handle.ctx clone.handle.ptr)
 
 -- * Test case
 
