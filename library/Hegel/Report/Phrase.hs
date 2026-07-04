@@ -12,7 +12,7 @@ where
 import Data.Char qualified as Char
 import Data.Text (Text)
 import Data.Text qualified as T
-import Hegel.Report.Blame (Fact (..))
+import Hegel.Report.Trace.Blame (Fact (..))
 
 -- | Fact-clause fields take the /resolved display name/ of the fact's value.
 data PhraseTable = PhraseTable

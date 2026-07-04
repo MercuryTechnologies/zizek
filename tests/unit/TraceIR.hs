@@ -1,5 +1,5 @@
 -- | Pure pins for the trace IR ("Hegel.Report.Trace") and blame analysis
--- ("Hegel.Report.Blame"), plus one end-to-end run through the engine.
+-- ("Hegel.Report.Trace.Blame"), plus one end-to-end run through the engine.
 module TraceIR (spec) where
 
 import Control.Monad.IO.Class (liftIO)
@@ -23,10 +23,10 @@ import Hegel.Report
     Tick (..),
     Var (..),
   )
-import Hegel.Report.Blame (Fact (..), Observation (..))
-import Hegel.Report.Blame qualified as Blame
 import Hegel.Report.Trace (Lifeline (..), Step (..), Touch (..))
 import Hegel.Report.Trace qualified as Trace
+import Hegel.Report.Trace.Blame (Fact (..), Observation (..))
+import Hegel.Report.Trace.Blame qualified as Blame
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful

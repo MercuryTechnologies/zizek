@@ -1,22 +1,14 @@
--- | The trajectory lead: a degraded report's compact, one-line history of the
--- failing value.
+-- | A one-line history of the failing value in a stateful test.
 --
--- When a stateful failure's blame tree has no lifecycle event (no death or
--- handoff — see 'Hegel.Report.Blame.hasLifecycleEvent'), the ledger's geometry
--- would only draw a flat born+touch biography, so the composed report degrades
--- to the step timeline plus this lead. It reads:
+-- When a stateful failure's blame tree has no lifecycle event, the ledger's geometry
+-- would be redundant; instead it reads:
 --
 -- > ↳ p₁: open @1 · write @3 · close @4
 --
--- Spelled in /rule names/ (verbatim, the same token as the timeline's
--- @Step N: rule@ and the user's @'Hegel.Stateful.Rule' \"open\"@) so each
--- @\@N@ cross-references the timeline and the rule name points back to source.
--- Chronological, and excluding the failing step (already the header above it).
---
 -- Intended to be imported with qualification:
 --
--- > import Hegel.Report.Trajectory qualified as Trajectory
-module Hegel.Report.Trajectory
+-- > import Hegel.Report.Trace.Trajectory qualified as Trajectory
+module Hegel.Report.Trace.Trajectory
   ( trajectoryDoc,
   )
 where
@@ -24,12 +16,12 @@ where
 import Data.IntSet qualified as IntSet
 import Data.Text qualified as T
 import Hegel.Report.Ann (Ann (..))
-import Hegel.Report.Blame (Blame (..), Observation (..))
 import Hegel.Report.Glyph (Cell (..), GlyphTable (..), displayName)
 import Hegel.Report.Phrase (PhraseTable (..))
 import Hegel.Report.Style (Style (..))
 import Hegel.Report.Trace (Lifeline (..), Step (..), Trace)
 import Hegel.Report.Trace qualified as Trace
+import Hegel.Report.Trace.Blame (Blame (..), Observation (..))
 import Prettyprinter (Doc)
 import Prettyprinter qualified as PP
 

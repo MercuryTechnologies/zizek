@@ -1,4 +1,4 @@
--- | Pure pins for the citation ledger ("Hegel.Report.Ledger") and the glyph
+-- | Pure pins for the citation ledger ("Hegel.Report.Trace.Ledger") and the glyph
 -- tables ("Hegel.Report.Glyph"), plus one engine run through the full path.
 module LedgerRendering (spec) where
 
@@ -25,16 +25,16 @@ import Hegel.Report
     renderReportRich,
   )
 import Hegel.Report.Ann (docToText)
-import Hegel.Report.Blame (Blame, Citation (..), Fact (..))
-import Hegel.Report.Blame qualified as Blame
 import Hegel.Report.Glyph (Cell (..), GlyphTable (..))
 import Hegel.Report.Glyph qualified as Glyph
-import Hegel.Report.Ledger qualified as Ledger
 import Hegel.Report.Style (LinkMode (..), Style (..), defaultStyle)
 import Hegel.Report.Trace (Trace)
 import Hegel.Report.Trace qualified as Trace
-import Hegel.Report.Trajectory qualified as Trajectory
-import Hegel.Report.Verdict qualified as Verdict
+import Hegel.Report.Trace.Blame (Blame, Citation (..), Fact (..))
+import Hegel.Report.Trace.Blame qualified as Blame
+import Hegel.Report.Trace.Ledger qualified as Ledger
+import Hegel.Report.Trace.Trajectory qualified as Trajectory
+import Hegel.Report.Trace.Verdict qualified as Verdict
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful

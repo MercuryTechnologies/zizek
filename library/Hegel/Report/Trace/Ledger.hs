@@ -1,28 +1,13 @@
--- | The citation ledger: the citation-ledger layout — a single-trunk slice of
--- the failing value's story with a mid-line citation link, rendered from the
--- trace and blame IR ("Hegel.Report.Trace", "Hegel.Report.Blame").
---
--- Layout rules pinned by the design record
--- (@notes\/decisions\/stateful-trace-rendering.md@):
---
--- * The revset is the failure's citation closure; everything else is elided,
---   explicitly (@⋯ n steps@ rows, @~@ history terminator, @▸ lifelines
---   elided@ footer) — never silently.
--- * Only the failing step gets drawn link edges, one column per citation up
---   to the link budget; overflow falls back to a numeric citation list.
--- * The link sits mid-line — between the call column and the annotations —
---   so each justification lands at its arrowhead (tenet 6: text strictly
---   right of geometry).
--- * The call column is clipped at a width budget (the accepted cost of the
---   mid-line link); the full values live in the failure details and splice.
+-- | The citation ledger: a failing value's story with a mid-line citation link,
+-- rendered from 'Hegel.Report.Trace' & 'Hegel.Report.Trace.Blame'.
 --
 -- Layout emits abstract 'Cell's; glyphs are applied last via the
--- 'Glyph.GlyphTable' (tenet 3).
+-- 'Glyph.GlyphTable'.
 --
--- Designed for qualified import:
+-- Intended to be imported with qualification:
 --
--- > import Hegel.Report.Ledger qualified as Ledger
-module Hegel.Report.Ledger
+-- > import Hegel.Report.Trace.Ledger qualified as Ledger
+module Hegel.Report.Trace.Ledger
   ( -- * Row model
     RowKind (..),
     Row (..),
@@ -41,30 +26,23 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Report.Ann (Ann (..))
 import Hegel.Report.Ann qualified as Ann
-import Hegel.Report.Blame (Blame (..), Observation (..))
-import Hegel.Report.Blame qualified as Blame
 import Hegel.Report.Glyph (Cell (..), GlyphTable (..), displayName)
 import Hegel.Report.Phrase (PhraseTable (..))
 import Hegel.Report.Phrase qualified as Phrase
 import Hegel.Report.Style (LinkMode (..), Style (..))
 import Hegel.Report.Trace (Lifeline (..), Step (..), Touch (..), Trace)
 import Hegel.Report.Trace qualified as Trace
+import Hegel.Report.Trace.Blame (Blame (..), Observation (..))
+import Hegel.Report.Trace.Blame qualified as Blame
 import Prettyprinter (Doc)
 import Prettyprinter qualified as PP
 
--- * Options
-
--- The style record lives in "Hegel.Report.Style"; the ledger is one of its
--- consumers (with the layout knobs that happen to be ledger-specific).
-
--- * Row model
-
 data RowKind
-  = -- | A shown step (the failing step or a cited one).
+  = -- | A failing or otherwise cited step.
     NodeRow
-  | -- | A dim detail line under the failing step (diff \/ message).
+  | -- | A dim detail line under the failing step.
     DetailRow
-  | -- | @⋯ n steps@ between two shown steps.
+  | -- | @⋯ n steps@ elided between two rendered steps.
     ElisionRow
   | -- | @~@ — history continues past the view.
     TerminatorRow
@@ -72,8 +50,8 @@ data RowKind
     FooterRow
   deriving stock (Show, Eq)
 
--- | One ledger row: abstract cells for the geometry regions, prepared text
--- for the prose regions. Exported for layout pins.
+-- | One row of the ledger, containing abstract cells for the geometry regions
+-- and prepared text for the prose regions.
 data Row = Row
   { kind :: !RowKind,
     gutter :: !Cell,
@@ -81,18 +59,13 @@ data Row = Row
     call :: !Text,
     link :: [Cell],
     annot :: !Text,
-    -- | For a 'DetailRow' carrying a structured diff line, its annotation
-    -- ('DiffAdded' \/ 'DiffRemoved' \/ 'DiffSame'); 'Nothing' for a plain
-    -- message line or any other row. Kept structured rather than re-derived
-    -- from the rendered @call@ text at draw time.
     detailAnn :: !(Maybe Ann)
   }
   deriving stock (Show, Eq)
 
 -- * Layout
 
--- | Lay the trace out as ledger rows. Total: with no citations the ledger is
--- just the failing row and its details.
+-- | Lay the trace out as ledger rows.
 layoutRows :: Style -> Trace -> Blame -> [Row]
 layoutRows opts trace blame = orient <> footerRows
   where
@@ -104,23 +77,19 @@ layoutRows opts trace blame = orient <> footerRows
     closure = Blame.citationClosure blame
     cited = blame.observed.since
     k = length cited
-    -- A citation is cross-lane when it cites a value outside the failing
-    -- value's lineage chain — compared through 'Trace.root' so a
-    -- 'Hegel.Pool.transfer' (one logical value crossing pools) is not counted
-    -- as a lane crossing. Today the blame cites only the subject's own chain,
-    -- so this is always 'False' under 'Auto' (single-lane ⇒ numeric list);
-    -- the multi-lane braid is what will make it 'True'.
+    -- A citation is "cross-lane" when it cites a value outside the failing
+    -- value's lineage chain.
+    --
+    -- Today the blame cites only the subject's own chain, so this is always
+    -- 'False' when 'linkMode' is 'Auto'.
     linkWanted = case opts.linkMode of
       Links -> True
       Numeric -> False
       Auto -> any (\o -> Trace.root trace (Blame.factVar o.fact) /= subjectRoot) cited
     drawLink = linkWanted && k > 0 && k <= opts.linkBudget
-    -- One association: (column, citation), column 1-based in 'since' order
-    -- (nearest citation innermost — 'since' is most-recent-first). Everything
-    -- link-related projects from it.
+    -- One association, everything link-related projects from it.
     indexedCites = zip [1 :: Int ..] cited
     columnOf s = listToMaybe [c | (c, o) <- indexedCites, o.step == s]
-    -- Shown steps, failure first.
     shown = sortOn (Down . (.index)) [s | s <- trace.steps, IntSet.member s.index closure]
     (failingSteps, citedSteps) = splitAt 1 shown
 
@@ -150,8 +119,9 @@ layoutRows opts trace blame = orient <> footerRows
     -- The details sit between the link's origin and its targets below, so the
     -- columns pass through.
     detailLink = verticals allColumns
-    -- Each detail line as (rendered text, structured diff annotation). A diff
-    -- line carries its 'Ann' structurally; a plain message line carries none.
+    -- Each detail line as (rendered text, structured diff annotation).
+    --
+    -- A diff carries its 'Ann' structurally; a plain message carries none.
     details :: [(Text, Maybe Ann)]
     details = case trace.failure of
       -- One detail row per physical line: an unsplit multi-line message
@@ -187,7 +157,7 @@ layoutRows opts trace blame = orient <> footerRows
     gutterFor s
       | (rootLife >>= (.bornAt)) == Just s.index = NodeBorn
       -- Death glyphs mean death: a consumption continued by a transfer
-      -- renders as a touch (the words at the arrowhead carry the handoff).
+      -- renders as an access.
       | any (\l -> l.consumedAt == Just s.index && not (Trace.continues trace l.var)) chainLives = NodeDeath
       | otherwise = NodeTouch
 
@@ -211,7 +181,6 @@ layoutRows opts trace blame = orient <> footerRows
         (if any touchesSubject between then Nothing else Just subjectName)
     touchesSubject s = any (\t -> Trace.root trace t.var == subjectRoot) s.touches
 
-    -- Link geometry (failure-first) ---------------------------------------
     cornerCell = LinkCornerUp
     originTee = LinkTeeDown
     originCorner = LinkCornerDown
@@ -231,16 +200,11 @@ layoutRows opts trace blame = orient <> footerRows
         [] -> []
         _ -> Blank : concat [[Blank, if c `elem` cols then cell else Blank] | c <- [1 .. k]]
     allColumns = if drawLink then [1 .. k] else []
-    -- Columns still travelling at rows below (further back in time than)
-    -- the given step: citations whose row is at or before it.
     activeColumnsBelow lower =
       if drawLink
         then [c | (c, o) <- indexedCites, o.step <= lower]
         else []
 
-    -- Text ----------------------------------------------------------------
-    -- A transferred value keeps one identity: names, gutter states, and
-    -- "touches the subject" checks all resolve through the lineage root.
     subjectRoot = Trace.root trace blame.subject
     rootLife = Trace.lifeline trace subjectRoot
     chainLives = Trace.chainLifelines trace blame.subject
@@ -285,8 +249,7 @@ layoutRows opts trace blame = orient <> footerRows
 
 -- * Rendering
 
--- | Render the rows as an aligned document: gutter, step number, clipped
--- call column, the link region, annotations at the arrowheads.
+-- | Render the rows as an aligned document.
 ledgerDoc :: Style -> Trace -> Blame -> Doc Ann
 ledgerDoc opts trace blame = PP.vsep (fmap rowDoc rows)
   where

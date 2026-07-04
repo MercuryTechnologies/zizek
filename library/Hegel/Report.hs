@@ -51,12 +51,9 @@ import Hegel.Diff (Diff)
 import Hegel.Internal.Event (Event (..), Operation (..), Var (..))
 import Hegel.Internal.Tick (Tick (..))
 import Hegel.Report.Ann (Ann (..), diffDocs, docToAnsi, docToText)
-import Hegel.Report.Blame (Blame)
-import Hegel.Report.Blame qualified as Blame
 import Hegel.Report.Discovery (Declarations, loadDeclarations)
 import Hegel.Report.Glyph qualified as Glyph
 import Hegel.Report.Journal (footnoteDocs, journalDocs, locDoc)
-import Hegel.Report.Ledger qualified as Ledger
 import Hegel.Report.Note (Note (..), NoteKind (..), hasInBandFailure, isFailureNote, renderValue)
 import Hegel.Report.Phrase (PhraseTable (..))
 import Hegel.Report.Source
@@ -73,8 +70,11 @@ import Hegel.Report.Stateful (failingGroupDoc, isStepJournal, noteFiles, statefu
 import Hegel.Report.Style (Style (..), defaultStyle)
 import Hegel.Report.Trace (Trace)
 import Hegel.Report.Trace qualified as Trace
-import Hegel.Report.Trajectory qualified as Trajectory
-import Hegel.Report.Verdict qualified as Verdict
+import Hegel.Report.Trace.Blame (Blame)
+import Hegel.Report.Trace.Blame qualified as Blame
+import Hegel.Report.Trace.Ledger qualified as Ledger
+import Hegel.Report.Trace.Trajectory qualified as Trajectory
+import Hegel.Report.Trace.Verdict qualified as Verdict
 import Prettyprinter (Doc, (<+>))
 import Prettyprinter qualified as PP
 

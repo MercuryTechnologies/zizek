@@ -122,12 +122,10 @@ library
     Hegel.Property.Internal
     Hegel.Report
     Hegel.Report.Ann
-    Hegel.Report.Blame
     Hegel.Report.Discovery
     Hegel.Report.Encoding
     Hegel.Report.Glyph
     Hegel.Report.Journal
-    Hegel.Report.Ledger
     Hegel.Report.Note
     Hegel.Report.Phrase
     Hegel.Report.Source
@@ -135,8 +133,10 @@ library
     Hegel.Report.Stateful
     Hegel.Report.Style
     Hegel.Report.Trace
-    Hegel.Report.Trajectory
-    Hegel.Report.Verdict
+    Hegel.Report.Trace.Blame
+    Hegel.Report.Trace.Ledger
+    Hegel.Report.Trace.Trajectory
+    Hegel.Report.Trace.Verdict
     Hegel.Runner
     Hegel.Settings
     Hegel.Stateful

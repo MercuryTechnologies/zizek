@@ -36,10 +36,10 @@ import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, forAll)
 import Hegel.Property.Internal (Env (..), askEnv)
 import Hegel.Report (Event (..), Note (..), NoteKind (..), Operation (..), Tick (..), Var (..))
-import Hegel.Report.Blame (Blame)
-import Hegel.Report.Blame qualified as Blame
 import Hegel.Report.Trace (Trace)
 import Hegel.Report.Trace qualified as Trace
+import Hegel.Report.Trace.Blame (Blame)
+import Hegel.Report.Trace.Blame qualified as Blame
 import Hegel.Stateful qualified as Stateful
 
 -- * Synthetic-stream helpers

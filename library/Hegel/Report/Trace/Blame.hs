@@ -2,9 +2,9 @@
 --
 -- Intended to be imported with qualification:
 --
--- > import Hegel.Report.Blame (Blame)
--- > import Hegel.Report.Blame qualified as Blame
-module Hegel.Report.Blame
+-- > import Hegel.Report.Trace.Blame (Blame)
+-- > import Hegel.Report.Trace.Blame qualified as Blame
+module Hegel.Report.Trace.Blame
   ( -- * Blame
     Blame (..),
     Observation (..),
