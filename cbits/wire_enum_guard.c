@@ -9,16 +9,17 @@
  * we don't handle — naming the missing value — so a libhegel bump can't
  * silently widen an enum out from under the closed ADTs.
  *
- * Parameters take the wire width our `Witch.into` produces (CInt / Word32 /
- * Word64) and cast to the enum, so the FFI imports in
- * tests/ffi/WireEnumCoverage.hs line up and the switch still checks the enum's
- * members.
+ * Parameters take the wire width our `Witch.into` produces (Word32 for
+ * Backend/Verbosity/Phase/HealthCheck/Status, Word64 for Label; RunStatus is
+ * read from the engine as a plain `int` and untested here) and cast to the
+ * enum, so the FFI imports in tests/ffi/WireEnumCoverage.hs line up and the
+ * switch still checks the enum's members.
  */
 
 #include <hegel.h>
 #include <stdint.h>
 
-int hegel_guard_backend(int x) {
+int hegel_guard_backend(uint32_t x) {
   switch ((hegel_backend_t)x) {
     case HEGEL_BACKEND_AUTO:
     case HEGEL_BACKEND_DEFAULT:
@@ -28,7 +29,7 @@ int hegel_guard_backend(int x) {
   return -1;
 }
 
-int hegel_guard_verbosity(int x) {
+int hegel_guard_verbosity(uint32_t x) {
   switch ((hegel_verbosity_t)x) {
     case HEGEL_VERBOSITY_QUIET:
     case HEGEL_VERBOSITY_NORMAL:
@@ -81,12 +82,26 @@ int hegel_guard_label(uint64_t x) {
     case HEGEL_LABEL_SAMPLED_FROM:
     case HEGEL_LABEL_ENUM_VARIANT:
     case HEGEL_LABEL_FEATURE_FLAG:
+    case HEGEL_LABEL_REGEX:
+    case HEGEL_LABEL_EMAIL:
+    case HEGEL_LABEL_URL:
+    case HEGEL_LABEL_DOMAIN:
+    case HEGEL_LABEL_DATE:
+    case HEGEL_LABEL_TIME:
+    case HEGEL_LABEL_DATETIME:
+    case HEGEL_LABEL_UUID:
+    case HEGEL_LABEL_IP_ADDRESS:
+    case HEGEL_LABEL_INTEGER:
+    case HEGEL_LABEL_FLOAT:
+    case HEGEL_LABEL_BOOLEAN:
+    case HEGEL_LABEL_BYTES:
+    case HEGEL_LABEL_STRING:
       return 0;
   }
   return -1;
 }
 
-int hegel_guard_status(int x) {
+int hegel_guard_status(uint32_t x) {
   switch ((hegel_status_t)x) {
     case HEGEL_STATUS_VALID:
     case HEGEL_STATUS_INVALID:

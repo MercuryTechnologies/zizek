@@ -13,6 +13,9 @@ module Hegel.Gen.Char
     CharBuilder,
     char,
 
+    -- * Codec
+    Codec (..),
+
     -- * Modifiers
     codec,
     minCodepoint,
@@ -23,27 +26,44 @@ module Hegel.Gen.Char
     excludeCharacters,
 
     -- * Internal
-    toCharacterFields,
+    buildCharTextGen,
   )
 where
 
-import CBOR.Value (Value (..))
+import Control.Exception (throwIO)
+import Data.Char (GeneralCategory (..))
 import Data.List (nub)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Word (Word32, Word64)
+import Foreign.ForeignPtr (ForeignPtr)
 import Hegel.Gen.Builder (Build (..))
-import Hegel.Gen.Internal (basic)
-import Hegel.Internal.Foreign.CBOR (ParseError (..), hegelText)
-import Hegel.Internal.Foreign.Schema (CharacterFields (..), TextSchema (..), defaultCharacterFields)
+import Hegel.Gen.Internal (Gen (..))
+import Hegel.Internal.DataSource (HegelStringGenerator, InvariantViolation (..), buildTextGen, drawString)
+import System.IO.Unsafe (unsafePerformIO)
+
+-- | Which base range a text\/char\/regex-alphabet draw's alphabet starts
+-- from, before codepoint bounds and category filters narrow it further.
+-- 'Utf8' (the default) imposes no restriction — all of Unicode.
+data Codec = Ascii | Latin1 | Utf8
+  deriving stock (Show, Eq)
+
+-- | The @codec@ string @hegel_string_generator_text@ expects, or 'Nothing'
+-- for 'Utf8' (equivalent to passing @NULL@\/@"utf-8"@).
+codecArg :: Codec -> Maybe Text
+codecArg Ascii = Just "ascii"
+codecArg Latin1 = Just "latin-1"
+codecArg Utf8 = Nothing
 
 -- | Builder for a single Unicode character. Character constraints are
 -- optional; absent fields impose no restriction beyond surrogate exclusion.
 data CharBuilder = CharBuilder
-  { bCodec :: !(Maybe Text),
+  { bCodec :: !Codec,
     bMinCodepoint :: !(Maybe Int),
     bMaxCodepoint :: !(Maybe Int),
-    bCategories :: !(Maybe [Text]),
-    bExcludeCategories :: !(Maybe [Text]),
+    bCategories :: !(Maybe [GeneralCategory]),
+    bExcludeCategories :: !(Maybe [GeneralCategory]),
     bIncludeCharacters :: !(Maybe Text),
     bExcludeCharacters :: !(Maybe Text),
     -- Track whether 'categories' was set; when True, Cs auto-injection is
@@ -55,7 +75,7 @@ data CharBuilder = CharBuilder
 char :: CharBuilder
 char =
   CharBuilder
-    { bCodec = Nothing,
+    { bCodec = Utf8,
       bMinCodepoint = Nothing,
       bMaxCodepoint = Nothing,
       bCategories = Nothing,
@@ -65,9 +85,9 @@ char =
       bCategoriesExplicit = False
     }
 
--- | Restrict to characters encodable in the given codec (e.g. @"ascii"@).
-codec :: Text -> CharBuilder -> CharBuilder
-codec c b = b {bCodec = Just c}
+-- | Restrict to characters encodable in the given codec.
+codec :: Codec -> CharBuilder -> CharBuilder
+codec c b = b {bCodec = c}
 
 -- | Set the minimum Unicode codepoint (inclusive).
 minCodepoint :: Int -> CharBuilder -> CharBuilder
@@ -78,13 +98,14 @@ maxCodepoint :: Int -> CharBuilder -> CharBuilder
 maxCodepoint n b = b {bMaxCodepoint = Just n}
 
 -- | Restrict to characters from these Unicode general categories
--- (e.g. @["Ll", "Lu"]@). Mutually exclusive with 'excludeCategories'.
-categories :: [Text] -> CharBuilder -> CharBuilder
+-- (e.g. @[LowercaseLetter, UppercaseLetter]@). Mutually exclusive with
+-- 'excludeCategories'.
+categories :: [GeneralCategory] -> CharBuilder -> CharBuilder
 categories cs b = b {bCategories = Just cs, bCategoriesExplicit = True}
 
 -- | Exclude characters from these Unicode general categories.
 -- Mutually exclusive with 'categories'.
-excludeCategories :: [Text] -> CharBuilder -> CharBuilder
+excludeCategories :: [GeneralCategory] -> CharBuilder -> CharBuilder
 excludeCategories cs b = b {bExcludeCategories = Just cs}
 
 -- | Always include these characters even if excluded by other filters.
@@ -95,43 +116,76 @@ includeCharacters t b = b {bIncludeCharacters = Just t}
 excludeCharacters :: Text -> CharBuilder -> CharBuilder
 excludeCharacters t b = b {bExcludeCharacters = Just t}
 
--- | Convert a 'CharBuilder' to 'CharacterFields', injecting @\"Cs\"@ into
--- 'excludeCategories' unless 'categories' was explicitly set.
-toCharacterFields :: CharBuilder -> CharacterFields
-toCharacterFields b =
-  injectCs
-    b.bCategoriesExplicit
-    defaultCharacterFields
-      { codec = b.bCodec,
-        minCodepoint = b.bMinCodepoint,
-        maxCodepoint = b.bMaxCodepoint,
-        categories = b.bCategories,
-        excludeCategories = b.bExcludeCategories,
-        includeCharacters = b.bIncludeCharacters,
-        excludeCharacters = b.bExcludeCharacters
-      }
+-- | The two-letter Unicode general-category abbreviation
+-- @hegel_string_generator_text@'s @categories@\/@exclude_categories@ expect.
+categoryCode :: GeneralCategory -> Text
+categoryCode UppercaseLetter = "Lu"
+categoryCode LowercaseLetter = "Ll"
+categoryCode TitlecaseLetter = "Lt"
+categoryCode ModifierLetter = "Lm"
+categoryCode OtherLetter = "Lo"
+categoryCode NonSpacingMark = "Mn"
+categoryCode SpacingCombiningMark = "Mc"
+categoryCode EnclosingMark = "Me"
+categoryCode DecimalNumber = "Nd"
+categoryCode LetterNumber = "Nl"
+categoryCode OtherNumber = "No"
+categoryCode ConnectorPunctuation = "Pc"
+categoryCode DashPunctuation = "Pd"
+categoryCode OpenPunctuation = "Ps"
+categoryCode ClosePunctuation = "Pe"
+categoryCode InitialQuote = "Pi"
+categoryCode FinalQuote = "Pf"
+categoryCode OtherPunctuation = "Po"
+categoryCode MathSymbol = "Sm"
+categoryCode CurrencySymbol = "Sc"
+categoryCode ModifierSymbol = "Sk"
+categoryCode OtherSymbol = "So"
+categoryCode Space = "Zs"
+categoryCode LineSeparator = "Zl"
+categoryCode ParagraphSeparator = "Zp"
+categoryCode Control = "Cc"
+categoryCode Format = "Cf"
+categoryCode Surrogate = "Cs"
+categoryCode PrivateUse = "Co"
+categoryCode NotAssigned = "Cn"
 
-injectCs :: Bool -> CharacterFields -> CharacterFields
-injectCs True cf = cf
-injectCs False cf =
-  cf
-    { excludeCategories =
-        Just $ nub $ "Cs" : maybe [] id cf.excludeCategories
-    }
+-- | Build the @hegel_string_generator_text@ handle for a 'CharBuilder' at
+-- the given size bounds. 'Hegel.Gen.Char' materializes single characters
+-- with @minSize = maxSize = 1@; 'Hegel.Gen.Regex's @alphabet@ modifier
+-- reuses this (at the same bounds — only the character set matters for an
+-- alphabet) to build the alphabet's text generator.
+buildCharTextGen :: Word64 -> Word64 -> CharBuilder -> IO (ForeignPtr HegelStringGenerator)
+buildCharTextGen minSz maxSz b =
+  buildTextGen
+    minSz
+    maxSz
+    (codecArg b.bCodec)
+    (maybe 0 fromIntegral b.bMinCodepoint)
+    (maybe maxBound fromIntegral b.bMaxCodepoint :: Word32)
+    (fmap (fmap categoryCode) b.bCategories)
+    exclCats
+    b.bIncludeCharacters
+    b.bExcludeCharacters
+  where
+    -- Haskell 'Text' cannot represent lone surrogates, so exclude them by
+    -- default unless the caller explicitly took over category filtering
+    -- with 'categories'.
+    exclCats
+      | b.bCategoriesExplicit = fmap (fmap categoryCode) b.bExcludeCategories
+      | otherwise = Just (fmap categoryCode (nub (Surrogate : fromMaybe [] b.bExcludeCategories)))
 
 instance Build CharBuilder Char where
-  build b =
-    basic
-      TextSchema
-        { minSize = 1,
-          maxSize = Just 1,
-          charFields = toCharacterFields b
-        }
-      parseChar
-
-parseChar :: Value -> Either ParseError Char
-parseChar v = case hegelText v of
-  Left err -> Left err
-  Right t
-    | T.null t -> Left ParseError {expected = "non-empty string", got = v}
-    | otherwise -> Right (T.head t)
+  build b = Draw drawOneChar
+    where
+      genFP = unsafePerformIO (buildCharTextGen 1 1 b)
+      {-# NOINLINE genFP #-}
+      drawOneChar tc = do
+        t <- drawString tc genFP
+        case T.uncons t of
+          Just (c, _) -> pure c
+          Nothing ->
+            throwIO
+              InvariantViolation
+                { detail = "libhegel: a minSize=maxSize=1 text draw returned an empty string"
+                }

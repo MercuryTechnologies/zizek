@@ -6,13 +6,37 @@
 -- stable public interface and may change without notice.
 --
 -- These are plain functions over a 'TestCase' (libhegel is the only engine, so
--- there is no @DataSource@ typeclass to implement). This is also the home for
--- non-schema engine primitives: 'primitiveBoolean', pools, and state machines.
+-- there is no @DataSource@ typeclass to implement). There is one typed draw
+-- per primitive (see 'Hegel.Internal.Foreign.Raw'\'s @$typeddraws@ section);
+-- there is no server-side compound generation — lists, sets, maps, tuples,
+-- and choices are composed client-side from spans + collections (see
+-- "Hegel.Collection" and "Hegel.Gen.Internal"). String draws
+-- ('drawString') go through a caller-owned 'HegelStringGenerator' handle
+-- built once by a @build*Gen@ constructor and drawn from any number of times.
+-- This is also the home for pools and state machines.
 module Hegel.Internal.DataSource
   ( -- * Generation
-    generate,
-    generateEncoded,
-    primitiveBoolean,
+    HegelStringGenerator,
+    drawBool,
+    drawInteger,
+    FloatSpec (..),
+    drawFloat,
+    drawBytes,
+    drawUuid,
+    drawString,
+    buildTextGen,
+    buildRegexGen,
+    buildEmailGen,
+    buildUrlGen,
+    buildDomainGen,
+
+    -- * String-generator handle census
+    -- $census
+    currentLiveStringGenerators,
+    settleStringGenerators,
+
+    -- * Errors
+    InvariantViolation (..),
 
     -- * Collections
     newCollection,
@@ -37,52 +61,32 @@ module Hegel.Internal.DataSource
   )
 where
 
-import CBOR.Decode qualified as CD
-import CBOR.Encode qualified as CE
-import CBOR.Value (Value)
-import Control.Exception (throwIO)
+import Control.Exception (Exception, throwIO)
+import Control.Monad (void)
+import Data.Bits (bit, shiftL, shiftR, testBit, (.&.))
 import Data.ByteString (ByteString)
+import Data.ByteString qualified as BS
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
-import Data.Word (Word64)
-import Foreign (nullPtr, peek, withArray, withMany)
-import Foreign.C.Types (CBool (..), CDouble (..), CInt)
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import Data.Word (Word32, Word64, Word8)
+import Foreign (ForeignPtr, Ptr, alloca, allocaBytes, castPtr, nullPtr, peek, withArray, withForeignPtr, withMany)
+import Foreign.C.String (CString)
+import Foreign.C.Types (CBool (..), CDouble (..), CInt, CSize (..))
+import Foreign.Concurrent qualified as Concurrent
 import Hegel.Internal.Control (AssumeRejected (..), TestStopped (..))
 import Hegel.Internal.Event qualified as Event
 import Hegel.Internal.Foreign.CString qualified as CString
-import Hegel.Internal.Foreign.Raw hiding (generate)
-import Hegel.Internal.Foreign.Raw qualified as FFI (generate)
+import Hegel.Internal.Foreign.Raw
 import Hegel.Internal.TestCase (Handle (..), TestCase (..), recordDraw)
 import Hegel.Internal.Tick qualified as Tick
-import UnliftIO.Exception (catch)
+import System.IO.Unsafe (unsafePerformIO)
 import Witch qualified
 
 -- * Generation
-
--- NOTE: This function _needs_ to use 'Control.Exception.throwIO' so that
--- 'TestStopped' & 'AssumeRejected' can be thrown as proper async exceptions.
-
--- | Ask the engine for a value matching the CBOR schema.
---
--- Throws 'TestStopped' when the choice budget is exhausted, or 'AssumeRejected'
--- when the engine signals that the current case should be discarded.
-generate :: TestCase -> Value -> IO Value
-generate tc schema = generateEncoded tc (CE.encode schema)
-
--- | 'generate' with the schema already CBOR-encoded — the hot path for
--- 'Hegel.Gen.Internal.BasicGenerator' draws, which cache their encoding at
--- construction so repeated draws skip the encode entirely.
-generateEncoded :: TestCase -> ByteString -> IO Value
-generateEncoded tc schemaBytes = do
-  resultBytes <-
-    FFI.generate tc.handle.ctx tc.handle.ptr tc.slot schemaBytes
-      `catch` \e@(HegelError {code}) -> case code of
-        HEGEL_E_STOP_TEST -> throwIO TestStopped
-        HEGEL_E_ASSUME -> throwIO AssumeRejected
-        _ -> throwIO e
-  case CD.decode resultBytes of
-    Left err -> ioError (userError ("libhegel: CBOR decode failed: " <> err))
-    Right v -> pure v
 
 -- | Interpret a return code from a per-test-case operation.
 --
@@ -100,13 +104,394 @@ handleReturnCode tc rc = throwOnError tc.handle.ctx rc
 -- @[0,1]@ by the engine).
 --
 -- Throws 'TestStopped' on exhaustion.
-primitiveBoolean :: TestCase -> Double -> IO Bool
-primitiveBoolean tc p =
+drawBool :: TestCase -> Double -> IO Bool
+drawBool tc p =
   withSlot tc.slot \outValue -> do
-    -- has_forced = 0: forced-draw support is unused (see 'hegel_primitive_boolean').
-    hegel_primitive_boolean tc.handle.ctx tc.handle.ptr (CDouble p) (CBool 0) (CBool 0) outValue
+    -- has_forced = 0: forced-draw support is unused (see 'hegel_generate_boolean').
+    hegel_generate_boolean tc.handle.ctx tc.handle.ptr (CDouble p) (CBool 0) (CBool 0) outValue
       >>= handleReturnCode tc
     (/= 0) . (\(CBool b) -> b) <$> peek outValue
+
+-- | Draw an integer in the inclusive range @[lo, hi]@, dispatching to the
+-- fixed-width @int64_t@ path when both bounds fit, else the
+-- arbitrary-precision path. Used both by "Hegel.Gen.Integer" (for 'Word'\/
+-- 'Word64', whose full range exceeds 'Int64') and by "Hegel.Gen.Internal"'s
+-- @oneOf@\/@frequency@ index draws.
+--
+-- Throws 'TestStopped' on exhaustion.
+drawInteger :: TestCase -> Integer -> Integer -> IO Integer
+drawInteger tc lo hi
+  | fitsInt64 lo,
+    fitsInt64 hi =
+      withSlot tc.slot \outValue -> do
+        hegel_generate_integer tc.handle.ctx tc.handle.ptr (fromInteger lo) (fromInteger hi) outValue
+          >>= handleReturnCode tc
+        toInteger <$> (peek outValue :: IO Int64)
+  | otherwise = drawIntegerBig tc lo hi
+  where
+    fitsInt64 n = n >= toInteger (minBound :: Int64) && n <= toInteger (maxBound :: Int64)
+
+-- | The 'drawInteger' fallback for bounds outside the @int64_t@ range (only
+-- reachable via 'Word'\/'Word64' at their default full-type bounds today).
+drawIntegerBig :: TestCase -> Integer -> Integer -> IO Integer
+drawIntegerBig tc lo hi =
+  BS.useAsCStringLen (encodeSignedLE lo) \(loPtr, loLen) ->
+    BS.useAsCStringLen (encodeSignedLE hi) \(hiPtr, hiLen) -> do
+      let cap = max loLen hiLen
+      allocaBytes cap \outPtr ->
+        alloca \outLenPtr -> do
+          hegel_generate_integer_big
+            tc.handle.ctx
+            tc.handle.ptr
+            (castPtr loPtr)
+            (fromIntegral loLen)
+            (castPtr hiPtr)
+            (fromIntegral hiLen)
+            (castPtr outPtr)
+            (fromIntegral cap)
+            outLenPtr
+            >>= handleReturnCode tc
+          decodeSignedLE <$> BS.packCStringLen (castPtr outPtr, cap)
+
+-- | Minimal number of bytes needed to represent @n@ in two's-complement.
+minimalSignedByteLen :: Integer -> Int
+minimalSignedByteLen n = go 1
+  where
+    go k
+      | n >= negate (bit (8 * k - 1)) && n < bit (8 * k - 1) = k
+      | otherwise = go (k + 1)
+
+-- | Encode a signed 'Integer' as minimal-length two's-complement
+-- little-endian bytes — the wire format @hegel_generate_integer_big@ expects
+-- for its bounds (mirrors Rust's @BigInt::to_signed_bytes_le@ on the engine
+-- side).
+encodeSignedLE :: Integer -> ByteString
+encodeSignedLE n = BS.pack [byteAt i | i <- [0 .. k - 1]]
+  where
+    k = minimalSignedByteLen n
+    u = if n < 0 then n + bit (8 * k) else n
+    byteAt i = fromInteger ((u `shiftR` (8 * i)) .&. 0xff)
+
+-- | Decode a fixed-width two's-complement little-endian buffer — as written
+-- by @hegel_generate_integer_big@, sign-extended out to the full requested
+-- capacity — back to a signed 'Integer'.
+decodeSignedLE :: ByteString -> Integer
+decodeSignedLE bs
+  | k == 0 = 0
+  | testBit u (8 * k - 1) = u - bit (8 * k)
+  | otherwise = u
+  where
+    k = BS.length bs
+    u = sum [toInteger (BS.index bs i) `shiftL` (8 * i) | i <- [0 .. k - 1]]
+
+-- | Floating-point draw parameters, mirroring @hegel_generate_float@'s
+-- bound\/exclusion\/allow-toggle vocabulary directly.
+data FloatSpec = FloatSpec
+  { minValue :: !Double,
+    maxValue :: !Double,
+    allowNan :: !Bool,
+    allowInfinity :: !Bool,
+    excludeMin :: !Bool,
+    excludeMax :: !Bool,
+    -- | Nonzero magnitudes below this are never drawn; must be positive and
+    -- finite. Pass the width's smallest subnormal for \"no restriction\".
+    smallestNonzeroMagnitude :: !Double
+  }
+
+-- | Draw a float of the given width (32 or 64), per 'FloatSpec'.
+--
+-- Throws 'TestStopped' on exhaustion.
+drawFloat :: TestCase -> Word32 -> FloatSpec -> IO Double
+drawFloat tc width spec =
+  withSlot tc.slot \outValue -> do
+    hegel_generate_float
+      tc.handle.ctx
+      tc.handle.ptr
+      width
+      (CDouble spec.minValue)
+      (CDouble spec.maxValue)
+      (CBool (if spec.allowNan then 1 else 0))
+      (CBool (if spec.allowInfinity then 1 else 0))
+      (CBool (if spec.excludeMin then 1 else 0))
+      (CBool (if spec.excludeMax then 1 else 0))
+      (CDouble spec.smallestNonzeroMagnitude)
+      outValue
+      >>= handleReturnCode tc
+    (\(CDouble d) -> d) <$> peek outValue
+
+-- | Draw a byte string with length in the inclusive range @[lo, hi]@.
+--
+-- Throws 'TestStopped' on exhaustion.
+drawBytes :: TestCase -> Word64 -> Word64 -> IO ByteString
+drawBytes tc lo hi =
+  withSlot tc.slot \outResult -> do
+    hegel_generate_bytes tc.handle.ctx tc.handle.ptr lo hi outResult >>= handleReturnCode tc
+    result <- peek outResult
+    bs <- BS.packCStringLen (castPtr result.resultData, fromIntegral result.resultLen)
+    _ <- hegel_generate_bytes_result_free tc.handle.ctx outResult
+    pure bs
+
+-- | Draw a UUID as 16 big-endian bytes. 'Just' pins the RFC 4122 version
+-- nibble (and the RFC 4122 variant nibble); 'Nothing' draws uniformly
+-- (excluding the nil UUID).
+--
+-- Throws 'TestStopped' on exhaustion.
+drawUuid :: TestCase -> Maybe Word8 -> IO ByteString
+drawUuid tc mVersion =
+  withSlot tc.slot \outBytes -> do
+    hegel_generate_uuid
+      tc.handle.ctx
+      tc.handle.ptr
+      (fromMaybe 0 mVersion)
+      (CBool (if isJust mVersion then 1 else 0))
+      outBytes
+      >>= handleReturnCode tc
+    BS.packCStringLen (castPtr outBytes, 16)
+
+-- | Draw a string from a generator built by a @build*Gen@ constructor below.
+--
+-- Throws 'TestStopped' on exhaustion, 'AssumeRejected' when the draw rejects
+-- itself (e.g. an over-length email), and 'InvariantViolation' if the
+-- engine's UTF-8 guarantee somehow doesn't hold.
+drawString :: TestCase -> ForeignPtr HegelStringGenerator -> IO Text
+drawString tc genFP =
+  withForeignPtr genFP \genPtr ->
+    withSlot tc.slot \outResult -> do
+      hegel_generate_string tc.handle.ctx tc.handle.ptr genPtr outResult >>= handleReturnCode tc
+      result <- peek outResult
+      bs <- BS.packCStringLen (result.resultData, fromIntegral result.resultLen)
+      _ <- hegel_generate_string_result_free tc.handle.ctx outResult
+      case TE.decodeUtf8' bs of
+        Right t -> pure t
+        Left err ->
+          throwIO
+            InvariantViolation {detail = "libhegel: non-UTF-8 string draw (" <> T.pack (show err) <> ")"}
+
+-- * String-generator construction
+
+-- $census
+--
+-- A census of live 'HegelStringGenerator' handles, maintained purely for
+-- profiling and testing ("Hegel.Internal.DataSource" is already internal,
+-- not stable API). __Caveat:__ this only tracks the Haskell-side 'ForeignPtr'
+-- bookkeeping. It's a reliable proxy for whether the native handle got freed
+-- — the same finalizer that decrements the count calls
+-- 'hegel_string_generator_free' — but it cannot see the native
+-- @hegel_string_generator_t@ allocation itself; confirming actual OS-level
+-- RSS would need an external tool (@\/usr\/bin\/time -l@, @heaptrack@,
+-- massif). A failed construction (e.g. an invalid regex pattern) throws via
+-- 'throwOnError' /before/ 'wrapStringGenerator' runs, so this census also
+-- can't see whatever the native side does with a rejected construction
+-- attempt — that's a @libhegel@-side question, out of scope here.
+
+-- | Number of 'HegelStringGenerator' handles currently live, per this
+-- process's 'wrapStringGenerator' bookkeeping.
+liveStringGenerators :: IORef Int
+liveStringGenerators = unsafePerformIO (newIORef 0)
+{-# NOINLINE liveStringGenerators #-}
+
+-- | Read the current count without forcing a GC.
+currentLiveStringGenerators :: IO Int
+currentLiveStringGenerators = readIORef liveStringGenerators
+
+-- | Encourage a settle by generating (and immediately discarding) enough
+-- real allocation pressure to trigger several ordinary, allocation-driven
+-- major GCs, then return the settled count.
+--
+-- __Deliberately does not call 'System.Mem.performGC'.__ An earlier version
+-- did (forced GC + bounded, delayed polling). Digging into why that was
+-- unreliable — eventlog tracing (@+RTS -l@) after "StringGeneratorHandles"
+-- caught it reproducibly — surfaced two separate findings, both worth
+-- knowing if this ever needs revisiting:
+--
+-- 1. 'performGC' itself is untrustworthy for this in a busy, many-threaded
+--    process (e.g. a real test-suite binary with hundreds of tests): GHC's
+--    RTS spawns its \"weak finalizer thread\" lazily, and in a process like
+--    that it can go the rest of the run without spawning a second one no
+--    matter how many /explicit/ major GCs run via 'performGC'.
+-- 2. Replacing 'performGC' with genuine allocation pressure (this function)
+--    fixes it under light-to-moderate concurrent load, but /not/ under the
+--    heaviest load tried (embedded in a real 217-test suite, with dozens of
+--    engine worker threads and property runs in flight at once): even
+--    several gigabytes of real, unfuseable allocation failed to free
+--    anything within a bounded budget there, while the identical code
+--    reclaims almost immediately run alone or under light load. There is no
+--    known upper bound on the delay under sustained heavy concurrent load —
+--    only that it clears quickly once that load isn't present.
+--
+-- Net effect: this is a reasonable, faithful-to-real-usage settle for
+-- ordinary conditions, but it is /not/ a hard guarantee under heavy
+-- sustained concurrency. A caller that needs a reliable answer (as opposed
+-- to a profiling probe's best-effort diagnostic) should run in its own
+-- quiet process rather than lean on a bigger budget here — see
+-- "StringGeneratorHandles"'s own test-suite stanza.
+settleStringGenerators :: IO Int
+settleStringGenerators = do
+  mapM_ churnRound [1 .. rounds :: Int]
+  currentLiveStringGenerators
+  where
+    rounds = 1000 :: Int
+    chunkSize = 500_000 :: Int
+    churnRound r = do
+      -- 'BS.replicate' is a real array allocation (an FFI 'memset'), not a
+      -- fused list — unlike @length (replicate n x)@, which GHC's optimizer
+      -- happily collapses to a no-op at @-O1@, this reliably allocates real,
+      -- short-lived garbage every round.
+      let !bs = BS.replicate chunkSize (fromIntegral r)
+      BS.length bs `seq` pure ()
+
+-- | Wrap a caller-owned @hegel_string_generator_t*@ in a GC-managed
+-- 'ForeignPtr' that frees it on finalization.
+--
+-- The free call takes a @hegel_context_t*@ purely for diagnostics, so the
+-- finalizer opens (and closes) its own throwaway context rather than
+-- capturing the one that built the generator — the generator's lifetime can
+-- outlast that construction context by an arbitrary margin.
+wrapStringGenerator :: Ptr HegelStringGenerator -> IO (ForeignPtr HegelStringGenerator)
+wrapStringGenerator genPtr = do
+  atomicModifyIORef' liveStringGenerators \n -> (n + 1, ())
+  Concurrent.newForeignPtr genPtr finalizer
+  where
+    finalizer = do
+      atomicModifyIORef' liveStringGenerators \n -> (n - 1, ())
+      withContext \ctx -> void (hegel_string_generator_free ctx genPtr)
+
+-- | Build a __text__ string generator (@hegel_string_generator_text@).
+-- @codec@ selects the alphabet's base range (@Nothing@ = all Unicode);
+-- @categories@\/@excludeCategories@ restrict\/remove Unicode general
+-- categories (@Just []@ for @categories@ means an empty alphabet, distinct
+-- from @Nothing@'s \"no restriction\"); @includeCharacters@\/
+-- @excludeCharacters@ union\/remove individual characters last.
+--
+-- Called once per 'Hegel.Gen.Internal.Gen' value (cached by the leaf); throws
+-- 'HegelError' on an invalid combination (e.g. an unknown codec\/category).
+buildTextGen ::
+  -- | @minSize@
+  Word64 ->
+  -- | @maxSize@
+  Word64 ->
+  -- | @codec@
+  Maybe Text ->
+  -- | @minCodepoint@
+  Word32 ->
+  -- | @maxCodepoint@
+  Word32 ->
+  -- | @categories@
+  Maybe [Text] ->
+  -- | @excludeCategories@
+  Maybe [Text] ->
+  -- | @includeCharacters@
+  Maybe Text ->
+  -- | @excludeCharacters@
+  Maybe Text ->
+  IO (ForeignPtr HegelStringGenerator)
+buildTextGen minSz maxSz mCodec minCp maxCp mCats mExclCats mIncl mExcl =
+  withContext \ctx ->
+    withNullableText mCodec \codecPtr ->
+      withNullableTextArray mCats \(catsPtr, catsLen) ->
+        withNullableTextArray mExclCats \(exclCatsPtr, exclCatsLen) ->
+          withNullableUtf8 mIncl \(inclPtr, inclLen) ->
+            withNullableUtf8 mExcl \(exclPtr, exclLen) ->
+              alloca \outGen -> do
+                hegel_string_generator_text
+                  ctx
+                  minSz
+                  maxSz
+                  codecPtr
+                  minCp
+                  maxCp
+                  catsPtr
+                  catsLen
+                  exclCatsPtr
+                  exclCatsLen
+                  inclPtr
+                  inclLen
+                  exclPtr
+                  exclLen
+                  outGen
+                  >>= throwOnError ctx
+                peek outGen >>= wrapStringGenerator
+
+-- | Build a __regex__ string generator (@hegel_string_generator_regex@).
+-- @alphabet@, when given, must itself be a __text__ generator (built by
+-- 'buildTextGen') constraining the pattern's padding and wildcard
+-- characters.
+buildRegexGen :: Text -> Bool -> Maybe (ForeignPtr HegelStringGenerator) -> IO (ForeignPtr HegelStringGenerator)
+buildRegexGen pat fullmatch mAlphabet =
+  withContext \ctx ->
+    CString.withText pat \patPtr ->
+      withNullableAlphabet mAlphabet \alphaPtr ->
+        alloca \outGen -> do
+          hegel_string_generator_regex ctx patPtr (CBool (if fullmatch then 1 else 0)) alphaPtr outGen
+            >>= throwOnError ctx
+          peek outGen >>= wrapStringGenerator
+  where
+    withNullableAlphabet :: Maybe (ForeignPtr HegelStringGenerator) -> (Ptr HegelStringGenerator -> IO a) -> IO a
+    withNullableAlphabet Nothing k = k nullPtr
+    withNullableAlphabet (Just fp) k = withForeignPtr fp k
+
+-- | Build an __email__ string generator (@hegel_string_generator_email@),
+-- producing RFC 5321\/5322 addresses.
+buildEmailGen :: IO (ForeignPtr HegelStringGenerator)
+buildEmailGen =
+  withContext \ctx ->
+    alloca \outGen -> do
+      hegel_string_generator_email ctx outGen >>= throwOnError ctx
+      peek outGen >>= wrapStringGenerator
+
+-- | Build a __URL__ string generator (@hegel_string_generator_url@),
+-- producing RFC 3986 @http@\/@https@ URLs.
+buildUrlGen :: IO (ForeignPtr HegelStringGenerator)
+buildUrlGen =
+  withContext \ctx ->
+    alloca \outGen -> do
+      hegel_string_generator_url ctx outGen >>= throwOnError ctx
+      peek outGen >>= wrapStringGenerator
+
+-- | Build a __domain-name__ string generator (@hegel_string_generator_domain@),
+-- producing RFC 1035 FQDNs of total length at most @maxLength@ (4..=255).
+buildDomainGen :: Word64 -> IO (ForeignPtr HegelStringGenerator)
+buildDomainGen maxLen =
+  withContext \ctx ->
+    alloca \outGen -> do
+      hegel_string_generator_domain ctx maxLen outGen >>= throwOnError ctx
+      peek outGen >>= wrapStringGenerator
+
+-- | Marshal a nullable 'Text' to a NUL-terminated 'CString', or 'nullPtr'
+-- for 'Nothing'.
+withNullableText :: Maybe Text -> (CString -> IO a) -> IO a
+withNullableText Nothing k = k nullPtr
+withNullableText (Just t) k = CString.withText t k
+
+-- | Marshal a nullable list of NUL-terminated UTF-8 names (codec\/category
+-- names) to an array pointer and length. 'Nothing' is \"absent\" (@nullPtr@);
+-- @Just []@ is \"present and empty\", which libhegel distinguishes (an empty
+-- category list means an empty alphabet).
+withNullableTextArray :: Maybe [Text] -> ((Ptr CString, CSize) -> IO a) -> IO a
+withNullableTextArray Nothing k = k (nullPtr, 0)
+withNullableTextArray (Just ts) k =
+  withMany CString.withText ts \ptrs ->
+    withArray ptrs \arr -> k (arr, fromIntegral (length ts))
+
+-- | Marshal a nullable 'Text' to its raw UTF-8 bytes (pointer + length, not
+-- NUL-terminated — these are libhegel's length-delimited character-set
+-- arguments, which may legitimately contain U+0000).
+withNullableUtf8 :: Maybe Text -> ((Ptr Word8, CSize) -> IO a) -> IO a
+withNullableUtf8 Nothing k = k (nullPtr, 0)
+withNullableUtf8 (Just t) k =
+  BS.useAsCStringLen (TE.encodeUtf8 t) \(p, len) -> k (castPtr p, fromIntegral len)
+
+-- * Errors
+
+-- | An engine guarantee we depend on didn't hold: a string draw wasn't valid
+-- UTF-8, or a URL draw wasn't a parseable 'Network.URI.URI'. Both are engine
+-- bugs (the engine documents UTF-8 string output and RFC-3986-valid URLs)
+-- rather than user-facing errors, hence distinct from 'AssumeRejected'\/
+-- 'TestStopped'.
+newtype InvariantViolation = InvariantViolation {detail :: Text}
+  deriving stock (Show)
+
+instance Exception InvariantViolation
 
 -- * Collections
 

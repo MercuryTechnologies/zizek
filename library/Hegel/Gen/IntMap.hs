@@ -12,16 +12,12 @@ module Hegel.Gen.IntMap
   )
 where
 
-import CBOR.Value (Value (..))
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
-import Data.Vector qualified as V
 import Hegel.Collection qualified as Collection
-import Hegel.Gen.Builder (Build (..), HasSize (..))
-import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), basic, draw, materialize, toBasic)
+import Hegel.Gen.Builder (Build (..), HasSize (..), requireOrdered)
+import Hegel.Gen.Internal (Gen (..), draw)
 import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
-import Hegel.Internal.Foreign.CBOR (ParseError (..))
-import Hegel.Internal.Foreign.Schema qualified as Schema
 
 data IntMapBuilder v = IntMapBuilder
   { mKeys :: !(Gen Int),
@@ -40,13 +36,11 @@ instance HasSize (IntMapBuilder v) where
   maxSize n b = b {mMaxSize = Just n}
 
 instance Build (IntMapBuilder v) (IntMap v) where
-  build b = case (toBasic b.mKeys, toBasic b.mValues) of
-    (Just bk, Just bv) ->
-      basic
-        (Schema.map (materialize bk.schema) (materialize bv.schema) b.mMinSize b.mMaxSize)
-        (parseIntMap bk.parse bv.parse)
-    _ ->
-      Draw $ \tc -> do
+  build b = case b.mMaxSize of
+    Just hi -> requireOrdered "Gen.intMap" b.mMinSize hi go
+    Nothing -> go
+    where
+      go = Draw $ \tc -> do
         startSpan tc LabelMap
         -- See Note [Variable-size mode required for reject] in Hegel.Collection.
         let poolMax = case b.mMaxSize of
@@ -70,16 +64,3 @@ instance Build (IntMapBuilder v) (IntMap v) where
               _ -> result
         stopSpan tc False
         pure trimmed
-
-parseIntMap ::
-  (Value -> Either ParseError Int) ->
-  (Value -> Either ParseError v) ->
-  Value ->
-  Either ParseError (IntMap v)
-parseIntMap pk pv (Array vec) = IntMap.fromList <$> traverse parsePair (V.toList vec)
-  where
-    parsePair (Array pair) = case V.toList pair of
-      [k, v] -> (,) <$> pk k <*> pv v
-      _ -> Left ParseError {expected = "[key, value] pair", got = Array pair}
-    parsePair v = Left ParseError {expected = "array pair", got = v}
-parseIntMap _ _ v = Left ParseError {expected = "array", got = v}

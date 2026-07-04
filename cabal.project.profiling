@@ -1,6 +1,6 @@
 -- Profiling build: `just profile-space` builds with this project file into
--- dist-newstyle/prof. Inherit packages + wireform source-repository-packages
--- from the base project so this file can't drift out of sync.
+-- dist-newstyle/prof. Inherit packages from the base project so this file
+-- can't drift out of sync.
 import: cabal.project
 
 -- -O1, deliberately: zizek is a library that runs inside its consumers' test

@@ -20,13 +20,11 @@ module Hegel.Gen.Float
   )
 where
 
-import CBOR.Value (Value (..))
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe, isJust)
 import GHC.Float (double2Float, float2Double)
-import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..))
-import Hegel.Gen.Internal (basic)
-import Hegel.Internal.Foreign.CBOR (ParseError (..))
-import Hegel.Internal.Foreign.Schema (FloatSchema (..))
+import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), requireOrderedMaybe)
+import Hegel.Gen.Internal (Gen (..))
+import Hegel.Internal.DataSource (FloatSpec (..), drawFloat)
 
 data FloatBuilder a = FloatBuilder
   { bMin :: Maybe a,
@@ -78,61 +76,56 @@ instance HasMin (FloatBuilder a) a where
 instance HasMax (FloatBuilder a) a where
   max hi b = b {bMax = Just hi}
 
--- Use concrete GHC.Float primitives (float2Double / double2Float) rather than
--- realToFrac here. realToFrac routes through Rational (toRational then
--- fromRational), which calls decodeFloat on the bit pattern and treats NaN/Inf
--- as finite values — NaN becomes 1.5×2^128 and ±Inf becomes ±2^128. cbor2
--- always encodes Python float('nan') and float('inf') as CBOR Float16, so
--- even a Double generator receives a Float16 (NaN :: Float) off the wire.
+-- | Effective allow-NaN\/allow-Infinity flags. Kept verbatim from the
+-- CBOR-era implementation: setting any bound implies NaN is excluded;
+-- setting both implies Infinity is excluded. This is what already prevents
+-- the engine-rejected NaN+bound \/ infinity+both-finite combinations.
+effectiveFlags :: FloatBuilder a -> (Bool, Bool)
+effectiveFlags b = (allowNan, allowInf)
+  where
+    allowNan = b.bAllowNan && not (isJust b.bMin) && not (isJust b.bMax)
+    allowInf = b.bAllowInf && not (isJust b.bMin && isJust b.bMax)
+
+-- | Smallest positive subnormal 'Double' (@5e-324@) — libhegel's documented
+-- \"no restriction\" sentinel for @smallest_nonzero_magnitude@ at width 64.
+smallestSubnormalDouble :: Double
+smallestSubnormalDouble = 5e-324
+
+-- | Smallest positive subnormal 'Float', as a 'Double' — the sentinel for
+-- width 32.
+smallestSubnormalFloat :: Double
+smallestSubnormalFloat = float2Double (encodeFloat 1 (fst (floatRange (0 :: Float)) - floatDigits (0 :: Float)))
+
 instance Build (FloatBuilder Float) Float where
-  build b = basic (buildSchema 32 b) parse
+  build b =
+    requireOrderedMaybe "Gen.float" b.bMin b.bMax $
+      Draw \tc -> double2Float <$> drawFloat tc 32 spec
     where
-      parse (Float16 f) = Right f
-      parse (Float32 f) = Right f
-      parse (Float64 d) = Right (double2Float d)
-      parse v = Left ParseError {expected = "float", got = v}
+      (allowNan, allowInf) = effectiveFlags b
+      spec =
+        FloatSpec
+          { minValue = maybe (-1 / 0) float2Double b.bMin,
+            maxValue = maybe (1 / 0) float2Double b.bMax,
+            allowNan,
+            allowInfinity = allowInf,
+            excludeMin = b.bExclMin,
+            excludeMax = b.bExclMax,
+            smallestNonzeroMagnitude = smallestSubnormalFloat
+          }
 
 instance Build (FloatBuilder Double) Double where
-  build b = basic (buildSchema 64 b) parse
+  build b =
+    requireOrderedMaybe "Gen.double" b.bMin b.bMax $
+      Draw \tc -> drawFloat tc 64 spec
     where
-      parse (Float16 f) = Right (float2Double f)
-      parse (Float32 f) = Right (float2Double f)
-      parse (Float64 d) = Right d
-      parse v = Left ParseError {expected = "float", got = v}
-
-maxFiniteVal :: forall a. (RealFloat a) => a
-maxFiniteVal =
-  let b = floatRadix (0 :: a)
-      p = floatDigits (0 :: a)
-      (_, eMax) = floatRange (0 :: a)
-   in encodeFloat (b ^ p - 1) (eMax - p)
-
-buildSchema :: forall a. (RealFloat a) => Int -> FloatBuilder a -> FloatSchema a
-buildSchema w b =
-  FloatSchema
-    { width = w,
-      excludeMin = b.bExclMin,
-      excludeMax = b.bExclMax,
-      allowNan = effectiveAllowNan,
-      allowInfinity = effectiveAllowInf,
-      minValue = effectiveMin,
-      maxValue = effectiveMax
-    }
-  where
-    effectiveAllowNan = b.bAllowNan && not (isJust b.bMin) && not (isJust b.bMax)
-    effectiveAllowInf = b.bAllowInf && not (isJust b.bMin && isJust b.bMax)
-
-    -- Pin to the type's range when generating only finite values. Without
-    -- explicit bounds a Float64 value outside Float32's range would silently
-    -- become ±∞ after the double2Float conversion in the Float instance.
-    needsBounds = not effectiveAllowNan && not effectiveAllowInf
-
-    effectiveMin = case b.bMin of
-      Just lo -> Just lo
-      Nothing | needsBounds -> Just (negate (maxFiniteVal @a))
-      Nothing -> Nothing
-
-    effectiveMax = case b.bMax of
-      Just hi -> Just hi
-      Nothing | needsBounds -> Just (maxFiniteVal @a)
-      Nothing -> Nothing
+      (allowNan, allowInf) = effectiveFlags b
+      spec =
+        FloatSpec
+          { minValue = fromMaybe (-1 / 0) b.bMin,
+            maxValue = fromMaybe (1 / 0) b.bMax,
+            allowNan,
+            allowInfinity = allowInf,
+            excludeMin = b.bExclMin,
+            excludeMax = b.bExclMax,
+            smallestNonzeroMagnitude = smallestSubnormalDouble
+          }

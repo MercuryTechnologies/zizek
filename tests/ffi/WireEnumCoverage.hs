@@ -21,9 +21,9 @@ import Hegel.Verbosity (Verbosity (..))
 import Test.Hspec
 import Witch qualified
 
-foreign import ccall unsafe "hegel_guard_backend" guardBackend :: CInt -> IO CInt
+foreign import ccall unsafe "hegel_guard_backend" guardBackend :: Word32 -> IO CInt
 
-foreign import ccall unsafe "hegel_guard_verbosity" guardVerbosity :: CInt -> IO CInt
+foreign import ccall unsafe "hegel_guard_verbosity" guardVerbosity :: Word32 -> IO CInt
 
 foreign import ccall unsafe "hegel_guard_phase" guardPhase :: Word32 -> IO CInt
 
@@ -31,7 +31,7 @@ foreign import ccall unsafe "hegel_guard_health_check" guardHealthCheck :: Word3
 
 foreign import ccall unsafe "hegel_guard_label" guardLabel :: Word64 -> IO CInt
 
-foreign import ccall unsafe "hegel_guard_status" guardStatus :: CInt -> IO CInt
+foreign import ccall unsafe "hegel_guard_status" guardStatus :: Word32 -> IO CInt
 
 -- | Assert the guard recognizes (returns @0@ for) every supplied wire value.
 allRecognized :: (w -> IO CInt) -> [w] -> Expectation
@@ -40,9 +40,9 @@ allRecognized guard = traverse_ \w -> guard w `shouldReturn` 0
 wireEnumCoverageSpec :: Spec
 wireEnumCoverageSpec = describe "wire enum coverage (conversion values vs hegel.h)" $ do
   it "Backend" $
-    allRecognized guardBackend (Witch.into @CInt <$> [Auto, Default, Urandom])
+    allRecognized guardBackend (Witch.into @Word32 <$> [Auto, Default, Urandom])
   it "Verbosity" $
-    allRecognized guardVerbosity (Witch.into @CInt <$> [Quiet, Normal, Verbose, Debug])
+    allRecognized guardVerbosity (Witch.into @Word32 <$> [Quiet, Normal, Verbose, Debug])
   it "Phase" $
     allRecognized guardPhase (Witch.into @Word32 <$> [Explicit, Reuse, Generate, Target, Shrink])
   it "HealthCheck" $
@@ -72,4 +72,4 @@ wireEnumCoverageSpec = describe "wire enum coverage (conversion values vs hegel.
               ]
       )
   it "Status" $
-    allRecognized guardStatus (Witch.into @CInt <$> [Valid, Invalid, Overrun, Interesting "x"])
+    allRecognized guardStatus (Witch.into @Word32 <$> [Valid, Invalid, Overrun, Interesting "x"])

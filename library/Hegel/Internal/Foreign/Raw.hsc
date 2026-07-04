@@ -36,6 +36,12 @@ module Hegel.Internal.Foreign.Raw
     HegelTestCase,
     HegelRunResult,
     HegelFailure,
+    HegelStringGenerator,
+
+    -- * Typed-draw result structs
+    -- $typedrawresults
+    HegelBytesResult (..),
+    HegelStringResult (..),
 
     -- * Error types
     -- $errortypes
@@ -152,7 +158,6 @@ module Hegel.Internal.Foreign.Raw
 
     -- * Per-test-case primitives
     -- $pertestcase
-    hegel_generate,
     hegel_start_span,
     hegel_stop_span,
     hegel_new_collection,
@@ -163,9 +168,26 @@ module Hegel.Internal.Foreign.Raw
     hegel_pool_generate,
     hegel_new_state_machine,
     hegel_state_machine_next_rule,
-    hegel_primitive_boolean,
     hegel_target,
     hegel_mark_complete,
+
+    -- * Typed draws
+    -- $typeddraws
+    hegel_generate_boolean,
+    hegel_generate_integer,
+    hegel_generate_integer_big,
+    hegel_generate_float,
+    hegel_generate_bytes,
+    hegel_generate_bytes_result_free,
+    hegel_generate_uuid,
+    hegel_string_generator_text,
+    hegel_string_generator_regex,
+    hegel_string_generator_email,
+    hegel_string_generator_url,
+    hegel_string_generator_domain,
+    hegel_string_generator_free,
+    hegel_generate_string,
+    hegel_generate_string_result_free,
 
     -- * Failure reproduction
     -- $reproduction
@@ -193,7 +215,6 @@ module Hegel.Internal.Foreign.Raw
     withContext,
     withSettings,
     withRun,
-    generate,
     Slot,
     newSlot,
     withSlot,
@@ -208,13 +229,12 @@ import Control.Exception (Exception (..), bracket, throwIO)
 import Control.Monad (void)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
-import Data.ByteString.Unsafe qualified as BSU
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Word (Word32, Word64, Word8)
-import Foreign (ForeignPtr, FunPtr, Ptr, alloca, castPtr, mallocForeignPtrBytes, nullFunPtr, nullPtr, peek, plusPtr, sizeOf, withForeignPtr)
+import Foreign (ForeignPtr, FunPtr, Ptr, Storable (..), alloca, castPtr, mallocForeignPtrBytes, nullFunPtr, nullPtr, withForeignPtr)
 import Foreign.C.String (CString)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt (..), CSize (..))
 
@@ -240,6 +260,57 @@ data HegelRunResult
 
 -- | Marker type for @hegel_failure_t*@.
 data HegelFailure
+
+-- | Marker type for @hegel_string_generator_t*@: a caller-owned, immutable
+-- handle describing a string draw (text\/regex\/email\/url\/domain), built by
+-- a 'hegel_string_generator_text'-family constructor and freed with
+-- 'hegel_string_generator_free'.
+data HegelStringGenerator
+
+-- $typedrawresults
+--
+-- Caller-owned buffers filled in by 'hegel_generate_bytes' \/
+-- 'hegel_generate_string'. Both are @{ pointer, length }@ pairs: the byte
+-- buffer is never NUL-terminated (a text buffer may contain interior NULs —
+-- the drawn alphabet can include U+0000), so always read exactly 'len' bytes
+-- and never treat 'CString'\/'Ptr' 'Word8' fields as C strings. Each must be
+-- released exactly once with its matching @_result_free@, which also zeroes
+-- the struct in place.
+
+-- | Mirrors @hegel_generate_bytes_result_t@.
+data HegelBytesResult = HegelBytesResult
+  { resultData :: !(Ptr Word8),
+    resultLen :: !CSize
+  }
+
+instance Storable HegelBytesResult where
+  sizeOf _ = (#size hegel_generate_bytes_result_t)
+  alignment _ = (#alignment hegel_generate_bytes_result_t)
+  peek p =
+    HegelBytesResult
+      <$> (#peek hegel_generate_bytes_result_t, data) p
+      <*> (#peek hegel_generate_bytes_result_t, len) p
+  poke p v = do
+    (#poke hegel_generate_bytes_result_t, data) p v.resultData
+    (#poke hegel_generate_bytes_result_t, len) p v.resultLen
+
+-- | Mirrors @hegel_generate_string_result_t@. The buffer is UTF-8 (per the
+-- engine's guarantee), not NUL-terminated; decode exactly 'resultLen' bytes.
+data HegelStringResult = HegelStringResult
+  { resultData :: !CString,
+    resultLen :: !CSize
+  }
+
+instance Storable HegelStringResult where
+  sizeOf _ = (#size hegel_generate_string_result_t)
+  alignment _ = (#alignment hegel_generate_string_result_t)
+  peek p =
+    HegelStringResult
+      <$> (#peek hegel_generate_string_result_t, data) p
+      <*> (#peek hegel_generate_string_result_t, len) p
+  poke p v = do
+    (#poke hegel_generate_string_result_t, data) p v.resultData
+    (#poke hegel_generate_string_result_t, len) p v.resultLen
 
 -- $errortypes
 --
@@ -643,9 +714,9 @@ foreign import ccall safe "hegel_run_free"
 -- * recording targeting observations
 -- * marking the case complete.
 --
--- All are declared @unsafe@: despite the request/reply framing, they execute
--- inline on the calling thread (the Rust worker is parked on the completion
--- ack while the caller drives the case, so the test-case mutex is
+-- Nearly all are declared @unsafe@: despite the request/reply framing, they
+-- execute inline on the calling thread (the Rust worker is parked on the
+-- completion ack while the caller drives the case, so the test-case mutex is
 -- uncontended), never call back into Haskell, and never touch disk — database
 -- persistence and shrink bookkeeping happen in the worker's run loop, behind
 -- 'hegel_next_test_case'. The @safe@-call ceremony (capability
@@ -657,23 +728,12 @@ foreign import ccall safe "hegel_run_free"
 -- @\/dev\/urandom@ inside the call, pinning the capability for the syscall
 -- pair. @\/dev\/urandom@ never blocks, the pin is µs-scale, and Antithesis
 -- runs are not latency-sensitive.
-
--- | Draw one value using a CBOR-encoded schema.
 --
--- Returns 'HEGEL_OK' and writes a /borrowed/ pointer into @*out_value_cbor@;
--- copy before the next @libhegel call@.
---
--- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted, in which
--- case the caller should mark the case 'HEGEL_STATUS_OVERRUN'.
-foreign import ccall unsafe "hegel_generate"
-  hegel_generate
-    :: Ptr HegelContext
-    -> Ptr HegelTestCase
-    -> Ptr Word8         -- ^ schema CBOR bytes
-    -> CSize             -- ^ schema byte length
-    -> Ptr (Ptr Word8)   -- ^ out: borrowed value pointer
-    -> Ptr CSize         -- ^ out: value byte length
-    -> IO CInt
+-- One exception: 'hegel_generate_string' is @safe@. See its own haddock —
+-- a regex-backed draw's bounded retry-on-failed-lookaround loop is a
+-- meaningfully different (still bounded, just not µs-scale) cost profile
+-- than every other draw here, which are each a single RNG-consuming
+-- operation.
 
 -- | Open a labeled span, where the given @label@ is one of the @HEGEL_LABEL_*@
 -- constants.
@@ -780,6 +840,19 @@ foreign import ccall unsafe "hegel_state_machine_next_rule"
     -> Ptr Int64  -- ^ out: @rule_index@
     -> IO CInt
 
+-- $typeddraws
+--
+-- One typed draw per primitive (bool, integer, float, bytes, uuid, string).
+-- There is no server-side compound generation any more: lists, sets, maps,
+-- tuples, and choices are composed client-side from spans + 'hegel_new_collection'
+-- (see "Hegel.Collection" and "Hegel.Gen.Internal").
+--
+-- String draws are two-step: build an immutable, caller-owned
+-- 'HegelStringGenerator' once via a @hegel_string_generator_*@ constructor
+-- (text\/regex\/email\/url\/domain), then draw from it any number of times with
+-- 'hegel_generate_string'. Free the generator with 'hegel_string_generator_free'
+-- once no more draws will use it.
+
 -- | Draw a single boolean that is @true@ with probability @p@ (in @[0,1]@).
 --
 -- The @forced@ / @has_forced@ parameters (used by the engine to pin a draw for
@@ -787,8 +860,8 @@ foreign import ccall unsafe "hegel_state_machine_next_rule"
 -- pass @has_forced = 0@.
 --
 -- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted.
-foreign import ccall unsafe "hegel_primitive_boolean"
-  hegel_primitive_boolean
+foreign import ccall unsafe "hegel_generate_boolean"
+  hegel_generate_boolean
     :: Ptr HegelContext
     -> Ptr HegelTestCase
     -> CDouble   -- ^ @p@ (probability of @true@, in @[0,1]@)
@@ -796,6 +869,225 @@ foreign import ccall unsafe "hegel_primitive_boolean"
     -> CBool     -- ^ @has_forced@
     -> Ptr CBool -- ^ out: drawn value
     -> IO CInt
+
+-- | Draw an integer in @[min_value, max_value]@ (both inclusive, both
+-- required). For bounds outside the @int64_t@ range use
+-- 'hegel_generate_integer_big'.
+--
+-- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted. Returns
+-- 'HEGEL_E_INVALID_ARG' for @min_value > max_value@.
+foreign import ccall unsafe "hegel_generate_integer"
+  hegel_generate_integer
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Int64     -- ^ @min_value@
+    -> Int64     -- ^ @max_value@
+    -> Ptr Int64 -- ^ out: drawn value
+    -> IO CInt
+
+-- | Draw an arbitrary-precision integer in @[min_value, max_value]@.
+--
+-- Bounds and result are two's-complement __little-endian__ signed byte
+-- buffers. On success writes the drawn value's minimal-length two's-complement
+-- LE bytes into @out_value@ (capacity @out_value_cap@), its length into
+-- @*out_value_len@, and sign-fills the rest of the buffer up to
+-- @out_value_cap@ so reading the whole buffer as a fixed-width two's-complement
+-- integer also yields the drawn value. Passing
+-- @out_value_cap >= max(min_value_len, max_value_len)@ always succeeds.
+--
+-- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted. Returns
+-- 'HEGEL_E_INVALID_ARG' for NULL\/empty bounds, @min_value > max_value@, or an
+-- @out_value@ buffer too small for the drawn value.
+foreign import ccall unsafe "hegel_generate_integer_big"
+  hegel_generate_integer_big
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Ptr Word8  -- ^ @min_value@ (LE two's-complement bytes)
+    -> CSize      -- ^ @min_value_len@
+    -> Ptr Word8  -- ^ @max_value@ (LE two's-complement bytes)
+    -> CSize      -- ^ @max_value_len@
+    -> Ptr Word8  -- ^ out: drawn value (LE two's-complement bytes)
+    -> CSize      -- ^ @out_value_cap@
+    -> Ptr CSize  -- ^ out: minimal length of the drawn value
+    -> IO CInt
+
+-- | Draw a float of the given @width@ (32 or 64) in @[min_value, max_value]@.
+--
+-- Pass @-INFINITY@\/@INFINITY@ for unbounded ends. NaN is drawn only when
+-- @allow_nan@ is set; infinities only when @allow_infinity@ is set and the
+-- relevant endpoint is unbounded. @exclude_min@\/@exclude_max@ make the
+-- corresponding bound exclusive. Nonzero magnitudes below
+-- @smallest_nonzero_magnitude@ are never drawn — it must be positive and
+-- finite; pass @5e-324@ (width 64) or the smallest @float@ subnormal
+-- (width 32) for no restriction.
+--
+-- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted. Returns
+-- 'HEGEL_E_INVALID_ARG' for an unsupported width, NaN bounds, width-32 bounds
+-- not exactly representable as @float@, an invalid
+-- @smallest_nonzero_magnitude@, or an empty range.
+foreign import ccall unsafe "hegel_generate_float"
+  hegel_generate_float
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Word32     -- ^ @width@ (32 or 64)
+    -> CDouble    -- ^ @min_value@
+    -> CDouble    -- ^ @max_value@
+    -> CBool      -- ^ @allow_nan@
+    -> CBool      -- ^ @allow_infinity@
+    -> CBool      -- ^ @exclude_min@
+    -> CBool      -- ^ @exclude_max@
+    -> CDouble    -- ^ @smallest_nonzero_magnitude@
+    -> Ptr CDouble -- ^ out: drawn value
+    -> IO CInt
+
+-- | Draw a byte string with length in @[min_size, max_size]@ (both inclusive).
+--
+-- On success fills @*out_result@ with an engine-allocated buffer the caller
+-- owns; release with 'hegel_generate_bytes_result_free'.
+--
+-- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted. Returns
+-- 'HEGEL_E_INVALID_ARG' for @min_size > max_size@.
+foreign import ccall unsafe "hegel_generate_bytes"
+  hegel_generate_bytes
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Word64              -- ^ @min_size@
+    -> Word64              -- ^ @max_size@
+    -> Ptr HegelBytesResult -- ^ out: engine-allocated buffer
+    -> IO CInt
+
+-- | Release a buffer returned by 'hegel_generate_bytes' and reset the struct
+-- to @{NULL, 0}@. Safe to call with an already-freed (zeroed) struct.
+foreign import ccall unsafe "hegel_generate_bytes_result_free"
+  hegel_generate_bytes_result_free :: Ptr HegelContext -> Ptr HegelBytesResult -> IO CInt
+
+-- | Draw a UUID as 16 big-endian bytes written to @out_bytes@ (which must have
+-- room for 16 bytes).
+--
+-- When @has_version@ is set, the RFC 4122 version nibble is forced to
+-- @version@ (0..=15) and the variant nibble to the RFC 4122 variant.
+--
+-- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted. Returns
+-- 'HEGEL_E_INVALID_ARG' for a @version > 15@.
+foreign import ccall unsafe "hegel_generate_uuid"
+  hegel_generate_uuid
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Word8    -- ^ @version@ (used only when @has_version@ is set)
+    -> CBool    -- ^ @has_version@
+    -> Ptr Word8 -- ^ out: 16 big-endian bytes
+    -> IO CInt
+
+-- | Build a __text__ string generator: strings with length in
+-- @[min_size, max_size]@ whose characters are drawn from the described
+-- alphabet (@codec@, codepoint bounds, Unicode general categories,
+-- explicit include\/exclude character sets — see @hegel.h@ for the full
+-- semantics). @codec@ may be @NULL@ (all of Unicode); the category and
+-- character-set arguments may be @NULL@\/zero-length for \"no restriction\".
+--
+-- On success writes a caller-owned handle into @*out_generator@; release with
+-- 'hegel_string_generator_free'. Returns 'HEGEL_E_INVALID_ARG' for
+-- @min_size > max_size@, an unknown codec\/category, non-UTF-8 string
+-- arguments, include\/exclude conflicts, or constraints leaving no characters
+-- while @max_size > 0@.
+foreign import ccall unsafe "hegel_string_generator_text"
+  hegel_string_generator_text
+    :: Ptr HegelContext
+    -> Word64          -- ^ @min_size@
+    -> Word64          -- ^ @max_size@
+    -> CString         -- ^ @codec@ (nullable)
+    -> Word32          -- ^ @min_codepoint@
+    -> Word32          -- ^ @max_codepoint@
+    -> Ptr CString     -- ^ @categories@ (nullable)
+    -> CSize           -- ^ @categories_len@
+    -> Ptr CString     -- ^ @exclude_categories@ (nullable)
+    -> CSize           -- ^ @exclude_categories_len@
+    -> Ptr Word8       -- ^ @include_characters@ (UTF-8 bytes, nullable)
+    -> CSize           -- ^ @include_characters_len@
+    -> Ptr Word8       -- ^ @exclude_characters@ (UTF-8 bytes, nullable)
+    -> CSize           -- ^ @exclude_characters_len@
+    -> Ptr (Ptr HegelStringGenerator) -- ^ out: caller-owned handle
+    -> IO CInt
+
+-- | Build a __regex__ string generator: strings matching @pattern@
+-- (Python-@re@ syntax). When @fullmatch@ is true the whole string matches the
+-- pattern; otherwise the match may be padded on either side. @alphabet@
+-- (optional, @NULL@ for none) must be a __text__ generator constraining the
+-- padding and wildcard characters.
+--
+-- On success writes a caller-owned handle into @*out_generator@; release with
+-- 'hegel_string_generator_free'. Returns 'HEGEL_E_INVALID_ARG' for a
+-- @NULL@\/non-UTF-8\/invalid @pattern@, or an @alphabet@ that is not a text
+-- generator.
+foreign import ccall unsafe "hegel_string_generator_regex"
+  hegel_string_generator_regex
+    :: Ptr HegelContext
+    -> CString                        -- ^ @pattern@
+    -> CBool                          -- ^ @fullmatch@
+    -> Ptr HegelStringGenerator       -- ^ @alphabet@ (borrowed, nullable)
+    -> Ptr (Ptr HegelStringGenerator) -- ^ out: caller-owned handle
+    -> IO CInt
+
+-- | Build an __email__ string generator producing RFC 5321\/5322 addresses.
+foreign import ccall unsafe "hegel_string_generator_email"
+  hegel_string_generator_email :: Ptr HegelContext -> Ptr (Ptr HegelStringGenerator) -> IO CInt
+
+-- | Build a __URL__ string generator producing RFC 3986 @http@\/@https@ URLs.
+foreign import ccall unsafe "hegel_string_generator_url"
+  hegel_string_generator_url :: Ptr HegelContext -> Ptr (Ptr HegelStringGenerator) -> IO CInt
+
+-- | Build a __domain-name__ string generator producing RFC 1035 FQDNs of
+-- total length at most @max_length@ (4..=255).
+--
+-- Returns 'HEGEL_E_INVALID_ARG' for a @max_length@ that leaves no eligible
+-- top-level domains.
+foreign import ccall unsafe "hegel_string_generator_domain"
+  hegel_string_generator_domain
+    :: Ptr HegelContext
+    -> Word64 -- ^ @max_length@
+    -> Ptr (Ptr HegelStringGenerator) -- ^ out: caller-owned handle
+    -> IO CInt
+
+-- | Release a string generator built by a @hegel_string_generator_*@
+-- constructor. Safe to call with @NULL@. Each generator must be freed exactly
+-- once, and only after every draw using it has completed.
+foreign import ccall unsafe "hegel_string_generator_free"
+  hegel_string_generator_free :: Ptr HegelContext -> Ptr HegelStringGenerator -> IO CInt
+
+-- | Draw a string described by @generator@.
+--
+-- On success fills @*out_result@ with an engine-allocated UTF-8 buffer the
+-- caller owns; release with 'hegel_generate_string_result_free'.
+--
+-- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted, and
+-- 'HEGEL_E_ASSUME' when the draw rejected itself (e.g. an email exceeding the
+-- RFC length cap — discard the test case as invalid).
+--
+-- __The one per-test-case primitive imported @safe@, deliberately.__ Every
+-- other draw in @$typeddraws@ (boolean\/integer\/float\/bytes\/uuid) is a
+-- single bounded RNG-consuming operation, same as the rest of
+-- @$pertestcase@ — that's what makes @unsafe@ safe to use there (see the
+-- rationale on that section). A regex-backed draw is not: the engine
+-- generates a candidate from the pattern's AST and, when a deferred check
+-- (a lookaround, an anchor) fails, retries up to 5 times before giving up —
+-- each retry is a full re-draw, so the worst case is measurably more than
+-- the \~1.1µs floor the @unsafe@ calls are tuned for (still bounded, just
+-- not µs-scale). An @unsafe@ call pins the calling capability for however
+-- long that takes, with no GC or other Haskell thread able to run on it
+-- meanwhile; @safe@'s ~0.1–0.5µs release\/reacquire overhead is a much
+-- better trade against that tail than against the plain draws' floor.
+foreign import ccall safe "hegel_generate_string"
+  hegel_generate_string
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Ptr HegelStringGenerator -- ^ @generator@ (borrowed)
+    -> Ptr HegelStringResult    -- ^ out: engine-allocated buffer
+    -> IO CInt
+
+-- | Release a buffer returned by 'hegel_generate_string' and reset the struct
+-- to @{NULL, 0}@. Safe to call with an already-freed (zeroed) struct.
+foreign import ccall unsafe "hegel_generate_string_result_free"
+  hegel_generate_string_result_free :: Ptr HegelContext -> Ptr HegelStringResult -> IO CInt
 
 -- | Record a numeric observation for the targeting phase to hill-climb toward.
 --
@@ -1029,59 +1321,39 @@ withTestCaseFromBlob ctx s blob action =
         else lastErrorMessage ctx >>= \msg -> throwIO HegelError {code = rc, message = msg}
     release tc = void (hegel_test_case_free ctx tc)
 
--- | Reusable pinned block that a test case's per-call replies return
--- through: 'generate' uses both words (the engine's borrowed value pointer,
--- then the value length); the single-word out-params (rule indices,
--- collection/pool ids, primitive booleans) use the first, via 'withSlot'.
--- Allocated once per test case ('Hegel.Internal.TestCase.mkTestCase') and
--- reused across every call — the draw path is hot enough that fresh
--- 'alloca's per call dominated generation profiles.
+-- | Reusable pinned block that a test case's per-call out-parameters write
+-- through, in place of a fresh 'alloca' every call. Covers three shapes:
+-- single-word out-params (rule indices, collection\/pool ids, primitive
+-- booleans, integers, floats); the two-word @{ptr, len}@ result structs
+-- ('HegelBytesResult', 'HegelStringResult'); and the raw 16-byte UUID
+-- buffer. Allocated once per test case ('Hegel.Internal.TestCase.mkTestCase')
+-- and reused across every call — the draw path is hot enough that fresh
+-- 'alloca's\/'allocaBytes's per call dominated generation profiles.
 --
--- Calls on one test case never overlap, so a single slot per case is safe.
+-- Calls on one test case never overlap, so a single slot per case is safe:
+-- each call's out-param write fully overwrites whatever the previous call
+-- (of any shape) left behind, and every draw either reads the out-param
+-- only after a successful return code or throws before reading it at all —
+-- there is no path that observes stale content from an earlier use.
+--
+-- Sized 'max (2 * wordBytes) 16' rather than bare '2 * wordBytes': the
+-- two-word structs are always word-sized fields so '2 * wordBytes' alone
+-- would suffice for them, but the UUID buffer's 16 bytes is a fixed wire
+-- size independent of the host's word width. On 64-bit the two happen to
+-- coincide (16 either way); the 'max' makes that a guarantee rather than a
+-- coincidence that would silently under-allocate on a 32-bit host.
 newtype Slot = Slot (ForeignPtr Word8)
 
 -- | Allocate a 'Slot'. Pinned and GC-managed; no finalizer needed.
 newSlot :: IO Slot
-newSlot = Slot <$> mallocForeignPtrBytes (2 * wordBytes)
+newSlot = Slot <$> mallocForeignPtrBytes (max (2 * wordBytes) 16)
 
--- | Use the slot as a single out-parameter. The pointee must fit one slot
--- word — every libhegel out-param is pointer-, @size_t@-, @int64_t@-, or
--- @bool@-sized, so this holds throughout.
+-- | Use the slot as a single out-parameter. The pointee must fit within the
+-- slot's allocation — see 'Slot's haddock for the shapes that covers.
 withSlot :: Slot -> (Ptr a -> IO b) -> IO b
 withSlot (Slot slot) k = withForeignPtr slot (k . castPtr)
 
--- | Byte size of each 'Slot' word: a pointer, and a @size_t@ ('CSize')
--- length — one machine word either way.
+-- | Byte size of one machine word: a pointer, or a @size_t@ ('CSize')
+-- length — the same width either way on every platform @libhegel@ targets.
 wordBytes :: Int
 wordBytes = sizeOf (nullPtr :: Ptr Word8)
-
--- | Draw one value from a test case using the supplied CBOR-encoded schema,
--- returning the engine's response as a freshly-copied 'ByteString'.
---
--- The engine's output buffer is borrowed and invalidated by the next
--- libhegel call on the same test case; this function copies it before
--- returning so the caller does not need to worry about the lifetime.
---
--- Control-flow codes ('HEGEL_E_STOP_TEST', 'HEGEL_E_ASSUME') are converted to
--- 'HegelError's with the corresponding code so callers can branch on them.
-generate :: Ptr HegelContext -> Ptr HegelTestCase -> Slot -> ByteString -> IO ByteString
-generate ctx tc (Slot slot) schema =
-  -- unsafeUseAsCStringLen is zero-copy (no alloca + memcpy): ByteString
-  -- buffers are pinned, so the pointer stays valid across the safe call, and
-  -- libhegel only reads the schema for the duration of the call.
-  BSU.unsafeUseAsCStringLen schema $ \(schemaPtr, schemaLen) ->
-    withForeignPtr slot $ \base -> do
-      let outPtrPtr = castPtr base :: Ptr (Ptr Word8)
-          outLenPtr = castPtr (base `plusPtr` wordBytes) :: Ptr CSize
-      rc <-
-        hegel_generate
-          ctx
-          tc
-          (castPtr schemaPtr)
-          (fromIntegral schemaLen)
-          outPtrPtr
-          outLenPtr
-      throwOnError ctx rc
-      valuePtr <- peek outPtrPtr
-      valueLen <- peek outLenPtr
-      BS.packCStringLen (castPtr valuePtr, fromIntegral valueLen)

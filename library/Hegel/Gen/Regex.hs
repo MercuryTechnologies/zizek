@@ -17,13 +17,12 @@ module Hegel.Gen.Regex
   )
 where
 
-import CBOR.Value (Value (..))
 import Data.Text (Text)
 import Hegel.Gen.Builder (Build (..))
-import Hegel.Gen.Char (CharBuilder, toCharacterFields)
-import Hegel.Gen.Internal (basic)
-import Hegel.Internal.Foreign.CBOR (ParseError (..), hegelText)
-import Hegel.Internal.Foreign.Schema qualified as Schema
+import Hegel.Gen.Char (CharBuilder, buildCharTextGen)
+import Hegel.Gen.Internal (Gen (..))
+import Hegel.Internal.DataSource (buildRegexGen, drawString)
+import System.IO.Unsafe (unsafePerformIO)
 
 -- | Builder for a regex-constrained 'Text' generator.
 data RegexBuilder = RegexBuilder
@@ -46,13 +45,12 @@ alphabet :: CharBuilder -> RegexBuilder -> RegexBuilder
 alphabet cb b = b {bAlphabet = Just cb}
 
 instance Build RegexBuilder Text where
-  build b =
-    basic
-      (Schema.regex b.bPattern)
-        { Schema.fullmatch = b.bFullMatch,
-          Schema.alphabet = toCharacterFields <$> b.bAlphabet
-        }
-      parseText
-
-parseText :: Value -> Either ParseError Text
-parseText = hegelText
+  build b = Draw \tc -> drawString tc genFP
+    where
+      -- The alphabet, if any, is itself a text generator built at the
+      -- character-level bounds ('Hegel.Gen.Char' uses the same convention);
+      -- only its character set is consulted by the regex engine.
+      mAlphabetFP = unsafePerformIO (traverse (buildCharTextGen 1 1) b.bAlphabet)
+      {-# NOINLINE mAlphabetFP #-}
+      genFP = unsafePerformIO (buildRegexGen b.bPattern b.bFullMatch mAlphabetFP)
+      {-# NOINLINE genFP #-}

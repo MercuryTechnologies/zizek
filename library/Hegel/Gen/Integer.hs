@@ -28,15 +28,12 @@ module Hegel.Gen.Integer
   )
 where
 
-import CBOR.Class (ToCBOR (..))
-import CBOR.Value (Value (..))
 import Data.Int (Int16, Int32, Int64, Int8)
 import Data.Maybe (fromMaybe)
 import Data.Word (Word16, Word32, Word64, Word8)
-import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..))
-import Hegel.Gen.Internal (Gen, basic)
-import Hegel.Internal.Foreign.CBOR (ParseError (..))
-import Hegel.Internal.Foreign.Schema qualified as Schema
+import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), requireOrdered)
+import Hegel.Gen.Internal (Gen (..))
+import Hegel.Internal.DataSource (drawInteger)
 
 data IntegralBuilder a = IntegralBuilder
   { bMin :: Maybe a,
@@ -102,16 +99,22 @@ instance HasMin (IntegralBuilder a) a where
 instance HasMax (IntegralBuilder a) a where
   max hi b = b {bMax = Just hi}
 
-instance (Bounded a, Integral a, ToCBOR a) => Build (IntegralBuilder a) a where
+instance (Bounded a, Integral a, Show a) => Build (IntegralBuilder a) a where
   build b =
     let lo = fromMaybe minBound b.bMin
         hi = fromMaybe maxBound b.bMax
-     in basic (Schema.integer lo hi) parseInteger
-
-parseInteger :: (Integral a) => Value -> Either ParseError a
-parseInteger (UInt n) = Right (fromIntegral n)
-parseInteger (NInt n) = Right (fromIntegral (negate (fromIntegral n :: Integer) - 1))
-parseInteger v = Left ParseError {expected = "integer", got = v}
+        -- Converted once here, not per draw: 'drawInteger' wants 'Integer'
+        -- bounds regardless of 'a', and 'lo'\/'hi' are the same for every
+        -- draw of this 'Gen' value. At @-O1@ full laziness already floats
+        -- this out of the closure (confirmed empirically: identical
+        -- `+RTS -s` byte counts with and without this binding), but it's a
+        -- real ~3% per-draw allocation win at @-O0@
+        -- (`just profile-time-compare`'s un-optimized side, and the plain
+        -- dev build), where that transformation doesn't run.
+        loI = toInteger lo
+        hiI = toInteger hi
+     in requireOrdered "Gen.integral" lo hi $
+          Draw \tc -> fromInteger <$> drawInteger tc loI hiI
 
 -- | Generate an enumeration, drawing from 'minBound' to 'maxBound'.
 enumBounded :: forall a. (Bounded a, Enum a) => Gen a

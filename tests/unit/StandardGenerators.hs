@@ -5,7 +5,8 @@ import Data.Function ((&))
 import Data.Text qualified as T
 import Hegel (prop)
 import Hegel.Gen qualified as Gen
-import Hegel.Property (check_, forEach)
+import Hegel.Property (check, check_, forEach)
+import Hegel.Report (Report (..), Stats (..))
 import Hegel.Settings (Settings (..), defaultSettings)
 import Network.URI (uriScheme)
 import Test.Hspec
@@ -105,10 +106,28 @@ spec = do
         (Gen.mapMaybe (\n -> if even n then Just n else Nothing) (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build))
         $ \n -> n `shouldSatisfy` even
 
+    -- A highly selective mapMaybe over a *finite* source (Gen.element is
+    -- enumerable) collapses to the pre-mapped list statically, so it never
+    -- falls back to the 3-try retry loop — and therefore never discards a
+    -- satisfiable case just because the retries missed the one match.
+    it "does not discard when the source is finite" $ do
+      report <-
+        check (defaultSettings {testCases = 200}) $
+          forEach (Gen.mapMaybe (\n -> if n == 10 then Just n else Nothing) (Gen.element [1 .. 10 :: Int])) $
+            \n -> n `shouldBe` 10
+      report.stats.invalid `shouldBe` 0
+
   describe "Gen.just" $ do
     it "unwraps Just values" $ do
       prop (Gen.just (Gen.maybe (Gen.bool & Gen.build))) $ \b ->
         b `shouldSatisfy` (\x -> x == True || x == False)
+
+    it "does not discard when the source is finite" $ do
+      report <-
+        check (defaultSettings {testCases = 200}) $
+          forEach (Gen.just (Gen.element [Nothing, Nothing, Just (42 :: Int)])) $
+            \n -> n `shouldBe` 42
+      report.stats.invalid `shouldBe` 0
 
   describe "Gen.enumBounded" $ do
     it "covers all constructors of a bounded enum" $ do

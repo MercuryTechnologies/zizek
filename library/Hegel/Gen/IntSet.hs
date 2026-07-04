@@ -10,16 +10,12 @@ module Hegel.Gen.IntSet
   )
 where
 
-import CBOR.Value (Value (..))
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
-import Data.Vector qualified as V
 import Hegel.Collection qualified as Collection
-import Hegel.Gen.Builder (Build (..), HasSize (..))
-import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), basic, draw, materialize, toBasic)
+import Hegel.Gen.Builder (Build (..), HasSize (..), requireOrdered)
+import Hegel.Gen.Internal (Gen (..), draw)
 import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
-import Hegel.Internal.Foreign.CBOR (ParseError (..))
-import Hegel.Internal.Foreign.Schema qualified as Schema
 
 data IntSetBuilder = IntSetBuilder
   { sElement :: !(Gen Int),
@@ -36,13 +32,11 @@ instance HasSize IntSetBuilder where
   maxSize n b = b {sMaxSize = Just n}
 
 instance Build IntSetBuilder IntSet where
-  build b = case toBasic b.sElement of
-    Just be ->
-      basic
-        (Schema.list (materialize be.schema) b.sMinSize b.sMaxSize True)
-        (parseIntSet be.parse)
-    Nothing ->
-      Draw $ \tc -> do
+  build b = case b.sMaxSize of
+    Just hi -> requireOrdered "Gen.intSet" b.sMinSize hi go
+    Nothing -> go
+    where
+      go = Draw $ \tc -> do
         startSpan tc LabelList
         -- See Note [Variable-size mode required for reject] in Hegel.Collection.
         let poolMax = case b.sMaxSize of
@@ -64,10 +58,3 @@ instance Build IntSetBuilder IntSet where
               _ -> result
         stopSpan tc False
         pure trimmed
-
-parseIntSet ::
-  (Value -> Either ParseError Int) ->
-  Value ->
-  Either ParseError IntSet
-parseIntSet p (Array vec) = IntSet.fromList <$> traverse p (V.toList vec)
-parseIntSet _ v = Left ParseError {expected = "array", got = v}

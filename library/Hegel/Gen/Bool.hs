@@ -9,35 +9,25 @@ module Hegel.Gen.Bool
   )
 where
 
-import CBOR.Value (Value (..))
 import Hegel.Gen.Builder (Build (..))
-import Hegel.Gen.Internal (Gen (..), basic)
-import Hegel.Internal.DataSource (primitiveBoolean)
-import Hegel.Internal.Foreign.CBOR (ParseError (..))
-import Hegel.Internal.Foreign.Schema qualified as Schema
+import Hegel.Gen.Internal (Gen (..))
+import Hegel.Internal.DataSource (drawBool)
 
--- | A boolean generator. The default ('bool') is a fair coin satisfied in a
--- single schema round-trip; 'weighted' switches it to the @primitive_boolean@
--- draw, which biases the result.
+-- | A boolean generator. The default ('bool') is a fair coin (@p = 0.5@);
+-- 'weighted' biases the draw.
 newtype BoolBuilder = BoolBuilder
-  { -- | Probability of drawing 'True'. 'Nothing' is a fair coin.
-    probability :: Maybe Double
+  { -- | Probability of drawing 'True'.
+    probability :: Double
   }
 
 -- | Generate a random boolean.
 bool :: BoolBuilder
-bool = BoolBuilder {probability = Nothing}
+bool = BoolBuilder {probability = 0.5}
 
 -- | Bias the draw toward 'True' with the given probability (clamped to
 -- @[0,1]@ by the engine).
 weighted :: Double -> BoolBuilder -> BoolBuilder
-weighted p b = b {probability = Just p}
+weighted p b = b {probability = p}
 
 instance Build BoolBuilder Bool where
-  build b = case b.probability of
-    Nothing -> basic Schema.bool parseBool
-    Just p -> Draw \tc -> primitiveBoolean tc p
-
-parseBool :: Value -> Either ParseError Bool
-parseBool (Bool b) = Right b
-parseBool v = Left ParseError {expected = "boolean", got = v}
+  build b = Draw \tc -> drawBool tc b.probability

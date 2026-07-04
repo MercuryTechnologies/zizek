@@ -1,7 +1,7 @@
 -- | Low-level FFI test suite.
 --
--- Exercises the raw @libhegel@ C API directly: driving runs with CBOR schema
--- bytes, calling @hegel_mark_complete@ by hand, the failure+shrink cycle, and
+-- Exercises the raw @libhegel@ C API directly: driving runs with typed draws,
+-- calling @hegel_mark_complete@ by hand, the failure+shrink cycle, and
 -- per-case completion semantics. These tests work below 'Hegel.Runner' and
 -- 'Hegel.Property', complementing the library-behavior tests in the unit
 -- suite.
@@ -12,25 +12,21 @@
 -- tests do not create @.hegel/@ dirs.
 module Main (main) where
 
-import CBOR.Class (ToCBOR (toCBOR))
-import CBOR.Decode qualified as CD
-import CBOR.Encode qualified as CE
-import CBOR.Value (Value (..))
 import Control.Concurrent (runInBoundThread, threadDelay)
 import Control.Concurrent.Async (cancel, withAsync)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (SomeException, finally, throwIO, try)
-import Data.ByteString (ByteString)
 import Data.Either (isLeft)
 import Data.Function ((&))
+import Data.Int (Int64)
 import Data.Word (Word64)
 import Foreign (Ptr, alloca, nullPtr, peek)
 import Foreign.C.String (withCString)
+import Foreign.C.Types (CBool (..), CDouble (..))
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Internal (draw)
 import Hegel.Internal.Control (TestStopped (..))
 import Hegel.Internal.Foreign.Raw
-import Hegel.Internal.Foreign.Schema qualified as Schema
 import Hegel.Internal.TestCase (Handle (..), Status (..), mkTestCase)
 import Hegel.Internal.TestCase qualified as TC
 import Hegel.Internal.Tick qualified as Tick
@@ -82,17 +78,36 @@ runPassed ctx res = alloca \out -> do
   throwOnError ctx =<< hegel_run_result_status ctx res out
   (== HEGEL_RUN_STATUS_PASSED) <$> peek out
 
--- | Drive runs straight through the C API with CBOR schema bytes and raw
--- @hegel_mark_complete@ status codes.
+-- | Draw a single fair-coin boolean straight off the C API (no schema, no
+-- 'Hegel.Internal.TestCase.TestCase' wrapper).
+drawBooleanRaw :: Ptr HegelContext -> Ptr HegelTestCase -> IO Bool
+drawBooleanRaw ctx tc = alloca \outValue -> do
+  hegel_generate_boolean ctx tc (CDouble 0.5) (CBool 0) (CBool 0) outValue >>= throwOnError ctx
+  (/= 0) . (\(CBool b) -> b) <$> peek outValue
+
+-- | Attempt to draw an integer in @[lo, hi]@, returning 'Nothing' when the
+-- choice budget is exhausted ('HEGEL_E_STOP_TEST'). Budget exhaustion
+-- genuinely occurs during shrinking (the engine tries candidates with
+-- shorter choice sequences than the original failure), so the run loop must
+-- handle it by marking 'HEGEL_STATUS_OVERRUN' and continuing.
+tryDrawInteger :: Ptr HegelContext -> Ptr HegelTestCase -> Int64 -> Int64 -> IO (Maybe Int64)
+tryDrawInteger ctx tc lo hi = alloca \outValue -> do
+  rc <- hegel_generate_integer ctx tc lo hi outValue
+  if rc == HEGEL_E_STOP_TEST
+    then pure Nothing
+    else do
+      throwOnError ctx rc
+      Just <$> peek outValue
+
+-- | Drive runs straight through the C API with the typed boolean draw and
+-- raw @hegel_mark_complete@ status codes.
 rawCApiSpec :: Spec
 rawCApiSpec = describe "raw C API" $ do
   it "round-trips 50 boolean cases" $ runInBoundThread $ do
-    let schemaBytes :: ByteString
-        schemaBytes = CE.encode (toCBOR Schema.bool)
     withContext $ \ctx -> withSettings ctx $ \s -> do
       configure ctx s 50
       withRun ctx s $ \run -> do
-        driveRun ctx schemaBytes run
+        driveBooleanRun ctx run
         resultPtr <- runResult ctx run
         passed <- runPassed ctx resultPtr
         passed `shouldBe` True
@@ -100,14 +115,13 @@ rawCApiSpec = describe "raw C API" $ do
   it "marks a case INTERESTING without crashing" $ runInBoundThread $ do
     withContext $ \ctx -> withSettings ctx $ \s -> do
       configure ctx s 5
-      slot <- newSlot
       let go :: Ptr HegelRun -> Bool -> IO ()
           go run markFirst = do
             tc <- nextTestCase ctx run
             if tc == nullPtr
               then pure ()
               else do
-                _ <- generate ctx tc slot (CE.encode (toCBOR Schema.bool))
+                _ <- drawBooleanRaw ctx tc
                 if markFirst
                   then do
                     rc <- withCString "smoke:0" $ \p ->
@@ -122,8 +136,7 @@ rawCApiSpec = describe "raw C API" $ do
       withRun ctx s $ \run -> go run True
 
   it "drives a full integer failure+shrink cycle" $ runInBoundThread $ do
-    let schemaBytes = CE.encode (toCBOR (Schema.integer @Word64 0 255))
-        threshold = 10 :: Word64
+    let threshold = 10 :: Int64
     withContext $ \ctx -> withSettings ctx $ \s -> do
       configure ctx s 50
       let shrinkLoop :: Ptr HegelRun -> IO ()
@@ -132,18 +145,17 @@ rawCApiSpec = describe "raw C API" $ do
             if tc == nullPtr
               then pure ()
               else do
-                mbs <- tryDraw ctx tc schemaBytes
-                case mbs of
+                mv <- tryDrawInteger ctx tc 0 255
+                case mv of
                   Nothing -> do
                     rc <- hegel_mark_complete ctx tc HEGEL_STATUS_OVERRUN nullPtr
                     case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError ctx rc
-                  Just bs -> case CD.decode bs of
-                    Right (UInt v)
-                      | v >= threshold ->
-                          withCString "smoke:0" $ \p -> do
-                            rc <- hegel_mark_complete ctx tc HEGEL_STATUS_INTERESTING p
-                            case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError ctx rc
-                    _ -> hegel_mark_complete ctx tc HEGEL_STATUS_VALID nullPtr >>= throwOnError ctx
+                  Just v
+                    | v >= threshold ->
+                        withCString "smoke:0" $ \p -> do
+                          rc <- hegel_mark_complete ctx tc HEGEL_STATUS_INTERESTING p
+                          case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError ctx rc
+                    | otherwise -> hegel_mark_complete ctx tc HEGEL_STATUS_VALID nullPtr >>= throwOnError ctx
                 shrinkLoop run
       withRun ctx s $ \run -> do
         shrinkLoop run
@@ -151,8 +163,22 @@ rawCApiSpec = describe "raw C API" $ do
         passed <- runPassed ctx resultPtr
         passed `shouldBe` False
 
+-- | Loop over every test case the engine produces, draw one boolean each
+-- time, and mark the case valid.
+driveBooleanRun :: Ptr HegelContext -> Ptr HegelRun -> IO ()
+driveBooleanRun ctx run = go
+  where
+    go = do
+      tc <- nextTestCase ctx run
+      if tc == nullPtr
+        then pure () -- run finished
+        else do
+          _ <- drawBooleanRaw ctx tc
+          hegel_mark_complete ctx tc HEGEL_STATUS_VALID nullPtr >>= throwOnError ctx
+          go
+
 -- | Drive runs through the 'Hegel.Gen' machinery: 'mkTestCase', 'draw', and the
--- 'Hegel.Internal.TestCase' operations rather than raw schema bytes.
+-- 'Hegel.Internal.TestCase' operations rather than raw typed-draw calls.
 genMachinerySpec :: Spec
 genMachinerySpec = describe "Gen machinery" $ do
   it "draws values within range" $ runInBoundThread $ do
@@ -225,48 +251,6 @@ completionSpec = describe "completion semantics" $
             Left _ -> pure ()
             Right () -> expectationFailure "expected HegelError on double completion"
 
--- | Loop over every test case the engine produces, draw one boolean each
--- time, assert the CBOR decodes correctly, and mark the case valid.
-driveRun :: Ptr HegelContext -> ByteString -> Ptr HegelRun -> IO ()
-driveRun ctx schemaBytes run = go
-  where
-    go :: IO ()
-    go = do
-      tc <- nextTestCase ctx run
-      if tc == nullPtr
-        then pure () -- run finished
-        else do
-          slot <- newSlot
-          bs <- generate ctx tc slot schemaBytes
-          case CD.decode bs of
-            Left err ->
-              expectationFailure ("CBOR decode failed: " <> err)
-            Right (Bool _) ->
-              pure ()
-            Right v ->
-              expectationFailure ("expected Bool, got: " <> show v)
-          hegel_mark_complete ctx tc HEGEL_STATUS_VALID nullPtr >>= throwOnError ctx
-          go
-
--- | Attempt to draw one value from a test case, returning 'Nothing' when the
--- choice budget is exhausted ('HEGEL_E_STOP_TEST').
---
--- __NOTE__: This is a run-loop-level workaround. The 'generate' helper throws
--- 'HegelError' on 'HEGEL_E_STOP_TEST' by design (it is a within-test-case
--- building block, not a run-loop primitive). Budget exhaustion genuinely occurs
--- during shrinking — the engine tries candidates with shorter choice sequences
--- than the original failure — so the run loop must handle it here by marking
--- 'HEGEL_STATUS_OVERRUN' and continuing. Remove this once a higher-level
--- abstraction over the full test-case lifecycle exists.
-tryDraw :: Ptr HegelContext -> Ptr HegelTestCase -> ByteString -> IO (Maybe ByteString)
-tryDraw ctx tc schema = do
-  slot <- newSlot
-  result <- try @HegelError (generate ctx tc slot schema)
-  case result of
-    Right bs -> pure (Just bs)
-    Left HegelError {code = HEGEL_E_STOP_TEST} -> pure Nothing
-    Left err -> throwIO err
-
 -- | Async teardown tests. These go through 'Runner.check' rather than the
 -- raw FFI because the fix ('withAsyncBound' in 'Hegel.Runner.check') lives
 -- there.
@@ -294,7 +278,6 @@ asyncTeardownSpec = describe "async teardown" $ do
         configure ctx s 50
         r <- try @SomeException @() $ withRun ctx s \run -> do
           tc <- nextTestCase ctx run
-          slot <- newSlot
-          _ <- generate ctx tc slot (CE.encode (toCBOR Schema.bool))
+          _ <- drawBooleanRaw ctx tc
           throwIO (userError "bail mid-case")
         r `shouldSatisfy` isLeft

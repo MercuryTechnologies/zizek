@@ -4,7 +4,6 @@ import BasicProperties qualified
 import ControlSignals qualified
 import DatabaseReplay qualified
 import Finalizers qualified
-import GeneratorSchemas qualified
 import Integrations qualified
 import KeyedProperties qualified
 import LogRendering qualified
@@ -25,7 +24,6 @@ main = do
   sourceRendering <- testSpec "source rendering" SourceRendering.spec
   integrations <- testSpec "framework integrations" Integrations.spec
   basics <- testSpec "basic properties" BasicProperties.spec
-  schemas <- testSpec "generator schemas" GeneratorSchemas.spec
   standards <- testSpec "standard generators" StandardGenerators.spec
   properties <- testSpec "property monad" PropertyChecks.spec
   replay <- testSpec "database replay" DatabaseReplay.spec
@@ -44,7 +42,6 @@ main = do
           integrations,
           Integrations.tastyTree,
           basics,
-          schemas,
           standards,
           properties,
           replay,

@@ -38,7 +38,7 @@ Minimum supported GHC version is 9.10 (enforced in CI and `zizek.cabal`). If you
 - `library/Hegel/Settings.hs` (with `Backend`, `Database`, `HealthCheck`, `Phase`, `Verbosity`) — run configuration
 - `library/Hegel/Runner.hs` — `check`: drives the `libhegel` engine, applies `Settings`, pumps test cases, replays reproduction blobs
 - `library/Hegel/Gen.hs` — Umbrella re-export; designed for `import Hegel.Gen qualified as Gen`
-- `library/Hegel/Gen/Internal.hs` — `Gen` GADT, `BasicGenerator`, combinators (`oneOf`, `filtered`, `assume`, `draw`)
+- `library/Hegel/Gen/Internal.hs` — `Gen` GADT, combinators (`oneOf`, `filtered`, `assume`, `draw`), `enumerate`
 - `library/Hegel/Gen/Builder.hs` — `Build`, `HasMin`, `HasMax`, `HasSize` typeclasses
 - `library/Hegel/Gen/*.hs` — per-category builders (bool, integer, float, binary, char, text, regex, uri, uuid, list, set, map, …)
 - `library/Hegel/Collection.hs` — `libhegel`-managed variable-length collection handle, used by the list/set/map generators
@@ -98,15 +98,13 @@ CBOR is the wire vocabulary between `zizek` and `libhegel`. For each test case:
 
 All three are FFI calls into `libhegel` via `Hegel.Internal.Foreign.Raw`, wrapped by `Hegel.Internal.DataSource`/`Hegel.Internal.TestCase`.
 
-### `Gen` GADT and `BasicGenerator`
+### `Gen` GADT
 
-`Gen a` is a GADT (not a typeclass) defined in `Hegel.Gen.Internal`. Key operations:
-- `draw :: TestCase -> Gen a -> IO a` — Produce a value from a live test case
-- `toBasic :: Gen a -> Maybe (BasicGenerator a)` — Returns a CBOR schema + parse function when the generator can be satisfied in a single round-trip
+`Gen a` is a GADT (not a typeclass) defined in `Hegel.Gen.Internal`, with constructors `Pure`, `Draw` (an opaque `TestCase -> IO a` leaf — every leaf generator and combinators like `filtered`/`frequency` bottom out here), `Map`, `Ap`, `Bind`, and `OneOf`. `draw :: TestCase -> Gen a -> IO a` produces a value from a live test case.
 
-When `toBasic` returns `Just`, generation uses a single request with the schema. When `Nothing` (after `>>=` on non-basic generators, or `filtered`), it falls back to multiple requests wrapped in spans for shrinking.
+The GADT structure is interpreted, not just executed: `runInteractive` walks the constructors to decide span nesting for shrinking — `Map` opens MAPPED, `Ap` opens TUPLE (only with ≥2 non-`Pure` leaves), `Bind` opens FLAT_MAP, `OneOf` opens ONE_OF.
 
-`fmap` on a `BasicGenerator` preserves the schema by composing the transform into the parse function, rather than promoting to a non-basic generator.
+`enumerate :: Gen a -> Maybe [a]` walks `Pure`/`Map`/`Ap`/`OneOf` to return a generator's finite value set when statically knowable (`Nothing` at any `Draw` or `Bind`). `filtered`/`mapMaybe` use it as a single-round-trip fast path over finite sources, falling back to a bounded retry loop otherwise.
 
 ### Span System
 
@@ -126,8 +124,9 @@ Spans (`start_span`/`stop_span`) group related generation calls so the engine ca
 
 ### Test Suites
 
-- `tests/unit/` — the `unit` cabal suite (tasty wrapping hspec specs): generators, schemas, property checks, report/source rendering, control signals, stateful, pool events, trace/blame IR, ledger/verdict rendering, database replay, framework integrations
+- `tests/unit/` — the `unit` cabal suite (tasty wrapping hspec specs): generators, property checks, report/source rendering, control signals, stateful, pool events, trace/blame IR, ledger/verdict rendering, database replay, framework integrations
 - `tests/ffi/` — the `ffi` cabal suite: wire-level checks, plus a closed-world guard (`cbits/wire_enum_guard.c`, compiled with `-Werror=switch-enum`) that fails the build if `libhegel` adds an enum variant
+- `tests/string-gen-handles/` — the `string-gen-handles` cabal suite: asserts unreferenced `HegelStringGenerator` handles (see `Hegel.Internal.DataSource`) actually get GC-reclaimed. Isolated in its own process deliberately — the same assertion is flaky inside the shared, hundreds-of-tests `unit` binary (see `settleStringGenerators`'s haddock for why)
 - `tests/profile/` — the `profile-hegel` executable: deterministic named workloads for profiling the Haskell-side hot paths, driven by the `just profile-*` recipes. Not a test suite — a completed run always exits 0. Scenario table lives in `tests/profile/` alongside the workloads.
 
 ## Miscellaneous Conventions

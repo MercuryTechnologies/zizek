@@ -6,16 +6,24 @@
 -- * 'heavyMachine' — a scaled warehouse whose rules append lazily-rendered
 --   state snapshots to an in-state audit log (a classic thunk-chain leak
 --   /shape/, resetting per case) and journal fat annotations every step.
--- * 'churnProperty' — the pre-encoding worst case: every draw constructs a
---   fresh generator whose bounds depend on the previous value, so the cached
---   schema encoding can never be reused.
--- * 'hoardProperty' — the pre-encoding retention case: ten thousand distinct
---   generators held alive for the whole run (a top-level CAF), so every
---   cached encoding is forced /and retained/; max residency shows the cost.
+-- * 'strgenChurnProperty' — the string-generator-handle worst case: every
+--   draw constructs a fresh @hegel_string_generator_regex@ handle whose
+--   character class depends on the previous value, so the per-'Gen'-value
+--   caching (see @notes/migration/libhegel-0.29.md@) can never amortize —
+--   every draw pays a fresh construction, then races the GC to free the
+--   handle before the next one is built.
+-- * 'strgenHoardProperty' — the string-generator-handle retention case: two
+--   thousand distinct regex generators held alive for the whole run (a
+--   top-level CAF), so every handle is built once and retained; max
+--   residency shows the cost. This is the caching layer working exactly as
+--   intended — contrast with the @strgen-reclaim@ profiling probe
+--   ("Main"), which checks that an /unreferenced/ handle actually gets
+--   GC-reclaimed rather than pinned.
 module Stress
   ( heavyMachine,
-    churnProperty,
-    hoardProperty,
+    strgenChurnProperty,
+    strgenHoard,
+    strgenHoardProperty,
   )
 where
 
@@ -164,36 +172,56 @@ heavyMachine =
       invariants = [reservationsMatchOrders, stockCoversReservations, auditNeverForgets]
     }
 
--- * Generator churn
+-- * String-generator churn
 
--- | 100 draws per case, each from a /freshly constructed/ generator whose
--- upper bound depends on the previous draw — the bound chain defeats any
--- sharing, so every draw pays generator construction plus the
--- encode-at-construction that pre-encoding moved there. Compare against
--- @scalars@ (same draw count, fully cached) to price the churn.
-churnProperty :: Property ()
-churnProperty = go (100 :: Int) 1000
+-- | A regex pattern matching a run of lowercase letters @a@..@<w-th letter>@,
+-- for @w@ in @[1,25]@.
+charClassOfWidth :: Int -> Text
+charClassOfWidth w = "[a-" <> T.singleton (toEnum (fromEnum 'a' + w - 1)) <> "]+"
+
+-- | 100 draws per case, each from a /freshly constructed/ regex generator
+-- whose character-class width depends on the previous draw — the chain
+-- defeats any sharing, so every draw pays a fresh
+-- @hegel_string_generator_regex@ construction (and pattern validation) that
+-- the per-'Gen'-value caching can never amortize. Compare against @draws@
+-- (same draw count, an @int@ leaf with no handle to build at all) to price
+-- the churn.
+strgenChurnProperty :: Property ()
+strgenChurnProperty = go (100 :: Int) 1
   where
     go 0 _ = pure ()
-    go n hi = do
-      x <- forAllSilent (Gen.int & Gen.min 0 & Gen.max (Prelude.max 1 hi) & Gen.build)
-      go (n - 1) (x + 1)
+    go n width = do
+      x <- forAllSilent (Gen.int & Gen.min 1 & Gen.max 25 & Gen.build)
+      _ <- forAllSilent (Gen.regex (charClassOfWidth width) & Gen.build)
+      go (n - 1) x
 
--- * Generator hoard
+-- * String-generator hoard
 
--- | Ten thousand distinct basic generators, alive for the whole run as a
--- top-level CAF. Drawing from each forces its cached 'encoded' schema, which
--- is then retained until process exit — max residency directly prices the
--- pre-encoding's retention overhead (schema 'Value' + encoded bytes per
--- generator).
-hoard :: [Gen Int]
-hoard = [Gen.int & Gen.min 0 & Gen.max hi & Gen.build | hi <- [1 .. 10_000]]
+-- | Two thousand distinct regex generators, half plain and half built with
+-- an explicit 'Gen.alphabet' (which compounds a /second/, alphabet-only
+-- handle per generator — see 'Hegel.Gen.Regex.alphabet') — alive for the
+-- whole run as a top-level CAF. Drawing from each forces its handle to be
+-- built (on first draw only) and retained until process exit; max residency
+-- and 'Hegel.Internal.DataSource.currentLiveStringGenerators' both price the
+-- retention, and the alphabet half should show roughly double the handle
+-- count of the plain half.
+strgenHoard :: [Gen Text]
+strgenHoard =
+  [ let pat = charClassOfWidth (1 + (i `mod` 25))
+     in if even i
+          then Gen.regex pat & Gen.build
+          else
+            Gen.regex pat
+              & Gen.alphabet (Gen.char & Gen.minCodepoint 97 & Gen.maxCodepoint 122)
+              & Gen.build
+  | i <- [1 .. 2_000]
+  ]
 
--- | One draw from each generator in a 1000-wide window of the hoard, at a
--- per-case offset. (Drawing all 10k in one case overruns the engine's
+-- | One draw from each generator in a 200-wide window of the hoard, at a
+-- per-case offset. (Drawing all 2k in one case would overrun the engine's
 -- per-case choice budget; the varying window still forces — and the CAF
 -- still retains — the whole hoard across a run.)
-hoardProperty :: Property ()
-hoardProperty = do
-  offset <- forAllSilent (Gen.int & Gen.min 0 & Gen.max 9000 & Gen.build)
-  mapM_ (void . forAllSilent) (take 1000 (drop offset hoard))
+strgenHoardProperty :: Property ()
+strgenHoardProperty = do
+  offset <- forAllSilent (Gen.int & Gen.min 0 & Gen.max 1800 & Gen.build)
+  mapM_ (void . forAllSilent) (take 200 (drop offset strgenHoard))

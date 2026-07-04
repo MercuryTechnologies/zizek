@@ -69,7 +69,6 @@ common library
     unordered-containers ^>=0.2,
     uuid ^>=1.3,
     vector ^>=0.13,
-    wireform-cbor,
     witch ^>=1.2,
 
 library
@@ -110,10 +109,8 @@ library
     Hegel.Internal.DataSource
     Hegel.Internal.DatabaseKey
     Hegel.Internal.Event
-    Hegel.Internal.Foreign.CBOR
     Hegel.Internal.Foreign.CString
     Hegel.Internal.Foreign.Raw
-    Hegel.Internal.Foreign.Schema
     Hegel.Internal.TestCase
     Hegel.Internal.Tick
     Hegel.Phase
@@ -202,7 +199,6 @@ test-suite unit
     ControlSignals
     DatabaseReplay
     Finalizers
-    GeneratorSchemas
     Golden
     Integrations
     KeyedProperties
@@ -215,6 +211,28 @@ test-suite unit
     Stateful
     TraceFixtures
     TraceModel
+
+  build-depends:
+    hspec ^>=2.11,
+    tasty-hspec ^>=1.2,
+    zizek,
+
+-- Isolated in its own process, deliberately: this spec asserts that
+-- unreferenced 'Hegel.Internal.DataSource.HegelStringGenerator' handles get
+-- GC-reclaimed, which is only a reliable assertion in a quiet process. In
+-- the shared, hundreds-of-tests `unit` binary — many worker threads and
+-- property runs in flight at once — the exact same assertion is flaky (see
+-- 'Hegel.Internal.DataSource.settleStringGenerators'), for reasons upstream
+-- of anything this repo controls.
+test-suite string-gen-handles
+  import: library
+  type: exitcode-stdio-1.0
+  hs-source-dirs: tests/string-gen-handles
+  main-is: Main.hs
+  ghc-options:
+    -threaded
+    -rtsopts
+    -with-rtsopts=-N
 
   build-depends:
     hspec ^>=2.11,

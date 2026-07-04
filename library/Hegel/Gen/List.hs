@@ -11,22 +11,16 @@ module Hegel.Gen.List
   )
 where
 
-import CBOR.Value (Value (..))
-import Data.Maybe (isJust)
-import Data.Vector qualified as V
 import Hegel.Collection qualified as Collection
-import Hegel.Gen.Builder (Build (..), HasSize (..))
-import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), basic, draw, materialize, toBasic)
+import Hegel.Gen.Builder (Build (..), HasSize (..), requireOrdered)
+import Hegel.Gen.Internal (Gen (..), draw)
 import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
-import Hegel.Internal.Foreign.CBOR (ParseError (..))
-import Hegel.Internal.Foreign.Schema qualified as Schema
 
 data ListBuilder a = ListBuilder
   { lElement :: !(Gen a),
     lMinSize :: !Int,
     lMaxSize :: !(Maybe Int),
-    -- | When 'Just', uniqueness is enforced; the predicate decides equality
-    -- on the interactive path.
+    -- | When 'Just', uniqueness is enforced; the predicate decides equality.
     lUnique :: !(Maybe (a -> a -> Bool))
   }
 
@@ -35,11 +29,8 @@ list :: Gen a -> ListBuilder a
 list g = ListBuilder {lElement = g, lMinSize = 0, lMaxSize = Nothing, lUnique = Nothing}
 
 -- | Require all elements to be distinct according to the given equality
--- predicate.
---
--- On the basic path, the engine enforces uniqueness using its own
--- representation equality; on the interactive path the predicate is used
--- locally to reject duplicates.
+-- predicate. The predicate is used locally to reject duplicates as they are
+-- drawn.
 unique :: (a -> a -> Bool) -> ListBuilder a -> ListBuilder a
 unique eq b = b {lUnique = Just eq}
 
@@ -48,13 +39,11 @@ instance HasSize (ListBuilder a) where
   maxSize n b = b {lMaxSize = Just n}
 
 instance Build (ListBuilder a) [a] where
-  build b = case toBasic b.lElement of
-    Just be ->
-      basic
-        (Schema.list (materialize be.schema) b.lMinSize b.lMaxSize (isJust b.lUnique))
-        (parseList be.parse)
-    Nothing ->
-      Draw $ \tc -> do
+  build b = case b.lMaxSize of
+    Just hi -> requireOrdered "Gen.list" b.lMinSize hi go
+    Nothing -> go
+    where
+      go = Draw $ \tc -> do
         startSpan tc LabelList
         -- For unique lists, see Note [Variable-size mode required for reject]
         -- in Hegel.Collection.
@@ -83,7 +72,3 @@ instance Build (ListBuilder a) [a] where
               _ -> result
         stopSpan tc False
         pure trimmed
-
-parseList :: (Value -> Either ParseError a) -> Value -> Either ParseError [a]
-parseList p (Array vec) = traverse p (V.toList vec)
-parseList _ v = Left ParseError {expected = "array", got = v}

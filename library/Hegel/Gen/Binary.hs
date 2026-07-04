@@ -9,12 +9,10 @@ module Hegel.Gen.Binary
   )
 where
 
-import CBOR.Value (Value (..))
 import Data.ByteString (ByteString)
-import Hegel.Gen.Builder (Build (..), HasSize (..))
-import Hegel.Gen.Internal (basic)
-import Hegel.Internal.Foreign.CBOR (ParseError (..))
-import Hegel.Internal.Foreign.Schema qualified as Schema
+import Hegel.Gen.Builder (Build (..), HasSize (..), requireOrdered)
+import Hegel.Gen.Internal (Gen (..))
+import Hegel.Internal.DataSource (drawBytes)
 
 data BinaryBuilder = BinaryBuilder
   { bMinSize :: !Int,
@@ -30,8 +28,11 @@ instance HasSize BinaryBuilder where
   maxSize n b = b {bMaxSize = Just n}
 
 instance Build BinaryBuilder ByteString where
-  build b = basic (Schema.binary b.bMinSize b.bMaxSize) parseBinary
-
-parseBinary :: Value -> Either ParseError ByteString
-parseBinary (ByteString bs) = Right bs
-parseBinary v = Left ParseError {expected = "bytes", got = v}
+  build b = case b.bMaxSize of
+    Just hi -> requireOrdered "Gen.binary" b.bMinSize hi go
+    Nothing -> go
+    where
+      -- Converted once here, not per draw.
+      wireLo = fromIntegral b.bMinSize
+      wireHi = maybe maxBound fromIntegral b.bMaxSize
+      go = Draw \tc -> drawBytes tc wireLo wireHi

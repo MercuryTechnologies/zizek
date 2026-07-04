@@ -8,8 +8,7 @@
 --
 -- > Gen.uriText & Gen.build
 --
--- Both builders use the same @{\"type\": \"url\"}@ schema and produce RFC 3986
--- HTTP\/HTTPS URLs.
+-- Both builders draw from the same RFC 3986 HTTP\/HTTPS URL generator.
 module Hegel.Gen.Uri
   ( -- * Builders
     UriBuilder,
@@ -19,14 +18,14 @@ module Hegel.Gen.Uri
   )
 where
 
-import CBOR.Value (Value)
+import Control.Exception (throwIO)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Gen.Builder (Build (..))
-import Hegel.Gen.Internal (basic)
-import Hegel.Internal.Foreign.CBOR (ParseError (..), hegelText)
-import Hegel.Internal.Foreign.Schema qualified as Schema
+import Hegel.Gen.Internal (Gen (..))
+import Hegel.Internal.DataSource (InvariantViolation (..), buildUrlGen, drawString)
 import Network.URI (URI, parseURI)
+import System.IO.Unsafe (unsafePerformIO)
 
 data UriBuilder = UriBuilder
 
@@ -41,14 +40,19 @@ uriText :: UriTextBuilder
 uriText = UriTextBuilder
 
 instance Build UriBuilder URI where
-  build _ = basic Schema.url parseUri
+  build _ = Draw drawParsedUri
+    where
+      genFP = unsafePerformIO buildUrlGen
+      {-# NOINLINE genFP #-}
+      drawParsedUri tc = do
+        t <- drawString tc genFP
+        case parseURI (T.unpack t) of
+          Just u -> pure u
+          Nothing ->
+            throwIO InvariantViolation {detail = "libhegel: unparseable URI from a url draw: " <> t}
 
 instance Build UriTextBuilder Text where
-  build _ = basic Schema.url hegelText
-
-parseUri :: Value -> Either ParseError URI
-parseUri v = case hegelText v of
-  Left err -> Left err
-  Right t -> case parseURI (T.unpack t) of
-    Just u -> Right u
-    Nothing -> Left ParseError {expected = "URI", got = v}
+  build _ = Draw \tc -> drawString tc genFP
+    where
+      genFP = unsafePerformIO buildUrlGen
+      {-# NOINLINE genFP #-}

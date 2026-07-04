@@ -21,7 +21,6 @@
 -- in do-notation.
 module Hegel.Gen
   ( -- * Core types
-    BasicGenerator (schema, parse),
     TestCase,
 
     -- * Builder classes
@@ -102,6 +101,7 @@ module Hegel.Gen
     -- * Char
     CharBuilder,
     char,
+    Codec (..),
     codec,
     minCodepoint,
     maxCodepoint,
@@ -153,7 +153,6 @@ module Hegel.Gen
 
     -- * Exceptions
     AssumeRejected (..),
-    UnexpectedResponse (..),
   )
 where
 
@@ -162,6 +161,7 @@ import Hegel.Gen.Bool (BoolBuilder, bool, weighted)
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasSize (..))
 import Hegel.Gen.Char
   ( CharBuilder,
+    Codec (..),
     categories,
     char,
     codec,
@@ -203,8 +203,6 @@ import Hegel.Gen.Integer
   )
 import Hegel.Gen.Internal
   ( AssumeRejected (..),
-    BasicGenerator (parse, schema),
-    UnexpectedResponse (..),
     assume,
     defer,
     discard,

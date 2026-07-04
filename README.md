@@ -39,13 +39,9 @@ Should we ever produce an Antithesis SDK for Haskell[^2], tests written with `zi
 
 ## How It Works
 
-`zizek` does not implement its own generators or shrinking logic. Instead, this library provides combinators for building generation strategies that are handed to the in-process `libhegel` engine via FFI. Everything related to random sampling, choice sequence bookkeeping, and integrated shrinking happens inside `libhegel` and is communicated back to `zizek` via the [Hegel protocol].
+`zizek` does not implement its own generators or shrinking logic. Instead, this library provides combinators for building generation strategies that draw from the in-process `libhegel` engine via FFI. Everything related to random sampling, choice sequence bookkeeping, and integrated shrinking happens inside `libhegel` and is communicated back to `zizek` via the [Hegel protocol].
 
-A generator built with this library is a description of a *schema*: `Gen.int & Gen.min 0 & Gen.max 100 & Gen.build` describes a generation strategy for integers in `[0,100]`.
-
-When all the draws in a property can be expressed as one schema, `zizek` makes a single FFI call into `libhegel` and gets back the full bundle of values in one round-trip; we colloquially refer to these as "independent draws".
-
-When one draw depends on the results of an earlier draw, or uses a combinator that is not expressible as a schema (e.g. `filtered`, `defer`), `zizek` falls back to step-by-step interactive generation, wrapping the calls in labelled spans so Hypothesis can still shrink effectively.
+Every primitive is a single typed FFI call. `Gen.bool`, `Gen.int & Gen.min 0 & Gen.max 100`, and `Gen.text` each draw one value from the engine this way. `zizek` builds compounds on top of these draws entirely on the client side. A tuple, `oneOf`, `frequency`, `filtered`, or a generator built with `>>=` wraps its underlying draws in labelled spans, and the engine shrinks each span as a unit. Lists, sets, and maps work the same way, but also drive the engine's collection primitive to handle their variable length.
 
 > [!IMPORTANT]
 > Complex generators can (and should!) be constructed using `do`-notation and the `ApplicativeDo` language extension; this allows `zizek` to infer dependency relationships between draws and produce an optimal generation strategy with relatively little effort.
@@ -66,24 +62,6 @@ source-repository-package
   type: git
   location: https://github.com/MercuryTechnologies/zizek
   tag: main
-
-source-repository-package
-  type: git
-  location: https://github.com/iand675/wireform-
-  tag: main
-  subdir: wireform-cbor
-
-source-repository-package
-  type: git
-  location: https://github.com/iand675/wireform-
-  tag: main
-  subdir: wireform-core
-
-source-repository-package
-  type: git
-  location: https://github.com/iand675/wireform-
-  tag: main
-  subdir: wireform-derive
 ```
 
 </details>

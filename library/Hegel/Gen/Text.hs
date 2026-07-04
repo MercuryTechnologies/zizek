@@ -11,13 +11,11 @@ module Hegel.Gen.Text
   )
 where
 
-import CBOR.Value (Value (..))
 import Data.Text (Text)
-import Hegel.Gen.Builder (Build (..), HasSize (..))
-import Hegel.Gen.Internal (basic)
-import Hegel.Internal.Foreign.CBOR (ParseError (..), hegelText)
-import Hegel.Internal.Foreign.Schema (TextSchema (maxSize))
-import Hegel.Internal.Foreign.Schema qualified as Schema
+import Hegel.Gen.Builder (Build (..), HasSize (..), requireOrdered)
+import Hegel.Gen.Internal (Gen (..))
+import Hegel.Internal.DataSource (buildTextGen, drawString)
+import System.IO.Unsafe (unsafePerformIO)
 
 data TextBuilder = TextBuilder
   { bMinSize :: !Int,
@@ -33,10 +31,23 @@ instance HasSize TextBuilder where
   maxSize n b = b {bMaxSize = Just n}
 
 instance Build TextBuilder Text where
-  build b =
-    basic
-      ((Schema.text b.bMinSize) {maxSize = b.bMaxSize})
-      parseText
-
-parseText :: Value -> Either ParseError Text
-parseText = hegelText
+  build b = case b.bMaxSize of
+    Just hi -> requireOrdered "Gen.text" b.bMinSize hi go
+    Nothing -> go
+    where
+      go = Draw \tc -> drawString tc genFP
+      genFP = unsafePerformIO gen
+      {-# NOINLINE genFP #-}
+      -- No codec\/codepoint\/category restriction beyond excluding
+      -- surrogates, which 'Data.Text.Text' cannot represent.
+      gen =
+        buildTextGen
+          (fromIntegral b.bMinSize)
+          (maybe maxBound fromIntegral b.bMaxSize)
+          Nothing
+          0
+          maxBound
+          Nothing
+          (Just ["Cs"])
+          Nothing
+          Nothing

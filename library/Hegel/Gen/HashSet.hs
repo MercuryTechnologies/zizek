@@ -10,17 +10,13 @@ module Hegel.Gen.HashSet
   )
 where
 
-import CBOR.Value (Value (..))
 import Data.HashSet (HashSet)
 import Data.HashSet qualified as HashSet
 import Data.Hashable (Hashable)
-import Data.Vector qualified as V
 import Hegel.Collection qualified as Collection
-import Hegel.Gen.Builder (Build (..), HasSize (..))
-import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), basic, draw, materialize, toBasic)
+import Hegel.Gen.Builder (Build (..), HasSize (..), requireOrdered)
+import Hegel.Gen.Internal (Gen (..), draw)
 import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
-import Hegel.Internal.Foreign.CBOR (ParseError (..))
-import Hegel.Internal.Foreign.Schema qualified as Schema
 
 data HashSetBuilder a = HashSetBuilder
   { sElement :: !(Gen a),
@@ -37,13 +33,11 @@ instance HasSize (HashSetBuilder a) where
   maxSize n b = b {sMaxSize = Just n}
 
 instance (Hashable a) => Build (HashSetBuilder a) (HashSet a) where
-  build b = case toBasic b.sElement of
-    Just be ->
-      basic
-        (Schema.list (materialize be.schema) b.sMinSize b.sMaxSize True)
-        (parseHashSet be.parse)
-    Nothing ->
-      Draw $ \tc -> do
+  build b = case b.sMaxSize of
+    Just hi -> requireOrdered "Gen.hashSet" b.sMinSize hi go
+    Nothing -> go
+    where
+      go = Draw $ \tc -> do
         startSpan tc LabelList
         -- See Note [Variable-size mode required for reject] in Hegel.Collection.
         let poolMax = case b.sMaxSize of
@@ -65,11 +59,3 @@ instance (Hashable a) => Build (HashSetBuilder a) (HashSet a) where
               _ -> result
         stopSpan tc False
         pure trimmed
-
-parseHashSet ::
-  (Hashable a) =>
-  (Value -> Either ParseError a) ->
-  Value ->
-  Either ParseError (HashSet a)
-parseHashSet p (Array vec) = HashSet.fromList <$> traverse p (V.toList vec)
-parseHashSet _ v = Left ParseError {expected = "array", got = v}

@@ -17,16 +17,17 @@ module Hegel.Gen.Uuid
   )
 where
 
-import CBOR.Value (Value)
-import Data.UUID (UUID, fromText)
+import Control.Exception (throwIO)
+import Data.ByteString.Lazy qualified as BSL
+import Data.UUID (UUID)
+import Data.UUID qualified as UUID
+import Data.Word (Word8)
 import Hegel.Gen.Builder (Build (..))
-import Hegel.Gen.Internal (basic)
-import Hegel.Internal.Foreign.CBOR (ParseError (..), hegelText)
-import Hegel.Internal.Foreign.Schema (UuidSchema (version))
-import Hegel.Internal.Foreign.Schema qualified as Schema
+import Hegel.Gen.Internal (Gen (..))
+import Hegel.Internal.DataSource (InvariantViolation (..), drawUuid)
 
-data UuidBuilder = UuidBuilder
-  { bVersion :: !(Maybe Int)
+newtype UuidBuilder = UuidBuilder
+  { bVersion :: Maybe Word8
   }
 
 -- | Generate a random UUID.
@@ -34,15 +35,14 @@ uuid :: UuidBuilder
 uuid = UuidBuilder {bVersion = Nothing}
 
 -- | Restrict generation to UUIDs of the given RFC 4122 version (1–5).
-version :: Int -> UuidBuilder -> UuidBuilder
+version :: Word8 -> UuidBuilder -> UuidBuilder
 version n b = b {bVersion = Just n}
 
 instance Build UuidBuilder UUID where
-  build b = basic (Schema.uuid {version = b.bVersion}) parseUuid
-
-parseUuid :: Value -> Either ParseError UUID
-parseUuid v = case hegelText v of
-  Left err -> Left err
-  Right t -> case fromText t of
-    Just u -> Right u
-    Nothing -> Left ParseError {expected = "UUID string", got = v}
+  build b = Draw \tc -> do
+    bytes <- drawUuid tc b.bVersion
+    case UUID.fromByteString (BSL.fromStrict bytes) of
+      Just u -> pure u
+      Nothing ->
+        throwIO
+          InvariantViolation {detail = "libhegel: uuid draw did not return 16 bytes"}

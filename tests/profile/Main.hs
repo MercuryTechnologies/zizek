@@ -28,6 +28,7 @@ import Hegel (Gen)
 import Hegel.Assertion (assert)
 import Hegel.Gen qualified as Gen
 import Hegel.HealthCheck (HealthCheck (..))
+import Hegel.Internal.DataSource qualified as DataSource
 import Hegel.Phase (Phase (..))
 import Hegel.Property (Property, forAll, forAllSilent)
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), renderReport, renderReportRichAnsi)
@@ -130,6 +131,9 @@ runScenario scenario opts = do
         rendered <- render report
         void (evaluate (T.length rendered))
       T.putStrLn (summary scenario iterations report)
+    Probe act -> do
+      line <- act (fromMaybe scenario.defaultCases opts.cases)
+      T.putStrLn (T.pack scenario.name <> ": " <> line)
 
 summary :: Scenario -> Int -> Report -> Text
 summary scenario cases report =
@@ -174,6 +178,12 @@ data Work
     -- of render iterations. Rendering happens once per failure in real use —
     -- the loop makes a per-failure latency cost profileable.
     RenderLoop Int (Property ()) (Report -> IO Text)
+  | -- | An arbitrary 'IO' diagnostic, outside the property/engine loop
+    -- entirely; the case count (from the usual @[cases]@ CLI arg) is passed
+    -- through as a size knob and the returned 'Text' is printed as the
+    -- scenario's one-line result, in place of the usual
+    -- @cases=\/valid=\/invalid=\/result=@ summary.
+    Probe (Int -> IO Text)
 
 describeScenario :: Scenario -> String
 describeScenario s =
@@ -188,18 +198,57 @@ scenarios :: [Scenario]
 scenarios =
   [ Scenario "baseline" 10000 "one full-range int draw per case; per-case round-trip floor" (Check baselineProperty),
     Scenario "draws" 1000 "100 small int draws per case; per-draw round-trip cost" (Check drawsProperty),
-    Scenario "payloads" 500 "one list-of-text + one map draw per case; per-byte CBOR cost" (Check payloadsProperty),
+    Scenario "payloads" 500 "one list-of-text + one map draw per case; per-element collection cost" (Check payloadsProperty),
     Scenario "steps" 2000 "passing one-rule counter machine; per-step overhead" (Check (Stateful.run counterMachine)),
     Scenario "mixed" 1000 "passing warehouse machine; realistic mixed stateful workload" (Check (Stateful.run (Warehouse.machine Warehouse.Fixed))),
     Scenario "shrink" 100 "buggy warehouse machine; find + shrink + replay (pair with --no-shrink)" (Check (Stateful.run (Warehouse.machine Warehouse.Buggy))),
     Scenario "heap-stress" 300 "24-SKU warehouse w/ audit-log thunk chains + fat annotations" (Check (Stateful.run Stress.heavyMachine)),
-    Scenario "gen-churn" 2000 "fresh dependent generator per draw; pre-encoding worst case" (Check Stress.churnProperty),
-    Scenario "gen-hoard" 20 "10k generators alive as a CAF; cached-encoding retention" (Check Stress.hoardProperty),
+    Scenario "strgen-churn" 2000 "fresh dependent regex generator per draw; handle-construction worst case" (Check Stress.strgenChurnProperty),
+    Scenario "strgen-hoard" 20 "2k regex generators alive as a CAF; intended handle-retention cost" (Check Stress.strgenHoardProperty),
+    Scenario "strgen-reclaim" 1000 "build+drop N transient regex handles, GC, report live-handle count; needs +RTS -N (default -N1 starves the reclaim)" (Probe reclaimProbe),
     Scenario "pool" 1000 "passing pool/transfer handle machine; per-case event-stream overhead" (Check (Stateful.run (Handles.machine Handles.Fixed))),
     Scenario "render-plain" 200 "render the buggy warehouse counterexample (plain renderer)" (RenderLoop 100 warehouseBug (pure . renderReport)),
     Scenario "render-rich" 100 "render it rich (source discovery, splicing, Timeline layout)" (RenderLoop 100 warehouseBug renderReportRichAnsi),
     Scenario "render-trace" 100 "render a pool/transfer failure rich (Trace/Blame/ledger/verdict)" (RenderLoop 500 handlesBug renderReportRichAnsi)
   ]
+
+-- | Build @n@ transient regex generators without retaining any of them, then
+-- report the live-handle census before, at peak, and after a
+-- 'DataSource.settleStringGenerators' — the direct answer to \"does an
+-- unreferenced handle actually get GC-reclaimed.\" This validates the GC\/FFI
+-- reclaim path in general; it does /not/ exercise the per-'Gen'-value caching
+-- layer itself (see 'Stress.strgenHoardProperty' for that — deliberately
+-- retained handles that should /not/ be reclaimed until process exit).
+--
+-- __Needs more than a couple of capabilities to see reclaim happen__: this
+-- whole executable defaults to @-N1@ (deliberately, for reproducible timing
+-- on the other scenarios — see the module header), and with too few
+-- capabilities the 'Foreign.Concurrent' finalizer thread doesn't reliably
+-- get a scheduling window while this probe's own allocation loop is
+-- running, so @after@ can sit at @peak@ no matter how long the loop runs
+-- (empirically flaky up to around @-N4@\/@-N6@ on this machine — the exact
+-- threshold is a scheduling-fairness question, not a fixed number). Run
+-- this one scenario with @cabal run profile-hegel -- strgen-reclaim +RTS -N@
+-- (auto-detected full core count, no explicit number) to see the count
+-- actually settle reliably.
+reclaimProbe :: Int -> IO Text
+reclaimProbe n = do
+  before <- DataSource.currentLiveStringGenerators
+  mapM_ (\i -> void (DataSource.buildRegexGen (patternFor i) False Nothing)) [1 .. n]
+  peak <- DataSource.currentLiveStringGenerators
+  after <- DataSource.settleStringGenerators
+  pure
+    ( "built="
+        <> tshow n
+        <> " before="
+        <> tshow before
+        <> " peak="
+        <> tshow peak
+        <> " after="
+        <> tshow after
+    )
+  where
+    patternFor i = "[a-" <> T.singleton (toEnum (fromEnum 'a' + (i `mod` 26))) <> "]+"
 
 -- | The two find runs the render scenarios replay.
 warehouseBug, handlesBug :: Property ()
@@ -217,16 +266,16 @@ smallInt = Gen.int & Gen.min 0 & Gen.max 1000 & Gen.build
 baselineProperty :: Property ()
 baselineProperty = void (forAllSilent (Gen.int & Gen.build))
 
--- | Per-draw round-trip cost with minimal payloads: schema CBOR encode,
--- @hegel_generate@, result decode, and the marshalling copies in
--- 'Hegel.Internal.Foreign.Raw.generate'. 'forAllSilent' keeps journaling out of the
--- measurement.
+-- | Per-draw round-trip cost with minimal payloads: the @hegel_generate_integer@
+-- typed call and its out-param marshalling in
+-- 'Hegel.Internal.DataSource.drawInteger'. 'forAllSilent' keeps journaling out
+-- of the measurement.
 drawsProperty :: Property ()
 drawsProperty = replicateM_ 100 (forAllSilent smallInt)
 
--- | One CBOR-heavy composite draw per case: per-byte encode\/decode cost and
--- the 'Hegel.Collection' span machinery, in contrast to the per-call cost
--- 'drawsProperty' isolates.
+-- | One composite draw per case, each element its own typed FFI call: the
+-- per-element 'Hegel.Collection' span machinery, in contrast to the per-call
+-- cost 'drawsProperty' isolates.
 payloadsProperty :: Property ()
 payloadsProperty = do
   void (forAllSilent (Gen.list shortText & Gen.minSize 10 & Gen.maxSize 50 & Gen.build))
