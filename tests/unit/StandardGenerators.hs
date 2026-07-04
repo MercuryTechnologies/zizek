@@ -160,6 +160,16 @@ spec = do
         T.length t `shouldSatisfy` (>= 3)
         T.length t `shouldSatisfy` (<= 7)
 
+    it "respects an alphabet" $ do
+      prop
+        ( Gen.text
+            & Gen.minSize 1
+            & Gen.maxSize 10
+            & Gen.alphabet (Gen.char & Gen.minCodepoint 97 & Gen.maxCodepoint 122)
+            & Gen.build
+        )
+        $ \t -> t `shouldSatisfy` T.all (\c -> c >= 'a' && c <= 'z')
+
   describe "Gen.char" $ do
     it "draws Char values" $ do
       check_ (defaultSettings {testCases = 1}) $ forEach (Gen.char & Gen.build) $ \_ -> pure ()
@@ -175,6 +185,11 @@ spec = do
     it "fullMatch produces complete matches" $ do
       prop (Gen.regex "[a-z]+" & Gen.fullMatch & Gen.build) $ \t ->
         t `shouldSatisfy` (not . T.null)
+
+    it "respects an alphabet" $ do
+      prop
+        (Gen.regex ".+" & Gen.fullMatch & Gen.alphabet (Gen.char & Gen.minCodepoint 97 & Gen.maxCodepoint 122) & Gen.build)
+        $ \t -> t `shouldSatisfy` T.all (\c -> c >= 'a' && c <= 'z')
 
   describe "Gen.uuid" $ do
     it "draws UUID values" $ do

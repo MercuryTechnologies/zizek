@@ -34,11 +34,9 @@ import Hegel.Internal.DataSource (Label (..), drawInteger, startSpan, stopSpan)
 import Hegel.Internal.TestCase (TestCase)
 import Prelude hiding (either, maybe)
 
--- | A generator that produces values of type @a@.
---
--- There is no server-side compound generation: every non-leaf constructor is
--- run by composing client-side draws over spans (see 'Hegel.Internal.DataSource'),
--- so all the work here is in how those spans nest, not in schema construction.
+-- | A generator that produces values of type @a@. Every non-leaf constructor
+-- runs by composing client-side draws over spans (see
+-- 'Hegel.Internal.DataSource'), so the work here is in how those spans nest.
 data Gen a where
   -- | A pre-computed constant. Consumes no entropy.
   Pure :: a -> Gen a

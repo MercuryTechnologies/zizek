@@ -106,14 +106,8 @@ instance (Bounded a, Integral a, Show a) => Build (IntegralBuilder a) a where
     where
       lo = fromMaybe minBound b.bMin
       hi = fromMaybe maxBound b.bMax
-      -- Converted once here, not per draw: 'drawInteger' wants 'Integer'
-      -- bounds regardless of 'a', and 'lo'\/'hi' are the same for every
-      -- draw of this 'Gen' value. At @-O1@ full laziness already floats
-      -- this out of the closure (confirmed empirically: identical
-      -- `+RTS -s` byte counts with and without this binding), but it's a
-      -- real ~3% per-draw allocation win at @-O0@
-      -- (`just profile-time-compare`'s un-optimized side, and the plain
-      -- dev build), where that transformation doesn't run.
+      -- Bound here, not inside the lambda, so this isn't reallocated on
+      -- every draw.
       loI = toInteger lo
       hiI = toInteger hi
 

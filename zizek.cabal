@@ -12,6 +12,17 @@ tested-with: ghc ^>=9.10 && ^>=9.12
 build-type: Simple
 extra-source-files: licenses/hedgehog.LICENSE
 
+-- Off by default: tracks live HegelStringGenerator handle counts
+-- (Hegel.Internal.DataSource.currentLiveStringGenerators/settleStringGenerators)
+-- for the string-gen-handles regression suite and profile-hegel's
+-- strgen-reclaim scenario. Every check adds an atomicModifyIORef' to
+-- string-generator construction and finalization, so normal builds carry
+-- none of it.
+flag census
+  description: Track live string-generator handle counts for diagnostics.
+  default: False
+  manual: True
+
 common all
   default-language: GHC2021
   build-depends:
@@ -146,6 +157,9 @@ library
       IOKit
       Security
 
+  if flag(census)
+    cpp-options: -DHEGEL_CENSUS
+
 common threaded
   import: library
   ghc-options:
@@ -226,6 +240,11 @@ test-suite unit
 -- property runs in flight at once — the exact same assertion is flaky (see
 -- 'Hegel.Internal.DataSource.settleStringGenerators'), for reasons upstream
 -- of anything this repo controls.
+--
+-- Needs the `census` flag: `cabal test zizek:string-gen-handles --flag
+-- census` (or `just test string-gen-handles --flag census`). Without it the
+-- suite still builds and runs, but every case is `pendingWith` — the
+-- handle-count tracking this suite asserts on is compiled out by default.
 test-suite string-gen-handles
   import: library
   type: exitcode-stdio-1.0
@@ -236,6 +255,8 @@ test-suite string-gen-handles
     -rtsopts
     -with-rtsopts=-N
 
+  if flag(census)
+    cpp-options: -DHEGEL_CENSUS
   build-depends:
     hspec ^>=2.11,
     tasty-hspec ^>=1.2,

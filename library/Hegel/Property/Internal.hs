@@ -67,11 +67,10 @@ import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIO
 -- | Whether the current run records its journal.
 --
 -- Ordinary cases (including every shrink replay) run 'Silent'; only the
--- final reconstruction replay ('observeProperty') runs 'Recording'. The
--- distinction is load-bearing for performance: under 'Silent',
--- 'journalNote' never constructs the 'Note' at all, so its 'Text' and
--- 'SrcLoc' arguments stay unevaluated thunks — rendering work for the
--- journal is paid once per failure, not once per step of every case.
+-- final reconstruction replay ('observeProperty') runs 'Recording'. Under
+-- 'Silent', 'journalNote' never constructs the 'Note' at all, so its 'Text'
+-- and 'SrcLoc' arguments stay unevaluated thunks. Rendering work for the
+-- journal is then paid once per failure, not once per step of every case.
 data Journal
   = Silent
   | Recording !(Note -> IO ())
@@ -141,10 +140,9 @@ noteFailure loc diff = journalNote (Failure diff) loc
 -- fresh clock from the shared event-stream counter onto the note, and hand it
 -- to the journal.
 --
--- Under 'Silent' the 'Note' is never constructed, so @loc@ and @text@ are
--- never forced (the strict 'Note' fields would otherwise evaluate them) and
--- the clock is never ticked — the zero-cost property is load-bearing (see
--- 'Journal').
+-- Under 'Silent' the 'Note' is never constructed, so its strict fields never
+-- force @loc@ or @text@ and the clock is never ticked. 'Journal' explains why
+-- silent notes must cost nothing.
 journalNote :: (MonadIO m) => NoteKind -> Maybe SrcLoc -> Text -> PropertyT m ()
 journalNote kind loc text = PropertyT do
   env <- ask

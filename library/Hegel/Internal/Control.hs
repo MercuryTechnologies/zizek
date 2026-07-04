@@ -76,8 +76,8 @@ instance Exception TestStopped where
   fromException = asyncExceptionFromException
 
 #if __GLASGOW_HASKELL__ >= 912
-  -- Suppress backtrace collection: thrown on every budget stop; nothing is
-  -- ever rendered from it.
+  -- This is thrown on every budget stop and nothing ever renders it, so
+  -- collecting a backtrace would be wasted work.
   backtraceDesired _ = False
 #endif
 
@@ -92,8 +92,8 @@ instance Exception AssumeRejected where
   fromException = asyncExceptionFromException
 
 #if __GLASGOW_HASKELL__ >= 912
-  -- Suppress backtrace collection: thrown on every discard; nothing is ever
-  -- rendered from it.
+  -- This is thrown on every discard and nothing ever renders it, so
+  -- collecting a backtrace would be wasted work.
   backtraceDesired _ = False
 #endif
 

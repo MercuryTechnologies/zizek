@@ -292,12 +292,12 @@ citeToken 0 = "setup"
 citeToken n = "@" <> T.pack (show n)
 
 -- | The citation clause for the ↳ cite row (@cites @1, @4@), or 'Nothing' when
--- the row should be suppressed. Unfocused shows every step, so citing /every/
--- prior step selects nothing — the default (all shown steps are evidence), so
--- the row is dropped. It earns its place only for a strict subset, where a shown
--- step is load-bearing but not cited. A setup birth keeps the row (the set then
--- includes @0@, which never equals the real-steps set). No arrow sigil — the
--- 'CiteLead' glyph precedes it in the row.
+-- the row should be suppressed. Unfocused shows every step, so a clause citing
+-- every prior step would say nothing the log doesn't already, and the row is
+-- dropped. The row only appears when the citations are a strict subset of the
+-- shown steps. A setup birth always keeps the row, since the set then includes
+-- @0@ and can never equal the real-steps set. The clause carries no arrow
+-- sigil of its own, because the 'CiteLead' glyph already leads the row.
 citesBody :: Style -> Trace -> Int -> [Int] -> Maybe Text
 citesBody opts trace failingStep steps
   | null uniq = Nothing

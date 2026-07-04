@@ -284,9 +284,8 @@ asyncTeardownSpec = describe "async teardown" $ do
         r `shouldSatisfy` isLeft
 
 -- | 'withSlotOf'\/'withSlotBytes' assert the pointee fits the shared 'Slot'
--- buffer rather than silently overrunning it (the mistake the UUID capacity
--- near-miss demonstrated — see 'Slot's haddock). Confirms the guard actually
--- fires, not just that ordinary in-bounds usage still works.
+-- buffer rather than silently overrunning it. These cases cover ordinary
+-- in-bounds usage and confirm the guard fires on misuse.
 slotSpec :: Spec
 slotSpec = describe "Slot capacity guard" $ do
   it "withSlotOf round-trips an in-bounds Storable value" $ do

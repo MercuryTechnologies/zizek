@@ -52,8 +52,9 @@ instance Exception AssertionFailure where
         <> T.pack (prettyCallStack f.callStack)
 
 #if __GLASGOW_HASKELL__ >= 912
-  -- Suppress backtrace collection: thrown once per shrink replay; the
-  -- rendered call stack is the carried 'callStack' field.
+  -- This is thrown once per shrink replay, and the call stack that gets
+  -- rendered is the carried 'callStack' field, so an implicit backtrace
+  -- would never be seen.
   backtraceDesired _ = False
 #endif
 

@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 -- | The generator-facing engine channel: the per-test-case operations a
 -- generator draws from.
 --
@@ -23,9 +25,9 @@ module Hegel.Internal.DataSource
     drawBytes,
     drawUuid,
     drawString,
+    TextSpec (..),
     buildTextGen,
     buildRegexGen,
-    buildEmailGen,
     buildUrlGen,
     buildDomainGen,
 
@@ -65,7 +67,10 @@ import Control.Monad (void)
 import Data.Bits (bit, shiftL, shiftR, testBit, (.&.))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
-import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, newIORef, readIORef)
+#ifdef HEGEL_CENSUS
+import Data.IORef (atomicModifyIORef')
+#endif
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
@@ -130,8 +135,8 @@ drawInteger tc lo hi
   where
     fitsInt64 n = n >= toInteger (minBound :: Int64) && n <= toInteger (maxBound :: Int64)
 
--- | The 'drawInteger' fallback for bounds outside the @int64_t@ range (only
--- reachable via 'Word'\/'Word64' at their default full-type bounds today).
+-- | The 'drawInteger' fallback for bounds outside the @int64_t@ range,
+-- reachable via 'Word'\/'Word64' at their default full-type bounds.
 drawIntegerBig :: TestCase -> Integer -> Integer -> IO Integer
 drawIntegerBig tc lo hi =
   BS.useAsCStringLen (encodeSignedLE lo) \(loPtr, loLen) ->
@@ -280,18 +285,11 @@ drawString tc genFP =
 
 -- $census
 --
--- A census of live 'HegelStringGenerator' handles, maintained purely for
--- profiling and testing ("Hegel.Internal.DataSource" is already internal,
--- not stable API). __Caveat:__ this only tracks the Haskell-side 'ForeignPtr'
--- bookkeeping. It's a reliable proxy for whether the native handle got freed
--- — the same finalizer that decrements the count calls
--- 'hegel_string_generator_free' — but it cannot see the native
--- @hegel_string_generator_t@ allocation itself; confirming actual OS-level
--- RSS would need an external tool (@\/usr\/bin\/time -l@, @heaptrack@,
--- massif). A failed construction (e.g. an invalid regex pattern) throws via
--- 'throwOnError' /before/ 'wrapStringGenerator' runs, so this census also
--- can't see whatever the native side does with a rejected construction
--- attempt — that's a @libhegel@-side question, out of scope here.
+-- A census of live 'HegelStringGenerator' handles, for profiling and
+-- testing. This only tracks the Haskell-side 'ForeignPtr' bookkeeping, not
+-- the native @hegel_string_generator_t@ allocation. It's a reliable proxy
+-- for whether the native handle got freed, since the same finalizer that
+-- decrements the count also calls 'hegel_string_generator_free'.
 
 -- | Number of 'HegelStringGenerator' handles currently live, per this
 -- process's 'wrapStringGenerator' bookkeeping.
@@ -303,38 +301,21 @@ liveStringGenerators = unsafePerformIO (newIORef 0)
 currentLiveStringGenerators :: IO Int
 currentLiveStringGenerators = readIORef liveStringGenerators
 
--- | Encourage a settle by generating (and immediately discarding) enough
--- real allocation pressure to trigger several ordinary, allocation-driven
--- major GCs, then return the settled count.
+-- | Encourage a settle by generating (and immediately discarding) real
+-- allocation pressure, then return the settled count.
 --
--- __Deliberately does not call 'System.Mem.performGC'.__ An earlier version
--- did (forced GC + bounded, delayed polling). Digging into why that was
--- unreliable — eventlog tracing (@+RTS -l@) after "StringGeneratorHandles"
--- caught it reproducibly — surfaced two separate findings, both worth
--- knowing if this ever needs revisiting:
+-- This deliberately doesn't call 'System.Mem.performGC'. In a busy,
+-- many-threaded process, GHC's RTS doesn't reliably respawn the finalizer
+-- thread that frees these handles, no matter how many explicit major GCs
+-- run. Organic allocation pressure reclaims far more reliably, though it's
+-- still not a hard guarantee under heavy sustained concurrency. A caller
+-- that needs a reliable answer should run in its own quiet process instead.
 --
--- 1. 'performGC' itself is untrustworthy for this in a busy, many-threaded
---    process (e.g. a real test-suite binary with hundreds of tests): GHC's
---    RTS spawns its \"weak finalizer thread\" lazily, and in a process like
---    that it can go the rest of the run without spawning a second one no
---    matter how many /explicit/ major GCs run via 'performGC'.
--- 2. Replacing 'performGC' with genuine allocation pressure (this function)
---    fixes it under light-to-moderate concurrent load, but /not/ under the
---    heaviest load tried (embedded in a real 217-test suite, with dozens of
---    engine worker threads and property runs in flight at once): even
---    several gigabytes of real, unfuseable allocation failed to free
---    anything within a bounded budget there, while the identical code
---    reclaims almost immediately run alone or under light load. There is no
---    known upper bound on the delay under sustained heavy concurrent load —
---    only that it clears quickly once that load isn't present.
---
--- Net effect: this is a reasonable, faithful-to-real-usage settle for
--- ordinary conditions, but it is /not/ a hard guarantee under heavy
--- sustained concurrency. A caller that needs a reliable answer (as opposed
--- to a profiling probe's best-effort diagnostic) should run in its own
--- quiet process rather than lean on a bigger budget here — see
--- "StringGeneratorHandles"'s own test-suite stanza.
+-- The census only tracks handles when built with the @census@ cabal flag.
+-- Without it, 'currentLiveStringGenerators' always reads 0 and this is a
+-- plain no-op read.
 settleStringGenerators :: IO Int
+#ifdef HEGEL_CENSUS
 settleStringGenerators = do
   mapM_ churnRound [1 .. rounds :: Int]
   currentLiveStringGenerators
@@ -342,12 +323,15 @@ settleStringGenerators = do
     rounds = 1000 :: Int
     chunkSize = 500_000 :: Int
     churnRound r = do
-      -- 'BS.replicate' is a real array allocation (an FFI 'memset'), not a
-      -- fused list — unlike @length (replicate n x)@, which GHC's optimizer
-      -- happily collapses to a no-op at @-O1@, this reliably allocates real,
-      -- short-lived garbage every round.
+      -- 'BS.replicate' is a real array allocation, an FFI 'memset'. Unlike
+      -- @length (replicate n x)@, which GHC's optimizer collapses to a no-op
+      -- at @-O1@, this reliably allocates real, short-lived garbage every
+      -- round.
       let !bs = BS.replicate chunkSize (fromIntegral r)
       BS.length bs `seq` pure ()
+#else
+settleStringGenerators = currentLiveStringGenerators
+#endif
 
 -- | Wrap a caller-owned @hegel_string_generator_t*@ in a GC-managed
 -- 'ForeignPtr' that frees it on finalization.
@@ -358,57 +342,66 @@ settleStringGenerators = do
 -- outlast that construction context by an arbitrary margin.
 wrapStringGenerator :: Ptr HegelStringGenerator -> IO (ForeignPtr HegelStringGenerator)
 wrapStringGenerator genPtr = do
-  atomicModifyIORef' liveStringGenerators \n -> (n + 1, ())
-  Concurrent.newForeignPtr genPtr finalizer
+  fp <- Concurrent.newForeignPtr genPtr finalizer
+  bumpCensus
+  pure fp
   where
-    finalizer = do
-      atomicModifyIORef' liveStringGenerators \n -> (n - 1, ())
-      withContext \ctx -> void (hegel_string_generator_free ctx genPtr)
+    finalizer = dropCensus >> withContext \ctx -> void (hegel_string_generator_free ctx genPtr)
 
--- | Build a __text__ string generator (@hegel_string_generator_text@).
--- @codec@ selects the alphabet's base range (@Nothing@ = all Unicode);
--- @categories@\/@excludeCategories@ restrict\/remove Unicode general
--- categories (@Just []@ for @categories@ means an empty alphabet, distinct
--- from @Nothing@'s \"no restriction\"); @includeCharacters@\/
--- @excludeCharacters@ union\/remove individual characters last.
+#ifdef HEGEL_CENSUS
+bumpCensus :: IO ()
+bumpCensus = atomicModifyIORef' liveStringGenerators \n -> (n + 1, ())
+
+dropCensus :: IO ()
+dropCensus = atomicModifyIORef' liveStringGenerators \n -> (n - 1, ())
+#else
+bumpCensus :: IO ()
+bumpCensus = pure ()
+
+dropCensus :: IO ()
+dropCensus = pure ()
+#endif
+
+-- | Text-generator construction parameters, mirroring
+-- @hegel_string_generator_text@'s vocabulary directly. @categories@\/
+-- @excludeCategories@ restrict\/remove Unicode general categories (@Just []@
+-- for @categories@ means an empty alphabet, distinct from @Nothing@'s no
+-- restriction); @includeCharacters@\/@excludeCharacters@ union\/remove
+-- individual characters last.
+data TextSpec = TextSpec
+  { minSize :: !Word64,
+    maxSize :: !Word64,
+    -- | Selects the alphabet's base range; 'Nothing' is all Unicode.
+    codec :: !(Maybe Text),
+    minCodepoint :: !Word32,
+    maxCodepoint :: !Word32,
+    categories :: !(Maybe [Text]),
+    excludeCategories :: !(Maybe [Text]),
+    includeCharacters :: !(Maybe Text),
+    excludeCharacters :: !(Maybe Text)
+  }
+
+-- | Build a __text__ string generator (@hegel_string_generator_text@) per
+-- 'TextSpec'.
 --
 -- Called once per 'Hegel.Gen.Internal.Gen' value (cached by the leaf); throws
 -- 'HegelError' on an invalid combination (e.g. an unknown codec\/category).
-buildTextGen ::
-  -- | @minSize@
-  Word64 ->
-  -- | @maxSize@
-  Word64 ->
-  -- | @codec@
-  Maybe Text ->
-  -- | @minCodepoint@
-  Word32 ->
-  -- | @maxCodepoint@
-  Word32 ->
-  -- | @categories@
-  Maybe [Text] ->
-  -- | @excludeCategories@
-  Maybe [Text] ->
-  -- | @includeCharacters@
-  Maybe Text ->
-  -- | @excludeCharacters@
-  Maybe Text ->
-  IO (ForeignPtr HegelStringGenerator)
-buildTextGen minSz maxSz mCodec minCp maxCp mCats mExclCats mIncl mExcl =
+buildTextGen :: TextSpec -> IO (ForeignPtr HegelStringGenerator)
+buildTextGen spec =
   withContext \ctx ->
-    withNullableText mCodec \codecPtr ->
-      withNullableTextArray mCats \(catsPtr, catsLen) ->
-        withNullableTextArray mExclCats \(exclCatsPtr, exclCatsLen) ->
-          withNullableUtf8 mIncl \(inclPtr, inclLen) ->
-            withNullableUtf8 mExcl \(exclPtr, exclLen) ->
+    withNullableText spec.codec \codecPtr ->
+      withNullableTextArray spec.categories \(catsPtr, catsLen) ->
+        withNullableTextArray spec.excludeCategories \(exclCatsPtr, exclCatsLen) ->
+          withNullableUtf8 spec.includeCharacters \(inclPtr, inclLen) ->
+            withNullableUtf8 spec.excludeCharacters \(exclPtr, exclLen) ->
               alloca \outGen -> do
                 hegel_string_generator_text
                   ctx
-                  minSz
-                  maxSz
+                  spec.minSize
+                  spec.maxSize
                   codecPtr
-                  minCp
-                  maxCp
+                  spec.minCodepoint
+                  spec.maxCodepoint
                   catsPtr
                   catsLen
                   exclCatsPtr
@@ -438,15 +431,6 @@ buildRegexGen pat fullmatch mAlphabet =
     withNullableAlphabet :: Maybe (ForeignPtr HegelStringGenerator) -> (Ptr HegelStringGenerator -> IO a) -> IO a
     withNullableAlphabet Nothing k = k nullPtr
     withNullableAlphabet (Just fp) k = withForeignPtr fp k
-
--- | Build an __email__ string generator (@hegel_string_generator_email@),
--- producing RFC 5321\/5322 addresses.
-buildEmailGen :: IO (ForeignPtr HegelStringGenerator)
-buildEmailGen =
-  withContext \ctx ->
-    alloca \outGen -> do
-      hegel_string_generator_email ctx outGen >>= throwOnError ctx
-      peek outGen >>= wrapStringGenerator
 
 -- | Build a __URL__ string generator (@hegel_string_generator_url@),
 -- producing RFC 3986 @http@\/@https@ URLs.

@@ -183,7 +183,6 @@ module Hegel.Internal.Foreign.Raw
     hegel_generate_uuid,
     hegel_string_generator_text,
     hegel_string_generator_regex,
-    hegel_string_generator_email,
     hegel_string_generator_url,
     hegel_string_generator_domain,
     hegel_string_generator_free,
@@ -331,9 +330,9 @@ data HegelError = HegelError
 
 instance Exception HegelError where
 #if __GLASGOW_HASKELL__ >= 912
-  -- Suppress backtrace collection: thrown on every stop/discard (the
-  -- control-flow codes arrive here first); the rendered diagnostic is the
-  -- engine's message.
+  -- The control-flow codes arrive here first, so this is thrown on every
+  -- stop and discard. The diagnostic that gets rendered is the engine's
+  -- message, so a backtrace would never be seen.
   backtraceDesired _ = False
 #endif
 
@@ -675,8 +674,7 @@ foreign import ccall unsafe "hegel_settings_set_suppress_health_check"
 -- During a run the engine emits from its worker thread, so a sink must be
 -- thread-safe; a blob replay emits synchronously on the calling thread.
 --
--- We pass a @NULL@ 'FunPtr' everywhere for now, leaving output on stderr; a real
--- sink arrives with output routing.
+-- Currently always @NULL@ (output stays on stderr).
 type OutputSink = Ptr () -> CString -> CSize -> IO ()
 
 -- | Spawn the engine worker thread and write a run handle into @*out_run@;
@@ -863,7 +861,7 @@ foreign import ccall unsafe "hegel_state_machine_next_rule"
 -- $typeddraws
 --
 -- One typed draw per primitive (bool, integer, float, bytes, uuid, string).
--- There is no server-side compound generation any more: lists, sets, maps,
+-- There is no server-side compound generation: lists, sets, maps,
 -- tuples, and choices are composed client-side from spans + 'hegel_new_collection'
 -- (see "Hegel.Collection" and "Hegel.Gen.Internal").
 --
@@ -1047,10 +1045,6 @@ foreign import ccall unsafe "hegel_string_generator_regex"
     -> Ptr HegelStringGenerator       -- ^ @alphabet@ (borrowed, nullable)
     -> Ptr (Ptr HegelStringGenerator) -- ^ out: caller-owned handle
     -> IO CInt
-
--- | Build an __email__ string generator producing RFC 5321\/5322 addresses.
-foreign import ccall unsafe "hegel_string_generator_email"
-  hegel_string_generator_email :: Ptr HegelContext -> Ptr (Ptr HegelStringGenerator) -> IO CInt
 
 -- | Build a __URL__ string generator producing RFC 3986 @http@\/@https@ URLs.
 foreign import ccall unsafe "hegel_string_generator_url"
@@ -1342,28 +1336,24 @@ withTestCaseFromBlob ctx s blob action =
     release tc = void (hegel_test_case_free ctx tc)
 
 -- | Reusable pinned block that a test case's per-call out-parameters write
--- through, in place of a fresh 'alloca' every call. Covers three shapes:
--- single-word out-params (rule indices, collection\/pool ids, primitive
--- booleans, integers, floats); the two-word @{ptr, len}@ result structs
--- ('HegelBytesResult', 'HegelStringResult'); and the raw 16-byte UUID
--- buffer. Allocated once per test case ('Hegel.Internal.TestCase.mkTestCase')
--- and reused across every call — the draw path is hot enough that fresh
--- 'alloca's\/'allocaBytes's per call dominated generation profiles.
+-- through, in place of a fresh 'alloca' every call. Covers single-word
+-- out-params (rule indices, collection\/pool ids, primitive booleans,
+-- integers, floats), the two-word @{ptr, len}@ result structs
+-- ('HegelBytesResult', 'HegelStringResult'), and the raw 16-byte UUID buffer.
+-- Allocated once per test case ('Hegel.Internal.TestCase.mkTestCase') and
+-- reused across every call.
 --
 -- Calls on one test case never overlap, so a single slot per case is safe:
--- each call's out-param write fully overwrites whatever the previous call
--- (of any shape) left behind, and every draw either reads the out-param
--- only after a successful return code or throws before reading it at all —
--- there is no path that observes stale content from an earlier use.
+-- each call's out-param write overwrites whatever the previous call left
+-- behind, and every draw reads the out-param only after a successful return
+-- code, or throws before reading it at all.
 newtype Slot = Slot (ForeignPtr Word8)
 
--- | 'Slot's byte capacity: 'max (2 * wordBytes) 16' rather than bare
--- @2 * wordBytes@. The two-word result structs are always word-sized fields,
--- so @2 * wordBytes@ alone would suffice for them, but the UUID buffer's 16
--- bytes is a fixed wire size independent of the host's word width. On 64-bit
--- the two happen to coincide (16 either way); the 'max' makes that a
--- guarantee rather than a coincidence that would silently under-allocate on
--- a 32-bit host.
+-- | 'Slot's byte capacity. The two-word result structs are always
+-- word-sized fields, so @2 * wordBytes@ alone would suffice for them, but
+-- the UUID buffer's 16 bytes is a fixed wire size independent of the host's
+-- word width. 'max' guarantees the slot fits both instead of relying on
+-- 64-bit coincidence.
 slotCapacity :: Int
 slotCapacity = max (2 * wordBytes) 16
 
@@ -1393,7 +1383,7 @@ withSlotBytes n (Slot slot) k
       error $
         "withSlotBytes: " <> show n <> " bytes exceeds the " <> show slotCapacity <> "-byte Slot"
 
--- | Byte size of one machine word: a pointer, or a @size_t@ ('CSize')
--- length — the same width either way on every platform @libhegel@ targets.
+-- | The byte size of one machine word on this platform. A pointer and a
+-- @size_t@ ('CSize') length are always this same width.
 wordBytes :: Int
 wordBytes = sizeOf (nullPtr :: Ptr Word8)

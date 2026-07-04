@@ -239,9 +239,10 @@ spec = do
                          ]
 
     it "shows the citation row only for a subset (a shown step is uncited)" do
-      -- open a₁, open a₂, a load-bearing but pool-untouching @tick@, then a
-      -- failing @settle@ touching both accounts: @tick@ (step 3) is shown but
-      -- uncited, so the row is an explicit subset — not suppressed, not "all".
+      -- The script opens a₁ and a₂, runs a @tick@ that touches no pool, then
+      -- fails a @settle@ that touches both accounts. The @tick@ at step 3 is
+      -- shown but uncited, so the citation row lists an explicit subset
+      -- instead of being suppressed.
       let a1 = Var {pool = 0, id = 1}
           a2 = Var {pool = 0, id = 2}
           notes =

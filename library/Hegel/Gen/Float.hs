@@ -80,10 +80,8 @@ instance HasMin (FloatBuilder a) a where
 instance HasMax (FloatBuilder a) a where
   max hi b = b {bMax = Just hi}
 
--- | Effective allow-NaN\/allow-Infinity flags. Kept verbatim from the
--- CBOR-era implementation: setting any bound implies NaN is excluded;
--- setting both implies Infinity is excluded. This is what already prevents
--- the engine-rejected NaN+bound \/ infinity+both-finite combinations.
+-- | Setting either bound excludes NaN, and setting both excludes Infinity,
+-- keeping engine-rejected combinations from reaching the FFI.
 effectiveFlags :: FloatBuilder a -> (Bool, Bool)
 effectiveFlags b = (allowNan, allowInf)
   where

@@ -35,7 +35,7 @@ import Witch qualified
 
 -- | Run a 'Property' through @libhegel@.
 --
--- The engine's run result is the authority for the verdict: a failure with
+-- The engine's run result decides the verdict: a failure with
 -- a reproduction blob is replayed through the property to describe the
 -- counterexample ('reconstructProperty'); one without is a health-check
 -- abort; otherwise the tally decides between 'GaveUp' and 'Ok'.
@@ -181,9 +181,6 @@ data RunOutcome = RunOutcome
 
 -- | Read the aggregate status, the primary failure, and the run-level error
 -- out of the engine's result, copying anything we keep.
---
--- The result is a caller-owned snapshot, freed here once its contents have been
--- copied out; it is independent of 'hegel_run_free'.
 readRunOutcome :: Ptr HegelContext -> Ptr HegelRun -> IO RunOutcome
 readRunOutcome ctx run =
   bracket (outWith (hegel_run_result ctx run)) (void . hegel_run_result_free ctx) \res -> do
@@ -207,24 +204,21 @@ readPrimaryFailure ctx res = do
     peek out
   if (count :: CSize) == 0
     then pure Nothing
-    else
-      -- The failure is a caller-owned snapshot; free it once the origin and
-      -- blob are copied out.
-      bracket
-        ( alloca \out -> do
-            throwOnError ctx =<< hegel_run_result_failure ctx res 0 out
-            peek out
-        )
-        (void . hegel_failure_free ctx)
-        \f ->
-          if f == nullPtr
-            then pure Nothing
-            else do
-              org <- alloca \out -> do
-                throwOnError ctx =<< hegel_failure_origin ctx f out
-                peekUtf8 =<< peek out
-              blob <- failureReproductionBlob ctx f
-              pure (Just Failure {origin = org, reproductionBlob = blob})
+    else bracket
+      ( alloca \out -> do
+          throwOnError ctx =<< hegel_run_result_failure ctx res 0 out
+          peek out
+      )
+      (void . hegel_failure_free ctx)
+      \f ->
+        if f == nullPtr
+          then pure Nothing
+          else do
+            org <- alloca \out -> do
+              throwOnError ctx =<< hegel_failure_origin ctx f out
+              peekUtf8 =<< peek out
+            blob <- failureReproductionBlob ctx f
+            pure (Just Failure {origin = org, reproductionBlob = blob})
 
 -- | Read and copy the run-level error message, if the run carries one.
 readRunError :: Ptr HegelContext -> Ptr HegelRunResult -> IO (Maybe Text)
@@ -283,8 +277,6 @@ driveLoop ctx action run = loop 0 0
       if tcPtr == nullPtr
         then pure (nValid, nInvalid)
         else do
-          -- The handle from 'hegel_next_test_case' is caller-owned; free it once
-          -- the case is done.
           status <- runTestCase ctx action tcPtr `finally` void (hegel_test_case_free ctx tcPtr)
           case status of
             Valid -> loop (nValid + 1) nInvalid

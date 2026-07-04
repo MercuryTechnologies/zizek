@@ -204,32 +204,34 @@ scenarios =
     Scenario "heap-stress" 300 "24-SKU warehouse w/ audit-log thunk chains + fat annotations" (Check (Stateful.run Stress.heavyMachine)),
     Scenario "strgen-churn" 2000 "fresh dependent regex generator per draw; handle-construction worst case" (Check Stress.strgenChurnProperty),
     Scenario "strgen-hoard" 20 "2k regex generators alive as a CAF; intended handle-retention cost" (Check Stress.strgenHoardProperty),
-    Scenario "strgen-reclaim" 1000 "build+drop N transient regex handles, GC, report live-handle count; needs +RTS -N (default -N1 starves the reclaim)" (Probe reclaimProbe),
+    Scenario "strgen-reclaim" 1000 "build+drop N transient regex handles, GC, report live-handle count; needs +RTS -N (default -N1 starves the reclaim) and a --flag census build (else before/peak/after all read 0)" (Probe reclaimProbe),
     Scenario "pool" 1000 "passing pool/transfer handle machine; per-case event-stream overhead" (Check (Stateful.run (Handles.machine Handles.Fixed))),
     Scenario "render-plain" 200 "render the buggy warehouse counterexample (plain renderer)" (RenderLoop 100 warehouseBug (pure . renderReport)),
     Scenario "render-rich" 100 "render it rich (source discovery, splicing, Timeline layout)" (RenderLoop 100 warehouseBug renderReportRichAnsi),
     Scenario "render-trace" 100 "render a pool/transfer failure rich (Trace/Blame/ledger/verdict)" (RenderLoop 500 handlesBug renderReportRichAnsi)
   ]
 
--- | Build @n@ transient regex generators without retaining any of them, then
--- report the live-handle census before, at peak, and after a
--- 'DataSource.settleStringGenerators' — the direct answer to \"does an
--- unreferenced handle actually get GC-reclaimed.\" This validates the GC\/FFI
--- reclaim path in general; it does /not/ exercise the per-'Gen'-value caching
--- layer itself (see 'Stress.strgenHoardProperty' for that — deliberately
--- retained handles that should /not/ be reclaimed until process exit).
+-- | Build @n@ transient regex generators without retaining any of them,
+-- then report the live-handle census before, at peak, and after a
+-- 'DataSource.settleStringGenerators'. This answers whether an unreferenced
+-- handle actually gets GC-reclaimed, exercising the general GC\/FFI reclaim
+-- path. It does not exercise the per-'Gen'-value caching layer itself; see
+-- 'Stress.strgenHoardProperty' for handles that are deliberately retained
+-- and should not be reclaimed until process exit.
 --
--- __Needs more than a couple of capabilities to see reclaim happen__: this
--- whole executable defaults to @-N1@ (deliberately, for reproducible timing
--- on the other scenarios — see the module header), and with too few
--- capabilities the 'Foreign.Concurrent' finalizer thread doesn't reliably
--- get a scheduling window while this probe's own allocation loop is
--- running, so @after@ can sit at @peak@ no matter how long the loop runs
--- (empirically flaky up to around @-N4@\/@-N6@ on this machine — the exact
--- threshold is a scheduling-fairness question, not a fixed number). Run
--- this one scenario with @cabal run profile-hegel -- strgen-reclaim +RTS -N@
--- (auto-detected full core count, no explicit number) to see the count
--- actually settle reliably.
+-- __Needs more than a couple of capabilities to see reclaim happen__. This
+-- executable defaults to @-N1@ for reproducible timing on the other
+-- scenarios, and with too few capabilities the 'Foreign.Concurrent'
+-- finalizer thread doesn't reliably get a scheduling window while this
+-- probe's own allocation loop runs, so @after@ can sit at @peak@ no matter
+-- how long the loop runs. Flaky below roughly @-N4@ on this machine. Run
+-- this scenario with @cabal run profile-hegel -- strgen-reclaim +RTS -N@ to
+-- see the count settle reliably.
+--
+-- __Needs the library built with the @census@ cabal flag__: without it,
+-- 'DataSource.currentLiveStringGenerators' always reads 0, so @before@,
+-- @peak@, and @after@ all print 0 regardless of what actually happened.
+-- Build with @cabal build zizek:profile-hegel --flag census@ first.
 reclaimProbe :: Int -> IO Text
 reclaimProbe n = do
   before <- DataSource.currentLiveStringGenerators

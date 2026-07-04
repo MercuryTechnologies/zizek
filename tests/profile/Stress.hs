@@ -54,9 +54,9 @@ data Ledger = Ledger
     nextOrder :: Int,
     -- | Grows every step within a case, then resets with the next case's
     -- 'Stateful.Machine.initial'. The entries are deliberately /lazy/
-    -- renderings ('StrictData' only forces the cons cell): each thunk
-    -- retains the ledger it snapshots until something forces it, giving the
-    -- heap profile a sawtooth worth of drag to expose.
+    -- renderings, since 'StrictData' only forces the cons cell. Each thunk
+    -- retains the ledger it snapshots until something forces it, and that
+    -- retention is what the heap profile is meant to expose.
     audit :: [Text]
   }
   deriving stock (Show)
@@ -90,7 +90,8 @@ placeOrder =
     let available =
           Map.findWithDefault 0 sku w.stock - Map.findWithDefault 0 sku w.reserved
     assume (qty <= available)
-    -- Fat journal entry: the whole reservation table, every step.
+    -- Annotate the whole reservation table so every step carries a fat
+    -- journal entry.
     annotate ("reserved now: " <> renderValue (Map.toList w.reserved))
     pure
       ( audited

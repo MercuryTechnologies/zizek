@@ -18,8 +18,8 @@ check: check-format build test
 build target="all":
   cabal build {{target}}
 
-test suite="unit":
-  cabal test zizek:{{suite}}
+test suite="unit" *args="":
+  cabal test zizek:{{suite}} {{args}}
 
 # Count lines of code in library, test, and nix sources.
 loc:

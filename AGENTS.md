@@ -97,15 +97,21 @@ Haddocks and comments describe what a thing is *for* — its contract — not wh
 
 5. **Avoid em-dashes; don't launder them.** Swapping an em-dash for a colon or semicolon is not a fix. Rephrase so the sentence runs without the interruption. A comma-offset mid-sentence interjection ("but only when both bounds are set, for builders where…") reads badly — rewrite it to flow.
 
-6. **Prefer one sentence.** Condense before adding a second.
+6. **Write sentences, not compressed fragments.** LLM prose compresses for density; a human writes a plain sentence with a subject and a verb. The tells: a dropped-subject, verb-first fragment ("Hoisted out of the closure: …", "Confirms the guard fires…"); a fronted noun phrase with a colon carrying a stack of clauses; semicolons chaining facts into one telegraphic line; a stock flourish standing in for the actual reason ("a real win", "earns its place/keep"). Say who does what and why.
+   - Bad: `Hoisted out of the 'Draw' closure: a real per-draw allocation win at @-O0@; full laziness already does this at @-O1@.`
+   - Good: `Bound here, not inside the lambda, so this isn't reallocated on every draw.`
+   - Bad: `Confirms the guard fires on misuse, not just that ordinary in-bounds usage still works.`
+   - Good: `These cases cover ordinary in-bounds usage and confirm the guard fires on misuse.`
 
-7. **Visual weight matches content weight.** One idea, one line-group. A second sentence that earns its place earns its own paragraph — set it off with a blank `--` line. A sentence that can't justify that weight gets cut.
+7. **Prefer one sentence.** Condense before adding a second.
+
+8. **Visual weight matches content weight.** One idea, one line-group. A second sentence that carries real weight gets its own paragraph — set it off with a blank `--` line. One that doesn't gets cut.
    - Bad: `Require @n >= 0@, throwing 'GenValidationError' otherwise. Size bounds marshal to unsigned wire types, where a negative 'Int' silently wraps to a huge value.`
    - Good: `Require @n >= 0@ for a size or codepoint bound, throwing 'GenValidationError' otherwise.`
 
-8. **No internal references leak into shipped docs.** Never cite `notes/` paths, `AGENTS.md`, or other repo-internal conventions from a Haddock or comment. Point at code and public API only.
+9. **No internal references leak into shipped docs.** Never cite `notes/` paths, `AGENTS.md`, or other repo-internal conventions from a Haddock or comment. Point at code and public API only.
 
-9. **Don't restate the module path.** A module under `Hegel.Internal.*` is already marked internal by its name, so it needs no `__Internal module.__` banner or "may change without notice" boilerplate. Lead with the one-line summary of what it provides.
+10. **Don't restate the module path.** A module under `Hegel.Internal.*` is already marked internal by its name, so it needs no `__Internal module.__` banner or "may change without notice" boilerplate. Lead with the one-line summary of what it provides.
 
 Genuine invariants and warnings stay: why `finally` must guard a buffer free, why an exclusive bound has to be strictly ordered. The test is whether the reader needs it to *use* the thing correctly, not to understand how it works inside.
 

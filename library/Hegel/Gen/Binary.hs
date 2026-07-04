@@ -32,6 +32,7 @@ instance Build BinaryBuilder ByteString where
     checkSizeBounds "Hegel.Gen.Binary" b.bMinSize b.bMaxSize
     drawBytes tc wireLo wireHi
     where
-      -- Converted once here, not per draw.
+      -- Bound here, not inside the lambda, so the conversion isn't redone
+      -- on every draw.
       wireLo = fromIntegral b.bMinSize
       wireHi = maybe maxBound fromIntegral b.bMaxSize
