@@ -11,7 +11,7 @@ module Hegel.Report.Trace
     Trace (..),
     Step (..),
     Touch (..),
-    Lifeline (..),
+    Identity (..),
     Failure (..),
 
     -- * Construction
@@ -19,17 +19,14 @@ module Hegel.Report.Trace
 
     -- * Queries
     step,
-    lifeline,
+    identity,
     root,
-    continues,
-    chain,
-    chainLifelines,
   )
 where
 
 import Data.List (find)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (listToMaybe, mapMaybe)
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Hegel.Internal.Event (Event (..), Operation (..), Var (..))
 import Hegel.Internal.Tick (Tick (..))
@@ -41,11 +38,11 @@ import Hegel.Report.Note qualified as Note
 -- | A stateful counterexample:
 --
 -- * the steps, in order
--- * the lifeline of every pool value they touched
+-- * the identity of every pool value they touched
 -- * the failure, when\/if one was journaled
 data Trace = Trace
   { steps :: [Step],
-    lifelines :: [Lifeline],
+    identities :: [Identity],
     failure :: !(Maybe Failure)
   }
   deriving stock (Show)
@@ -57,9 +54,6 @@ data Step = Step
     -- | The fired rule's name; @\"\<initial\>\"@ for the prelude
     -- pseudo-rule.
     rule :: !Text,
-    -- | Half-open clock window @[from, to)@; events land in the step whose
-    -- window contains their stamp.
-    window :: !(Tick, Tick),
     -- | The step's journal subtree in journal order.
     notes :: [Note],
     response :: !(Maybe Text),
@@ -79,23 +73,17 @@ data Touch = Touch
   }
   deriving stock (Show)
 
--- | A pool value's story across the whole trace, in step indices.
-data Lifeline = Lifeline
+-- | A pooled value's identity: its birth order and display label, and the
+-- source var it continues across a 'Hegel.Pool.transfer'.
+data Identity = Identity
   { var :: !Var,
     -- | Birth order within the value's pool, 1-based.
     ordinal :: !Int,
     -- | The pool's display label ('Hegel.Pool.named'), when it has one.
     label :: !(Maybe Text),
     -- | The source var this value continues ('Hegel.Pool.transfer'): a
-    -- declared identity link. Renderers resolve names and blame chains
-    -- through it (see 'root').
-    lineage :: !(Maybe Var),
-    -- | Step containing the 'Born' event.
-    bornAt :: !(Maybe Int),
-    -- | Step containing the 'Consumed' event.
-    consumedAt :: !(Maybe Int),
-    -- | Steps with 'Reused' draws, chronological.
-    touchedAt :: [Int]
+    -- declared identity link. 'root' resolves names through it.
+    lineage :: !(Maybe Var)
   }
   deriving stock (Show)
 
@@ -114,7 +102,7 @@ build :: [Note] -> [Event] -> Trace
 build notes events =
   Trace
     { steps = stepsOf,
-      lifelines = lifelinesOf events (locateStep stepsOf),
+      identities = identitiesOf events,
       failure = failureOf stepsOf
     }
   where
@@ -137,7 +125,6 @@ build notes events =
        in Step
             { index = segmentIndex seg,
               rule = segmentLabel seg,
-              window = (windowStart seg, end),
               notes = body,
               response = listToMaybe [n.text | n <- reverse body, n.kind == Response],
               touches = [Touch {var = e.var, kind = e.kind} | e <- stepEvents],
@@ -205,48 +192,30 @@ isTouch = \case
   Consumed -> True
   Named _ -> False
 
--- | Fold the event stream into per-value lifelines, in birth order.
-lifelinesOf :: [Event] -> (Tick -> Int) -> [Lifeline]
-lifelinesOf events stepAt =
-  fmap tidy (reverse (foldl' apply [] events))
+-- | Fold the event stream into per-value identities, in birth order,
+-- contributed only by 'Born' events. A 'Reused' or 'Consumed' event carries
+-- no identity information of its own, so it's captured in 'Step.touches'
+-- instead.
+identitiesOf :: [Event] -> [Identity]
+identitiesOf events = reverse (foldl' apply [] events)
   where
     labels :: Map.Map Int Text
     labels = Map.fromList [(e.var.pool, l) | e <- events, Named l <- [e.kind]]
     labelOf :: Var -> Maybe Text
     labelOf v = Map.lookup v.pool labels
-    tidy :: Lifeline -> Lifeline
-    tidy l = l {touchedAt = reverse l.touchedAt}
-    apply :: [Lifeline] -> Event -> [Lifeline]
-    apply ls e = case e.kind of
-      Named _ -> ls
+    apply :: [Identity] -> Event -> [Identity]
+    apply is e = case e.kind of
       Born lineage ->
-        Lifeline
+        Identity
           { var = e.var,
-            ordinal = 1 + length [() | l <- ls, l.var.pool == e.var.pool],
+            ordinal = 1 + length [() | i <- is, i.var.pool == e.var.pool],
             label = labelOf e.var,
-            lineage,
-            bornAt = Just (stepAt e.clock),
-            consumedAt = Nothing,
-            touchedAt = []
+            lineage
           }
-          : ls
-      Reused -> adjust \l -> l {touchedAt = stepAt e.clock : l.touchedAt}
-      Consumed -> adjust \l -> l {consumedAt = Just (stepAt e.clock)}
-      where
-        adjust f = case break (\l -> l.var == e.var) ls of
-          (before, l : after) -> before <> (f l : after)
-          -- Malformed stream (draw of a never-born var): synthesize the
-          -- lifeline with no birth rather than dropping the observation.
-          (_, []) ->
-            f Lifeline {var = e.var, ordinal = 0, label = labelOf e.var, lineage = Nothing, bornAt = Nothing, consumedAt = Nothing, touchedAt = []}
-              : ls
-
--- | Which step's window contains the given 'Tick'.
-locateStep :: [Step] -> Tick -> Int
-locateStep steps c =
-  maybe fallback (.index) (find (\s -> let (from, to) = s.window in from <= c && c < to) steps)
-  where
-    fallback = maybe 0 (.index) (listToMaybe steps)
+          : is
+      Reused -> is
+      Consumed -> is
+      Named _ -> is
 
 -- * Queries
 
@@ -254,9 +223,9 @@ locateStep steps c =
 step :: Trace -> Int -> Maybe Step
 step t i = find (\s -> s.index == i) t.steps
 
--- | The lifeline of the given value.
-lifeline :: Trace -> Var -> Maybe Lifeline
-lifeline t v = find (\l -> l.var == v) t.lifelines
+-- | The identity of the given value.
+identity :: Trace -> Var -> Maybe Identity
+identity t v = find (\i -> i.var == v) t.identities
 
 -- | The logical value's original identity: follow declared lineage
 -- ('Hegel.Pool.transfer') back to the first var.
@@ -265,26 +234,6 @@ root t = go []
   where
     -- The visited guard keeps 'build''s totality promise on malformed
     -- streams: a lineage cycle terminates at the first revisit.
-    go seen v = case lifeline t v >>= (.lineage) of
+    go seen v = case identity t v >>= (.lineage) of
       Just parent | parent /= v, parent `notElem` seen -> go (v : seen) parent
       _ -> v
-
--- | Does this var's consumption have a corresponding descendent?
-continues :: Trace -> Var -> Bool
-continues t v = any (\l -> l.lineage == Just v) t.lifelines
-
--- | Every var of the logical value: the lineage chain through @v@.
-chain :: Trace -> Var -> [Var]
-chain t v = go [] [root t v]
-  where
-    -- Breadth-first with a visited guard (same totality promise as 'root').
-    go acc = \case
-      [] -> reverse acc
-      (x : queue)
-        | x `elem` acc -> go acc queue
-        | otherwise ->
-            go (x : acc) (queue <> [l.var | l <- t.lifelines, l.lineage == Just x])
-
--- | The lifelines of every var in @v@'s lineage chain, oldest first.
-chainLifelines :: Trace -> Var -> [Lifeline]
-chainLifelines t v = mapMaybe (lifeline t) (chain t v)

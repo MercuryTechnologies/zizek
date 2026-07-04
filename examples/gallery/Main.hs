@@ -1,36 +1,32 @@
 -- | A gallery of deliberately-failing properties: the permanent eyeball
 -- harness for the failure renderers. Five scenarios span the spectrum of report
--- shapes, each earning its place. Every stateful failure renders as the one
--- chronological event log (oldest step to the failing step, then that step's
--- source splice); the log has two views — 'Focused' on a single pool value
--- (others elided) and 'Unfocused' with every step shown:
+-- shapes, each earning its place. Every stateful failure renders as one flat
+-- chronological event log, oldest step through the failing step, then that
+-- step's source splice; runs of steps unrelated to the failure collapse into
+-- a single elision row:
 --
 --   1. plain property — the non-stateful base case: drawn values splice into
 --      their source and a '(===)' failure carries a structural diff, with no
 --      event log or footer
 --   2. stack palindrome — the smallest /stateful/ spliced report: a multi-rule
---      '(===)' failure with a structural diff in-band, no pool values, so an
---      unfocused log (compact call rows) leads the splice
+--      '(===)' failure with a structural diff in-band, no pool values, so the
+--      log shows every step (compact call rows) leading the splice
 --   3. warehouse — the realistic no-pool report: four rules over three
 --      coupled structures, cross-structure invariants, a minimal
---      counterexample that interleaves three distinct rules — an unfocused log
---      with annotation detail rows and 'forAllWithLabel'-labeled draws
+--      counterexample that interleaves three distinct rules, with annotation
+--      detail rows and 'forAllWithLabel'-labeled draws
 --      (@restock item="apple" qty=5@)
---   4. connection pool — the flagship focused lifeline: a pooled connection
---      threads idle → active → in-tx → active → idle over its life, so one
---      value's story crosses four pool boundaries ('Pool.transfer' each). A
---      use-after-checkin leak whose /minimal/ counterexample needs an unrelated
---      connect between begin_tx and commit shows the full vocabulary — lifecycle
---      gutters (each 'Pool.transfer' a @◉@ handoff), an elision row (naming the
---      unrelated @conn₂@ it hides), a long lineage across four pools, named
---      values, and an elided-lifeline footer. Printed in unicode and ascii,
---      beside the unicode report.
+--   4. connection pool — a pooled connection threads idle → active → in-tx →
+--      active → idle over its life, so one value's story crosses four pool
+--      boundaries ('Pool.transfer' each). A use-after-checkin leak whose
+--      /minimal/ counterexample needs an unrelated connect between begin_tx
+--      and commit shows the elision row naming the unrelated @conn₂@ it
+--      hides, a long lineage across four pools, and named values throughout.
+--      Printed in unicode and ascii, beside the unicode report.
 --   5. ledger — a /multi-value/ failure: the settling step consumes two
---      distinct funded accounts, so the failing step touches two lineage roots
---      and the log stays unfocused — every step shown with per-step lifecycle
---      glyphs. Multi-subject blame cites both accounts on a @↳@ row — an explicit
---      subset, since the load-bearing @accrue@ step touches no pool value and is
---      shown but uncited.
+--      distinct funded accounts, so the failing step touches two lineage
+--      roots and every step is kept — there is no step that touches neither
+--      account, so nothing elides, including the load-bearing @accrue@ step.
 --
 -- Run with @just gallery@ from the repo root (source splicing resolves
 -- @srcLocFile@ relative to the working directory). Every scenario renders
@@ -51,7 +47,7 @@ import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (Property, annotate, assume, forAll, forAllWithLabel, (===))
 import Hegel.Report (Report (..), renderReportRichAnsi, renderReportRichAnsiWith, renderValue)
-import Hegel.Report.Glyph qualified as Glyph
+import Hegel.Report.Style qualified as Style
 import Hegel.Report.Style (defaultStyle)
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
@@ -63,8 +59,8 @@ main = do
   runScenario "1: plain property — drawn values spliced, === diff" plainProperty
   runScenario "2: stack palindrome — === diff, spliced" (Stateful.run palindromeMachine)
   runScenario "3: warehouse — realistic interleaving, spliced" (Stateful.run warehouseMachine)
-  runTraceScenario True "4: connection pool — use-after-checkin, focused lifeline" (Stateful.run connectionMachine)
-  runTraceScenario False "5: ledger — two accounts settled, unfocused log" (Stateful.run ledgerMachine)
+  runTraceScenario True "4: connection pool — use-after-checkin, elided lineage" (Stateful.run connectionMachine)
+  runTraceScenario False "5: ledger — two accounts settled, flat log" (Stateful.run ledgerMachine)
 
 runScenario :: Text -> Property () -> IO ()
 runScenario title prop = showReport title =<< check defaultSettings prop
@@ -85,8 +81,8 @@ runTraceScenario withAscii title prop = do
   if withAscii
     then do
       T.putStrLn "── ascii ──"
-      T.putStrLn . Glyph.sevenBitClean
-        =<< renderReportRichAnsiWith (defaultStyle Glyph.ascii) report
+      T.putStrLn . Style.sevenBitClean
+        =<< renderReportRichAnsiWith (defaultStyle Style.ascii) report
     else pure ()
 
 -- | Naive count-with-noun pluralization for demo messages:
@@ -254,12 +250,12 @@ warehouseMachine =
       invariants = [reservationsMatchOrders, stockCoversReservations, stockNonNegative]
     }
 
--- * Scenario 4: connection pool (focused lifeline, flagship)
+-- * Scenario 4: connection pool (elided lineage)
 
 -- | A pooled connection threads through several pools over its life — @idle@
 -- when available, @active@ when checked out, @in-tx@ mid-transaction — so one
--- value's lifeline crosses four pool boundaries ('Pool.transfer' each): the
--- richest focused story the report renders.
+-- value's lineage crosses four pool boundaries ('Pool.transfer' each): the
+-- longest lineage the report renders.
 --
 -- The SUT bug: @commit@ clears the connection's open-transaction flag —
 -- /unless/ the pool grew (another connection opened) since @begin_tx@, in which
@@ -337,19 +333,17 @@ connectionMachine =
       invariants = []
     }
 
--- * Scenario 5: ledger (multi-value, unfocused log)
+-- * Scenario 5: ledger (flat log, two lineage roots)
 
--- | The failing step touches /two/ distinct pool values: @settle@ consumes two
--- funded accounts and trips a claim about both. Two lineage roots at the failing
--- step keep the log 'Unfocused' — every step shown with per-step lifecycle
--- glyphs. Multi-subject blame cites /both/ accounts on a @↳ cites@ row below the
--- failing step. Because @accrue@ (the funding step) touches no pool value, it is
--- load-bearing but shown-and-uncited, so the citation is an explicit subset
--- (@↳ cites \@1, \@2@) — the row that a fully-cited failure would drop. A
--- standing fixture for multi-value failures.
+-- | The failing step touches /two/ distinct pool values: @settle@ consumes
+-- two funded accounts and trips a claim about both. Both accounts are
+-- relevant roots, so every step that touches either one is kept. The
+-- interest-posting @accrue@ step touches no pool value at all, so it elides
+-- even though it funded the accounts @settle@ depends on. A standing fixture
+-- for multi-root failures.
 --
--- The claim is deliberately false — nothing in the model stops two accounts from
--- holding funds at once — in the spirit of scenario 2's palindrome.
+-- The claim is deliberately false: nothing in the model stops two accounts
+-- from holding funds at once, in the spirit of scenario 2's palindrome.
 data LedgerModel = LedgerModel
   { accounts :: Pool Int,
     balances :: IORef (Map Int Int),
@@ -373,12 +367,10 @@ ledgerMachine =
               pure n
             Pool.add m.accounts acc
             pure m,
-          -- Posts interest to every account at once. It draws nothing from the
-          -- pool, so this step touches no pool value: a blank gutter, and the
-          -- failing settle never cites it — even though it is load-bearing (with
-          -- no accrual no account is funded, and settle passes). That is what
-          -- makes the citation an explicit subset (@↳ cites \@1, \@2@); a failure
-          -- whose every shown step is cited drops the row entirely.
+          -- Posts interest to every account at once. It draws nothing from
+          -- the pool, so it touches no pool value and elides from the log
+          -- even though it is load-bearing: with no accrual, no account is
+          -- funded, and settle passes.
           Stateful.Rule "accrue" \m -> do
             liftIO (modifyIORef' m.balances (Map.map (+ 1)))
             pure m,

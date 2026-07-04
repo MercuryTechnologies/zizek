@@ -52,9 +52,9 @@ import Hegel.Diff (Diff)
 import Hegel.Internal.Event (Event (..), Operation (..), Var (..))
 import Hegel.Internal.Tick (Tick (..))
 import Hegel.Report.Ann (Ann (..), docToAnsi, docToText)
-import Hegel.Report.Discovery (loadDeclarations)
-import Hegel.Report.Glyph qualified as Glyph
-import Hegel.Report.Journal (headlineBlock, journalDocs)
+import Hegel.Report.Discovery (Declarations, loadDeclarations)
+import Hegel.Report.Journal (footnoteDocs, headlineBlock, journalDocs)
+import Hegel.Report.Layout qualified as Layout
 import Hegel.Report.Note (Note (..), NoteKind (..), hasInBandFailure, isDrawn, isFailureNote, renderValue)
 import Hegel.Report.Source
   ( applyContext,
@@ -66,13 +66,11 @@ import Hegel.Report.Source
     ppFailureLocation,
   )
 import Hegel.Report.Span (Span (..), spanFromSrcLoc)
-import Hegel.Report.Stateful (isStepJournal, noteFiles)
+import Hegel.Report.Stateful (failingGroupDoc, isStepJournal, noteFiles)
 import Hegel.Report.Style (Style (..), defaultStyle)
+import Hegel.Report.Style qualified as Style
+import Hegel.Report.Trace (Trace)
 import Hegel.Report.Trace qualified as Trace
-import Hegel.Report.Trace.Blame (Blame)
-import Hegel.Report.Trace.Blame qualified as Blame
-import Hegel.Report.Trace.Compose (composedDoc)
-import Hegel.Report.Trace.Log qualified as Log
 import Prettyprinter (Doc, (<+>))
 import Prettyprinter qualified as PP
 
@@ -188,12 +186,12 @@ renderFailure message notes loc diff = docToText body
 -- Reads source files at render time; degrades to 'renderReport' when no
 -- source is readable.
 renderReportRich :: Report -> IO Text
-renderReportRich = renderReportRichWith (defaultStyle Glyph.unicode)
+renderReportRich = renderReportRichWith (defaultStyle Style.unicode)
 
 -- | 'renderReportRich' with ANSI color codes. Degrades to 'renderReportAnsi'
 -- when no source is readable.
 renderReportRichAnsi :: Report -> IO Text
-renderReportRichAnsi = renderReportRichAnsiWith (defaultStyle Glyph.unicode)
+renderReportRichAnsi = renderReportRichAnsiWith (defaultStyle Style.unicode)
 
 -- | 'renderReportRich' with an explicit 'Style' (glyph table, phrase table,
 -- budgets).
@@ -205,15 +203,15 @@ renderReportRichAnsiWith :: Style -> Report -> IO Text
 renderReportRichAnsiWith style = renderRichImpl style renderReportAnsi docToAnsi
 
 -- | The renderer the framework integrations call: rich, ANSI per @useColor@,
--- glyphs per the output 'Glyph.Preference', with the ascii preference's
+-- glyphs per the output 'Style.Preference', with the ascii preference's
 -- 7-bit-clean guarantee applied to the whole result. Keeps the
 -- render-then-clean invariant in one place instead of one per framework.
-renderReportAuto :: Bool -> Glyph.Preference -> Report -> IO Text
+renderReportAuto :: Bool -> Style.Preference -> Report -> IO Text
 renderReportAuto useColor pref report =
-  Glyph.cleanFor pref
+  Style.cleanFor pref
     <$> (if useColor then renderReportRichAnsiWith style else renderReportRichWith style) report
   where
-    style = defaultStyle (Glyph.table pref)
+    style = defaultStyle (Style.table pref)
 
 -- | Shared implementation of the rich renderers, parameterised over the
 -- plain-text fallback and the final document renderer.
@@ -224,29 +222,68 @@ renderRichImpl style plain toText report = do
     Nothing -> plain report
     Just body -> toText (PP.vsep ["failed after" <+> statsDoc report.stats, body])
 
--- | Pick the event-log view for a counterexample: 'Log.Focused' on a single
--- failing pool value when blame resolves to exactly one lineage root; otherwise
--- 'Log.Unfocused' (no pool value, or several at once), carrying the blame when
--- present for gutter glyphs and margins. @Blame.analyze@ owns the "roots touched
--- at the failing step" derivation, so the root count is just its claim count.
-chooseView :: Maybe Blame -> Log.View
-chooseView = \case
-  Just blame | length blame.subjects == 1 -> Log.Focused blame
-  mBlame -> Log.Unfocused mBlame
-
 -- | Attempt to build the rich failure doc, falling back to 'Nothing' when
 -- the result is not a counterexample or no declaration could be read for
--- any location. 'chooseView' picks focused vs unfocused; 'composedDoc' renders.
+-- any location. Every step-structured failure composes the same way,
+-- whether or not it touched a pool: 'composed' renders it.
 richDoc :: Style -> Report -> IO (Maybe (Doc Ann))
 richDoc style report = case report.result of
   Counterexample {message, notes, events, loc, diff}
     | isStepJournal notes -> do
         decls <- loadDeclarations (noteFiles notes)
         let trace = Trace.build notes events
-            view = chooseView (Blame.analyze trace)
-        pure (Just (composedDoc style decls trace view notes message loc diff report.databaseKey))
+        pure (Just (composed style decls trace notes message loc diff report.databaseKey))
     | otherwise -> plainRichDoc message notes loc diff
   _ -> pure Nothing
+
+-- | Assemble a step-structured (stateful) failure report from its sections,
+-- rendered in order and separated by blank lines: an optional
+-- headline\/diff\/location prelude, the event log, the failing step's source
+-- splice, footnotes, and the reproduction footer.
+--
+-- The splice carries the diff, so the event log holds only the record of
+-- events and never repeats it.
+--
+-- The prelude leads only when the journal has no in-band failure to anchor the
+-- reason, as when an exception escapes mid-loop or @machine.initial@ fails at
+-- depth 0. An in-band failure carries its own headline at the failing step, so
+-- the prelude is dropped.
+composed ::
+  Style ->
+  Declarations ->
+  Trace ->
+  [Note] ->
+  Text ->
+  Maybe SrcLoc ->
+  Maybe Diff ->
+  Maybe Text ->
+  Doc Ann
+composed style decls trace notes message loc diff databaseKey =
+  PP.vsep (PP.punctuate PP.line (catMaybes sections))
+  where
+    sections =
+      [ prelude,
+        Just (Layout.logDoc style trace),
+        failingGroupDoc decls notes,
+        footnotesDoc notes,
+        footerDoc style.phrases databaseKey
+      ]
+    prelude
+      | hasInBandFailure notes = Nothing
+      | otherwise = Just (PP.vsep (headlineBlock message diff loc))
+
+-- | Footnote notes, rendered after the report body (their documented
+-- position, regardless of form).
+footnotesDoc :: [Note] -> Maybe (Doc Ann)
+footnotesDoc notes = case footnoteDocs notes of
+  [] -> Nothing
+  ds -> Just (PP.vsep ds)
+
+-- | The reproduction footer: present only when the run persisted under a
+-- database key (replay is automatic on the next run; there is no CLI to point
+-- at a key by hand yet). Words from the phrase table, like everything else.
+footerDoc :: Style.PhraseTable -> Maybe Text -> Maybe (Doc Ann)
+footerDoc phrases = fmap (PP.annotate LocAnn . PP.pretty . phrases.stored)
 
 -- | The non-stateful rich doc: drawn values and the failure message spliced
 -- into a source listing.

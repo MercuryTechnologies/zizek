@@ -208,7 +208,7 @@ scenarios =
     Scenario "pool" 1000 "passing pool/transfer handle machine; per-case event-stream overhead" (Check (Stateful.run (Handles.machine Handles.Fixed))),
     Scenario "render-plain" 200 "render the buggy warehouse counterexample (plain renderer)" (RenderLoop 100 warehouseBug (pure . renderReport)),
     Scenario "render-rich" 100 "render it rich (source discovery, splicing, Timeline layout)" (RenderLoop 100 warehouseBug renderReportRichAnsi),
-    Scenario "render-trace" 100 "render a pool/transfer failure rich (Trace/Blame/ledger/verdict)" (RenderLoop 500 handlesBug renderReportRichAnsi)
+    Scenario "render-trace" 100 "render a pool/transfer failure rich (Trace + flat event-log layout)" (RenderLoop 500 handlesBug renderReportRichAnsi)
   ]
 
 -- | Build @n@ transient regex generators without retaining any of them,

@@ -13,6 +13,7 @@ module Hegel.Report.Journal
     journalDocs,
     footnoteDocs,
     noteLineDoc,
+    noteLineAtDepth,
     locDoc,
     headlineBlock,
   )
@@ -20,7 +21,7 @@ where
 
 import Data.Text (Text)
 import Data.Traversable (mapAccumL)
-import Data.Tree (Forest, Tree (..))
+import Data.Tree (Forest, Tree (..), flatten)
 import GHC.Stack (SrcLoc (..))
 import Hegel.Diff (Diff)
 import Hegel.Report.Ann (Ann (..), diffDocs)
@@ -69,21 +70,16 @@ numberDraws = snd . mapAccumL numberTree 1
           children' = snd (mapAccumL numberTree 1 children)
        in (i', Node x children')
 
--- | Render the journal: notes regrouped into their step tree ('groupByDepth')
--- and rendered subtree by subtree, draws numbered pre-order ('numberDraws').
--- Footnotes are hoisted to the end at a fixed indent, discarding both their
--- position and their depth.
+-- | Render the journal: notes regrouped for sibling-scoped draw numbering
+-- ('groupByDepth', 'numberDraws'), flattened back to journal order, and
+-- rendered one line per note ('noteLineAtDepth'). Footnotes are hoisted to
+-- the end at a fixed indent, discarding both their position and their depth.
 journalDocs :: [Note] -> [Doc Ann]
 journalDocs notes = treeDocs <> footnoteDocs notes
   where
     inline = filter (\n -> n.kind /= Footnote) notes
-    -- Roots sit at their stamped depth (not a fixed level) so orphan depth
-    -- jumps keep the same columns as before the regrouping.
     treeDocs :: [Doc Ann]
-    treeDocs =
-      [ PP.indent ((n.depth + 1) * 2) (noteTreeDoc t)
-      | t@(Node (_, n) _) <- numberDraws (groupByDepth inline)
-      ]
+    treeDocs = noteLineAtDepth <$> concatMap flatten (numberDraws $ groupByDepth inline)
 
 -- | Footnotes ('Footnote' kind) rendered at a fixed indent, in order — hoisted
 -- to the end of a report body, their position and depth discarded. Shared by
@@ -92,17 +88,13 @@ footnoteDocs :: [Note] -> [Doc Ann]
 footnoteDocs notes =
   [PP.indent 2 (PP.annotate NoteAnn (PP.pretty n.text)) | n <- notes, n.kind == Footnote]
 
--- | Render one journal subtree: the note itself, then each child subtree
--- indented by its depth /difference/ (one level = two spaces, so contiguous
--- and orphan depths alike land at @(depth + 1) * 2@ overall).
-noteTreeDoc :: Tree (Maybe Int, Note) -> Doc Ann
-noteTreeDoc (Node x@(_, n) children) = PP.vsep (noteLineDoc x : childDocs)
-  where
-    childDocs :: [Doc Ann]
-    childDocs =
-      [ PP.indent (2 * (c.depth - n.depth)) (noteTreeDoc t)
-      | t@(Node (_, c) _) <- children
-      ]
+-- | Render one numbered note at its stamped depth's indent, one level per
+-- two spaces.
+--
+-- Shared by 'journalDocs' and 'Hegel.Report.Stateful''s per-note fallback, so
+-- both renderers place a note at the same column.
+noteLineAtDepth :: (Maybe Int, Note) -> Doc Ann
+noteLineAtDepth x@(_, n) = PP.indent ((n.depth + 1) * 2) (noteLineDoc x)
 
 -- | Render one numbered note in its structured (non-source-spliced) form:
 -- a @Draw N:@ line, an annotation line, or an in-band failure block.

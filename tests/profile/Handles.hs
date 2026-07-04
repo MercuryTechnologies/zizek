@@ -1,12 +1,12 @@
 -- | Profiling copy of a pool-bearing stateful machine: file handles that
 -- live in an @open@ pool and 'Hegel.Pool.transfer' into a @closed@ pool on
--- close, so a failure renders the full composed trace report (verdict list +
--- citation ledger with a transfer lineage). Modeled on the gallery's
--- flagship file-handle scenario (@examples/gallery/Main.hs@).
+-- close, so a failure renders the full composed report with a transfer
+-- lineage in its flat event log. Modeled on the gallery's connection-pool
+-- scenario (@examples/gallery/Main.hs@).
 --
--- The point is coverage of the composed-report machinery: the per-case event stream
--- (recorded only on the final reconstruction replay, 'Silent' otherwise) and
--- the one-shot @Trace.build@ / @Blame.analyze@ / ledger / verdict render.
+-- The point is coverage of the composed-report machinery: the per-case event
+-- stream (recorded only on the final reconstruction replay, 'Silent'
+-- otherwise) and the one-shot @Trace.build@ / flat-layout render.
 --
 -- 'Fixed' clears a handle's contents on close, so every @read_closed@ sees an
 -- empty buffer and the machine passes (the @pool@ scenario — isolates the

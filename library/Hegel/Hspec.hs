@@ -39,7 +39,7 @@ import Hegel.Report
     renderReportAnsi,
     renderReportAuto,
   )
-import Hegel.Report.Glyph qualified as Glyph
+import Hegel.Report.Style qualified as Style
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..), defaultSettings, withDatabaseKey)
 import System.Environment (lookupEnv)
@@ -100,7 +100,7 @@ runProperty :: Settings -> Property () -> IO Hspec.Result
 runProperty settings body = do
   report <- check settings body
   useColor <- shouldUseColor
-  pref <- Glyph.preference stdout
+  pref <- Style.preference stdout
   toHspecResult useColor pref report
 
 -- | A property as a keyed hspec example: a drop-in for @it@ that derives a
@@ -204,7 +204,7 @@ shouldUseColor = do
     then pure False
     else hIsTerminalDevice stderr
 
-toHspecResult :: Bool -> Glyph.Preference -> Report -> IO Hspec.Result
+toHspecResult :: Bool -> Style.Preference -> Report -> IO Hspec.Result
 toHspecResult useColor pref report = case report.result of
   Ok -> pure (Hspec.Result (T.unpack (clean (render report))) Hspec.Success)
   Counterexample {loc} -> do
@@ -225,7 +225,7 @@ toHspecResult useColor pref report = case report.result of
     render = if useColor then renderReportAnsi else renderReport
     -- Every string handed to hspec is cleaned: the 7-bit guarantee covers
     -- gave-up and abort messages (user text) too, not just counterexamples.
-    clean = Glyph.cleanFor pref
+    clean = Style.cleanFor pref
     failed loc reason = Hspec.Result "" (Hspec.Failure loc reason)
 
 hspecLocation :: SrcLoc -> Hspec.Location

@@ -17,7 +17,7 @@ import Data.Tree (Tree (..), flatten)
 import GHC.Stack (SrcLoc (..))
 import Hegel.Report.Ann (Ann (..))
 import Hegel.Report.Discovery (Declarations)
-import Hegel.Report.Journal (groupByDepth, noteLineDoc, numberDraws)
+import Hegel.Report.Journal (groupByDepth, noteLineAtDepth, numberDraws)
 import Hegel.Report.Note (Note (..), NoteKind (..), hasInBandFailure, isFailureNote)
 import Hegel.Report.Source
   ( Annotation,
@@ -84,7 +84,7 @@ groupDoc decls g = PP.vsep (anchored <> listings)
       [ ( n,
           if groupHasFailure g && isJust n.loc
             then spliceNote decls x
-            else Left (fallbackLine x)
+            else Left (noteLineAtDepth x)
         )
       | x@(_, n) <- g.root : g.body
       ]
@@ -103,11 +103,6 @@ groupDoc decls g = PP.vsep (anchored <> listings)
       | d <- mergeFileDeclarations (mergeDeclarations fragments)
       ]
 
--- | A note's structured journal line at its depth indent — identical to the
--- plain renderer's line for that note.
-fallbackLine :: (Maybe Int, Note) -> Doc Ann
-fallbackLine x@(_, n) = PP.indent ((n.depth + 1) * 2) (noteLineDoc x)
-
 -- | Splice one note into its enclosing source declaration: 'Failure' notes
 -- get the arrows\/message\/diff treatment, draws and annotations get their
 -- text inlined under the line that produced them. Falls back to the
@@ -118,7 +113,7 @@ spliceNote ::
   (Maybe Int, Note) ->
   Either (Doc Ann) (Declaration Annotation)
 spliceNote decls x@(_, n) =
-  maybe (Left (fallbackLine x)) Right do
+  maybe (Left (noteLineAtDepth x)) Right do
     sl <- n.loc
     let sp = spanFromSrcLoc sl
     case n.kind of

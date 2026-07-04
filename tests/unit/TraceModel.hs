@@ -1,9 +1,7 @@
--- | Pure pins for the trace model ("Hegel.Report.Trace") and blame analysis
--- ("Hegel.Report.Trace.Blame"), plus one end-to-end run through the engine.
+-- | Pure pins for the trace model ("Hegel.Report.Trace"), plus one
+-- end-to-end run through the engine.
 module TraceModel (spec) where
 
-import Data.IntSet qualified as IntSet
-import Data.List.NonEmpty qualified as NE
 import Data.Maybe (isJust)
 import Hegel.Report
   ( Event (..),
@@ -15,15 +13,13 @@ import Hegel.Report
     Tick (..),
     Var (..),
   )
-import Hegel.Report.Trace (Lifeline (..), Step (..))
+import Hegel.Report.Trace (Identity (..), Step (..))
 import Hegel.Report.Trace qualified as Trace
-import Hegel.Report.Trace.Blame (Claim (..), Fact (..), Observation (..))
-import Hegel.Report.Trace.Blame qualified as Blame
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
-import TraceFixtures (eventAt, eventfulMachine, h1, header, ledgerTrace, noteAt)
+import TraceFixtures (eventAt, eventfulMachine, h1, header, noteAt)
 
 -- ---------------------------------------------------------------------------
 -- Fixture helpers
@@ -73,28 +69,12 @@ spec = do
       [(s.index, s.response) | s <- reusedTrace.steps]
         `shouldBe` [(1, Nothing), (4, Just "ok"), (5, Nothing), (8, Nothing)]
 
-    it "folds the event stream into a birth-ordered lifeline" do
-      case reusedTrace.lifelines of
-        [l] -> do
-          l.var `shouldBe` h1
-          l.ordinal `shouldBe` 1
-          l.bornAt `shouldBe` Just 1
-          l.consumedAt `shouldBe` Nothing
-          l.touchedAt `shouldBe` [4, 5, 8]
-        ls -> expectationFailure ("expected one lifeline, got: " <> show (length ls))
-
-    it "clamps pre-first-header events to the earliest real step" do
-      -- No prelude segment exists (the journal starts with a header), so an
-      -- event stamped before it must land on a step that renders — never a
-      -- ghost step 0.
-      let notes = [header (Tick 3) 1 "touch", noteAt (Tick 5) 1 (Failure Nothing) "boom"]
-          t = Trace.build notes [eventAt (Tick 2) h1 (Born Nothing), eventAt (Tick 4) h1 Reused]
-      fmap (.bornAt) t.lifelines `shouldBe` [Just 1]
-      case Blame.analyze t of
-        Nothing -> expectationFailure "expected blame"
-        Just blm ->
-          IntSet.toList (Blame.citationClosure blm)
-            `shouldSatisfy` all (`elem` [s.index | s <- t.steps])
+    it "folds the event stream into a birth-ordered identity" do
+      case reusedTrace.identities of
+        [i] -> do
+          i.var `shouldBe` h1
+          i.ordinal `shouldBe` 1
+        is -> expectationFailure ("expected one identity, got: " <> show (length is))
 
     it "lands pre-header events in the prelude step" do
       let notes =
@@ -103,14 +83,13 @@ spec = do
             ]
           t = Trace.build notes [eventAt (Tick 2) h1 (Born Nothing)]
       [(s.index, s.rule) | s <- t.steps] `shouldBe` [(0, "<initial>"), (1, "touch")]
-      fmap (.bornAt) t.lifelines `shouldBe` [Just 0]
 
     it "is total on a non-stateful (headerless) journal" do
       let t = Trace.build [noteAt (Tick 1) 0 (Drawn []) "42"] []
       [(s.index, s.rule) | s <- t.steps] `shouldBe` [(0, "<initial>")]
-      t.lifelines `shouldSatisfy` null
+      t.identities `shouldSatisfy` null
 
-    it "a lineage cycle terminates root and chain (malformed stream)" do
+    it "a lineage cycle terminates root (malformed stream)" do
       let a = Var {pool = 0, id = 1}
           b = Var {pool = 0, id = 2}
           t =
@@ -119,8 +98,7 @@ spec = do
               [ eventAt (Tick 2) a (Born (Just b)),
                 eventAt (Tick 3) b (Born (Just a))
               ]
-      -- Totality is the assertion: these must return, whatever they return.
-      Trace.chain t a `shouldSatisfy` (not . null)
+      -- Totality is the assertion: this must return, whatever it returns.
       Trace.root t a `shouldSatisfy` \v -> v == a || v == b
 
     it "assigns per-pool ordinals in birth order" do
@@ -134,7 +112,39 @@ spec = do
                 eventAt (Tick 3) vb (Born Nothing),
                 eventAt (Tick 4) vc (Born Nothing)
               ]
-      [(l.var, l.ordinal) | l <- t.lifelines] `shouldBe` [(va, 1), (vb, 1), (vc, 2)]
+      [(i.var, i.ordinal) | i <- t.identities] `shouldBe` [(va, 1), (vb, 1), (vc, 2)]
+
+    it "resolves a transfer chain's root to the origin var" do
+      -- open(1) births x in pool 0; write(2) touches x; close(3) consumes x
+      -- and births y in pool 1 with lineage x; read(4) touches y.
+      let x = Var {pool = 0, id = 1}
+          y = Var {pool = 1, id = 1}
+          t =
+            Trace.build
+              [ header (Tick 1) 1 "open",
+                header (Tick 3) 2 "write",
+                header (Tick 5) 3 "close",
+                header (Tick 8) 4 "read"
+              ]
+              [ eventAt (Tick 2) x (Born Nothing),
+                eventAt (Tick 4) x Reused,
+                eventAt (Tick 6) x Consumed,
+                eventAt (Tick 7) y (Born (Just x)),
+                eventAt (Tick 9) y Reused
+              ]
+      Trace.root t y `shouldBe` x
+
+    it "lifts pool labels onto identities" do
+      let x = Var {pool = 0, id = 1}
+          t =
+            Trace.build
+              [header (Tick 2) 1 "open"]
+              [ eventAt (Tick 1) x (Named "h"),
+                eventAt (Tick 3) x (Born Nothing)
+              ]
+      fmap (.label) t.identities `shouldBe` [Just "h"]
+      -- A label event is vocabulary, not a touch.
+      concatMap (.touches) t.steps `shouldSatisfy` ((== 1) . length)
 
   describe "Trace.build (draw provenance)" do
     -- A pool draw's 'Drawn' note is tagged with the 'Var'(s) it resolved. That
@@ -211,139 +221,14 @@ spec = do
       kindsOf t `shouldBe` [Reused, Reused]
       freeDrawsOf t `shouldBe` ["(1,2)"]
 
-  describe "Blame.analyze" do
-    it "blames the failing touch and cites the value's earlier story" do
-      case Blame.analyze reusedTrace of
-        Nothing -> expectationFailure "expected blame for the reused-value trace"
-        Just b -> do
-          Blame.primary b `shouldBe` h1
-          b.step `shouldBe` 8
-          (NE.head b.subjects).fact `shouldBe` TouchedAt h1
-          -- Most recent citation first: the peek, the write, then birth.
-          [(p.step, p.fact) | p <- (NE.head b.subjects).since]
-            `shouldBe` [(5, TouchedAt h1), (4, TouchedAt h1), (1, BornAt h1)]
-
-    it "citation closure is the reused value's step set" do
-      case Blame.analyze reusedTrace of
-        Nothing -> expectationFailure "expected blame"
-        Just b -> Blame.citationClosure b `shouldBe` IntSet.fromList [1, 4, 5, 8]
-
-    it "flattens citations from the failing step" do
-      case Blame.analyze reusedTrace of
-        Nothing -> expectationFailure "expected blame"
-        Just b ->
-          [(c.from, c.to) | c <- Blame.citations b] `shouldBe` [(8, 5), (8, 4), (8, 1)]
-
-    it "two same-step touches yield one citation" do
-      let t =
-            Trace.build
-              [ header (Tick 1) 1 "open",
-                header (Tick 3) 2 "double",
-                header (Tick 6) 3 "boom",
-                noteAt (Tick 8) 1 (Failure Nothing) "boom"
-              ]
-              [ eventAt (Tick 2) h1 (Born Nothing),
-                eventAt (Tick 4) h1 Reused,
-                eventAt (Tick 5) h1 Reused,
-                eventAt (Tick 7) h1 Reused
-              ]
-      case Blame.analyze t of
-        Nothing -> expectationFailure "expected blame"
-        Just b -> [c.to | c <- Blame.citations b] `shouldBe` [2, 1]
-
-    it "blames every root a multi-touch step implicates (structural union)" do
-      -- The failing @audit@ touches two independent accounts, so blame carries a
-      -- claim for each — both cited, each with its own history.
-      case Blame.analyze ledgerTrace of
-        Nothing -> expectationFailure "expected blame for the ledger trace"
-        Just b -> do
-          let a1 = Var {pool = 0, id = 1}
-              a2 = Var {pool = 0, id = 2}
-          NE.length b.subjects `shouldBe` 2
-          fmap (Blame.factVar . (.fact)) (NE.toList b.subjects) `shouldBe` [a1, a2]
-          [[(p.step, p.fact) | p <- c.since] | c <- NE.toList b.subjects]
-            `shouldBe` [ [(3, TouchedAt a1), (1, BornAt a1)],
-                         [(2, BornAt a2)]
-                       ]
-
-    it "yields Nothing when the failing step touched no pool values" do
-      let t =
-            Trace.build
-              [ header (Tick 1) 1 "boom",
-                noteAt (Tick 2) 1 (Failure Nothing) "boom"
-              ]
-              []
-      Blame.analyze t `shouldSatisfy` \case
-        Nothing -> True
-        Just _ -> False
-
-    it "follows declared lineage across pools (transfer chains)" do
-      -- open(1) births X in pool 0; write(2) touches X; close(3) consumes X
-      -- and births Y in pool 1 with lineage X; read(4) touches Y and fails.
-      let x = Var {pool = 0, id = 1}
-          y = Var {pool = 1, id = 1}
-          t =
-            Trace.build
-              [ header (Tick 1) 1 "open",
-                header (Tick 3) 2 "write",
-                header (Tick 5) 3 "close",
-                header (Tick 8) 4 "read",
-                noteAt (Tick 10) 1 (Failure Nothing) "stale"
-              ]
-              [ eventAt (Tick 2) x (Born Nothing),
-                eventAt (Tick 4) x Reused,
-                eventAt (Tick 6) x Consumed,
-                eventAt (Tick 7) y (Born (Just x)),
-                eventAt (Tick 9) y Reused
-              ]
-      Trace.root t y `shouldBe` x
-      Trace.chain t y `shouldBe` [x, y]
-      case Blame.analyze t of
-        Nothing -> expectationFailure "expected blame"
-        Just b -> do
-          Blame.primary b `shouldBe` y
-          -- The chain cites the pre-transfer history — and the lineage-linked
-          -- consumption is classified as a transfer, not a death.
-          [(p.step, p.fact) | p <- (NE.head b.subjects).since]
-            `shouldBe` [(3, TransferredAt x), (2, TouchedAt x), (1, BornAt x)]
-
-    it "lifts pool labels onto lifelines" do
-      let x = Var {pool = 0, id = 1}
-          t =
-            Trace.build
-              [header (Tick 2) 1 "open"]
-              [ eventAt (Tick 1) x (Named "h"),
-                eventAt (Tick 3) x (Born Nothing)
-              ]
-      fmap (.label) t.lifelines `shouldBe` [Just "h"]
-      -- A label event is vocabulary, not a touch.
-      concatMap (.touches) t.steps `shouldSatisfy` ((== 1) . length)
-
-    it "yields Nothing when nothing failed" do
-      let (notes, events) = reusedValue
-          notFailure n = case n.kind of Failure _ -> False; _ -> True
-      Blame.analyze (Trace.build (filter notFailure notes) events) `shouldSatisfy` \case
-        Nothing -> True
-        Just _ -> False
-
   describe "end to end (engine)" do
-    it "a real pool machine builds a blamed trace" do
+    it "a real pool machine builds a trace with a failure and identities" do
       report <- check defaultSettings (Stateful.run eventfulMachine)
       case report.result of
         Counterexample {notes, events} -> do
           let t = Trace.build notes events
           t.failure `shouldSatisfy` isJust
-          case Blame.analyze t of
-            Nothing -> expectationFailure "expected blame from the eventful machine"
-            Just b -> do
-              -- Every citation points backwards from the failing step.
-              [() | c <- Blame.citations b, c.to >= c.from] `shouldBe` []
-              -- The revset contains the failing step.
-              case t.failure of
-                Just f -> IntSet.member f.step (Blame.citationClosure b) `shouldBe` True
-                Nothing -> pure ()
-              -- The subject is one of the trace's lifelines.
-              [l.var | l <- t.lifelines, l.var == Blame.primary b] `shouldBe` [Blame.primary b]
+          t.identities `shouldSatisfy` (not . null)
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
     it "respond reaches Step.response through a real run" do

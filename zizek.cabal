@@ -133,18 +133,14 @@ library
     Hegel.Report.Ann
     Hegel.Report.Discovery
     Hegel.Report.Encoding
-    Hegel.Report.Glyph
     Hegel.Report.Journal
+    Hegel.Report.Layout
     Hegel.Report.Note
-    Hegel.Report.Phrase
     Hegel.Report.Source
     Hegel.Report.Span
     Hegel.Report.Stateful
     Hegel.Report.Style
     Hegel.Report.Trace
-    Hegel.Report.Trace.Blame
-    Hegel.Report.Trace.Compose
-    Hegel.Report.Trace.Log
     Hegel.Runner
     Hegel.Settings
     Hegel.Stateful

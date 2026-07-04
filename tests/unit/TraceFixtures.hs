@@ -12,18 +12,16 @@ module TraceFixtures
     -- * The transfer/handoff fixture (composed-report shape, with elision fillers)
     handoffFixture,
     handoffTrace,
-    handoffBlame,
 
     -- * A flat born+touch fixture (no death or handoff)
     flatFixture,
 
-    -- * A pool-free journal (unfocused, no blame)
+    -- * A pool-free journal (every step shown, no pool values)
     noPoolTrace,
 
-    -- * A two-root ledger (unfocused, blame present)
+    -- * A two-root ledger (every step shown, two independent lineage roots)
     ledgerFixture,
     ledgerTrace,
-    ledgerBlame,
 
     -- * The eventful engine machine
     Model (..),
@@ -32,7 +30,6 @@ module TraceFixtures
 where
 
 import Data.Function ((&))
-import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Gen qualified as Gen
@@ -42,8 +39,6 @@ import Hegel.Property (assert, forAll)
 import Hegel.Report (Event (..), Note (..), NoteKind (..), Operation (..), Tick (..), Var (..))
 import Hegel.Report.Trace (Trace)
 import Hegel.Report.Trace qualified as Trace
-import Hegel.Report.Trace.Blame (Blame)
-import Hegel.Report.Trace.Blame qualified as Blame
 import Hegel.Stateful qualified as Stateful
 
 -- * Synthetic-stream helpers
@@ -69,11 +64,10 @@ h2 = Var {pool = 1, id = 9}
 
 -- | open(1), fillers(2,3), write(4), close(5), fillers(6,7), read(8). @close@
 -- is a 'Hegel.Pool.transfer': it consumes 'h1' and births 'h2' with 'h1' as
--- its declared lineage, so the value lives on across pools. The failing @read@
--- touches 'h2', so blame cites the handoff (@close@), the earlier @write@, and
--- the birth (@open@); the fillers make elision rows render. This is the
--- reachable composed-report shape — every event mirrors what real engine pool
--- draws produce.
+-- its declared lineage, so the value lives on across pools. The failing
+-- @read@ touches 'h2', whose lineage root is 'h1', so @open@, @write@,
+-- @close@, and @read@ are kept and the fillers elide. Every event mirrors
+-- what real engine pool draws produce.
 handoffFixture :: ([Note], [Event])
 handoffFixture =
   ( [ header (Tick 1) 1 "open",
@@ -103,16 +97,11 @@ handoffFixture =
 handoffTrace :: Trace
 handoffTrace = uncurry Trace.build handoffFixture
 
-handoffBlame :: Blame
-handoffBlame = fromJust (Blame.analyze handoffTrace)
-
 -- * A flat born+touch fixture
 
 -- | open(1) births the value, use(2) reuses it, use(3) reuses it and fails an
--- assertion. The value is never consumed or transferred, so its story is flat
--- (born, then touched): a single lineage root, so the report renders as the
--- focused event log (birth and access rows, cites) with no lifecycle glyphs
--- beyond born\/access.
+-- assertion. The value is never consumed or transferred, so every step
+-- touches its single lineage root and nothing elides.
 flatFixture :: ([Note], [Event])
 flatFixture =
   ( [ header (Tick 1) 1 "open",
@@ -130,9 +119,9 @@ flatFixture =
 -- * A pool-free journal
 
 -- | A stateful failure with no pool values at all: three @push@/@pop@ steps
--- with free (non-pool) draws and an annotation, the last failing. 'Blame.analyze'
--- returns 'Nothing' (no pool events), so this is the @Unfocused Nothing@ shape —
--- every step shown, blank gutters, the failing step marked @✗@, no margins.
+-- with free (non-pool) draws and an annotation, the last failing. No step
+-- touches a pool value, so every step is kept, rendering with a blank
+-- gutter except the failing step's @✗@.
 noPoolFixture :: ([Note], [Event])
 noPoolFixture =
   ( [ header (Tick 1) 1 "push",
@@ -157,11 +146,10 @@ a1 = Var {pool = 0, id = 1}
 a2 :: Var
 a2 = Var {pool = 0, id = 2}
 
--- | Two independent accounts (distinct lineage roots, no transfer): each opened
--- and touched, the final @audit@ step touching both and failing. 'Blame.analyze'
--- returns 'Just' (there are pool events) but the failing step spans two roots,
--- so this is the @Unfocused (Just blame)@ shape — every step shown with per-step
--- lifecycle glyphs and kept margins.
+-- | Two independent accounts, each its own lineage root with no transfer
+-- between them: each opened and touched, the final @audit@ step touching
+-- both and failing. The failing step's touches resolve to both roots, so
+-- every step is kept and nothing elides.
 ledgerFixture :: ([Note], [Event])
 ledgerFixture =
   ( [ header (Tick 1) 1 "open",
@@ -187,9 +175,6 @@ ledgerFixture =
 
 ledgerTrace :: Trace
 ledgerTrace = uncurry Trace.build ledgerFixture
-
-ledgerBlame :: Blame
-ledgerBlame = fromJust (Blame.analyze ledgerTrace)
 
 -- * The eventful engine machine
 
