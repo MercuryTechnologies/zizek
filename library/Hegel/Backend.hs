@@ -4,7 +4,7 @@ module Hegel.Backend
   )
 where
 
-import Foreign.C.Types (CInt)
+import Data.Word (Word32)
 import Hegel.Internal.Foreign.Raw
   ( pattern HEGEL_BACKEND_AUTO,
     pattern HEGEL_BACKEND_DEFAULT,
@@ -35,7 +35,7 @@ data Backend
   deriving stock (Show, Eq)
 
 -- | The @hegel_backend_t@ wire value.
-instance Witch.From Backend CInt where
+instance Witch.From Backend Word32 where
   from Auto = HEGEL_BACKEND_AUTO
   from Default = HEGEL_BACKEND_DEFAULT
   from Urandom = HEGEL_BACKEND_URANDOM

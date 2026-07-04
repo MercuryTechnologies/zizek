@@ -5,7 +5,8 @@ module Hegel.Runner
 where
 
 import Control.Concurrent.Async (wait, withAsyncBound)
-import Control.Exception (SomeException, fromException, mask, toException, try)
+import Control.Exception (SomeException, bracket, finally, fromException, mask, toException, try)
+import Control.Monad (void)
 import Data.Bits ((.|.))
 import Data.ByteString (ByteString)
 import Data.Foldable (for_)
@@ -99,9 +100,9 @@ check settings prop =
 applySettings :: Ptr HegelContext -> Settings -> Ptr HegelSettings -> IO ()
 applySettings ctx s ptr = do
   chk $ hegel_settings_set_mode ctx ptr HEGEL_MODE_TEST_RUN
-  chk $ hegel_settings_set_backend ctx ptr (Witch.into @CInt s.backend)
+  chk $ hegel_settings_set_backend ctx ptr (Witch.into @Word32 s.backend)
   chk $ hegel_settings_set_test_cases ctx ptr (fromIntegral s.testCases)
-  chk $ hegel_settings_set_verbosity ctx ptr (Witch.into @CInt s.verbosity)
+  chk $ hegel_settings_set_verbosity ctx ptr (Witch.into @Word32 s.verbosity)
 
   case s.seed of
     Nothing -> chk $ hegel_settings_set_seed ctx ptr 0 (CBool 0)
@@ -181,15 +182,16 @@ data RunOutcome = RunOutcome
 -- | Read the aggregate status, the primary failure, and the run-level error
 -- out of the engine's result, copying anything we keep.
 --
--- Must be called before 'hegel_run_free' frees the borrowed result.
+-- The result is a caller-owned snapshot, freed here once its contents have been
+-- copied out; it is independent of 'hegel_run_free'.
 readRunOutcome :: Ptr HegelContext -> Ptr HegelRun -> IO RunOutcome
-readRunOutcome ctx run = do
-  res <- outWith (hegel_run_result ctx run)
-  rawStatus <- outWith (hegel_run_result_status ctx res)
-  let status = either (const RunErrored) id (Witch.tryInto rawStatus)
-  failure <- readPrimaryFailure ctx res
-  runError <- readRunError ctx res
-  pure RunOutcome {status, failure, runError}
+readRunOutcome ctx run =
+  bracket (outWith (hegel_run_result ctx run)) (void . hegel_run_result_free ctx) \res -> do
+    rawStatus <- outWith (hegel_run_result_status ctx res)
+    let status = either (const RunErrored) id (Witch.tryInto rawStatus)
+    failure <- readPrimaryFailure ctx res
+    runError <- readRunError ctx res
+    pure RunOutcome {status, failure, runError}
   where
     -- Run one @out_*@ call, checking its return code and reading the result.
     outWith :: (Storable a) => (Ptr a -> IO CInt) -> IO a
@@ -205,18 +207,24 @@ readPrimaryFailure ctx res = do
     peek out
   if (count :: CSize) == 0
     then pure Nothing
-    else do
-      f <- alloca \out -> do
-        throwOnError ctx =<< hegel_run_result_failure ctx res 0 out
-        peek out
-      if f == nullPtr
-        then pure Nothing
-        else do
-          org <- alloca \out -> do
-            throwOnError ctx =<< hegel_failure_origin ctx f out
-            peekUtf8 =<< peek out
-          blob <- failureReproductionBlob ctx f
-          pure (Just Failure {origin = org, reproductionBlob = blob})
+    else
+      -- The failure is a caller-owned snapshot; free it once the origin and
+      -- blob are copied out.
+      bracket
+        ( alloca \out -> do
+            throwOnError ctx =<< hegel_run_result_failure ctx res 0 out
+            peek out
+        )
+        (void . hegel_failure_free ctx)
+        \f ->
+          if f == nullPtr
+            then pure Nothing
+            else do
+              org <- alloca \out -> do
+                throwOnError ctx =<< hegel_failure_origin ctx f out
+                peekUtf8 =<< peek out
+              blob <- failureReproductionBlob ctx f
+              pure (Just Failure {origin = org, reproductionBlob = blob})
 
 -- | Read and copy the run-level error message, if the run carries one.
 readRunError :: Ptr HegelContext -> Ptr HegelRunResult -> IO (Maybe Text)
@@ -274,8 +282,11 @@ driveLoop ctx action run = loop 0 0
         peek out
       if tcPtr == nullPtr
         then pure (nValid, nInvalid)
-        else
-          runTestCase ctx action tcPtr >>= \case
+        else do
+          -- The handle from 'hegel_next_test_case' is caller-owned; free it once
+          -- the case is done.
+          status <- runTestCase ctx action tcPtr `finally` void (hegel_test_case_free ctx tcPtr)
+          case status of
             Valid -> loop (nValid + 1) nInvalid
             Invalid -> loop nValid (nInvalid + 1)
             -- A failure (counted via the run result) or an overrun (a

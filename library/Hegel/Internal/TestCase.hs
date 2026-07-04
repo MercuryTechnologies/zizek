@@ -30,8 +30,8 @@ where
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
+import Data.Word (Word32)
 import Foreign (Ptr, nullPtr)
-import Foreign.C.Types (CInt)
 import Hegel.Internal.Event (Event, Var)
 import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
@@ -43,11 +43,9 @@ import Witch qualified
 
 -- | Build the per-case environment around an engine 'Handle'.
 --
--- For run-owned handles the case pointer is borrowed from the run handle and
--- remains valid only for the duration of the current test case (until
--- 'markComplete' is called and the runner fetches the next case via
--- 'hegel_next_test_case'). Blob-derived replay handles are caller-owned and
--- freed by their bracket instead.
+-- The test-case handle is caller-owned whatever its origin: one from
+-- 'hegel_next_test_case' is freed once its 'markComplete' has run, and one
+-- replayed from a blob is freed by its bracket.
 --
 -- The 'Tick.Recording' selects whether this case records: ordinary cases (and
 -- every shrink replay) pass 'Hegel.Internal.Tick.Silent'; only the final
@@ -129,8 +127,8 @@ markComplete tc status = do
   -- 'Interesting' case also carries an origin string, passed separately.
   rc <- case status of
     Interesting origin ->
-      CString.withText origin (hegel_mark_complete tc.handle.ctx tc.handle.ptr (Witch.into @CInt status))
-    _ -> hegel_mark_complete tc.handle.ctx tc.handle.ptr (Witch.into @CInt status) nullPtr
+      CString.withText origin (hegel_mark_complete tc.handle.ctx tc.handle.ptr (Witch.into @Word32 status))
+    _ -> hegel_mark_complete tc.handle.ctx tc.handle.ptr (Witch.into @Word32 status) nullPtr
   case rc of
     HEGEL_OK -> pure ()
     HEGEL_E_STOP_TEST -> pure ()
@@ -154,7 +152,7 @@ data Status
 --
 -- Note this is the status /discriminant/ only: an 'Interesting' case's origin
 -- is passed to 'markComplete' separately.
-instance Witch.From Status CInt where
+instance Witch.From Status Word32 where
   from Valid = HEGEL_STATUS_VALID
   from Invalid = HEGEL_STATUS_INVALID
   from Overrun = HEGEL_STATUS_OVERRUN

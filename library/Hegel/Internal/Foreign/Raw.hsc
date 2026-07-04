@@ -143,9 +143,11 @@ module Hegel.Internal.Foreign.Raw
 
     -- * Run lifecycle
     -- $run
+    OutputSink,
     hegel_run_start,
     hegel_next_test_case,
     hegel_run_result,
+    hegel_run_result_free,
     hegel_run_free,
 
     -- * Per-test-case primitives
@@ -176,6 +178,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_run_result_error,
     hegel_run_result_failure_count,
     hegel_run_result_failure,
+    hegel_failure_free,
     hegel_failure_origin,
     hegel_failure_reproduction_blob,
 
@@ -211,7 +214,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Word (Word32, Word64, Word8)
-import Foreign (ForeignPtr, Ptr, alloca, castPtr, mallocForeignPtrBytes, nullPtr, peek, plusPtr, sizeOf, withForeignPtr)
+import Foreign (ForeignPtr, FunPtr, Ptr, alloca, castPtr, mallocForeignPtrBytes, nullFunPtr, nullPtr, peek, plusPtr, sizeOf, withForeignPtr)
 import Foreign.C.String (CString)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt (..), CSize (..))
 
@@ -220,23 +223,22 @@ import Foreign.C.Types (CBool (..), CDouble (..), CInt (..), CSize (..))
 -- Phantom parameters passed to 'Ptr', giving each @libhegel@ handle
 -- (e.g. @hegel_settings_t*@, @hegel_run_t*@) a distinct, Haskell type.
 
--- | Sentinel for @hegel_context_t*@ (error-reporting context).
+-- | Marker type for @hegel_context_t*@ (error-reporting context).
 data HegelContext
 
--- | Sentinel for @hegel_settings_t*@.
+-- | Marker type for @hegel_settings_t*@.
 data HegelSettings
 
--- | Sentinel for @hegel_run_t*@.
+-- | Marker type for @hegel_run_t*@.
 data HegelRun
 
--- | Sentinel for @hegel_test_case_t*@ (run-borrowed, or caller-owned when
--- replayed from a blob — see the reproduction section).
+-- | Marker type for @hegel_test_case_t*@.
 data HegelTestCase
 
--- | Sentinel for @hegel_run_result_t*@ (borrowed from the run handle).
+-- | Marker type for @hegel_run_result_t*@.
 data HegelRunResult
 
--- | Sentinel for @hegel_failure_t*@ (borrowed from the run result).
+-- | Marker type for @hegel_failure_t*@.
 data HegelFailure
 
 -- $errortypes
@@ -399,50 +401,50 @@ pattern HEGEL_LABEL_FEATURE_FLAG = (#const HEGEL_LABEL_FEATURE_FLAG)
 
 -- $modes
 --
--- @CInt@ values passed to 'hegel_settings_set_mode', which select whether a run
--- executes the full test loop ('HEGEL_MODE_TEST_RUN') or replays a single test
--- case ('HEGEL_MODE_SINGLE_TEST_CASE').
+-- @uint32_t@ values passed to 'hegel_settings_set_mode', which select whether a
+-- run executes the full test loop ('HEGEL_MODE_TEST_RUN') or replays a single
+-- test case ('HEGEL_MODE_SINGLE_TEST_CASE').
 
-pattern HEGEL_MODE_TEST_RUN :: CInt
+pattern HEGEL_MODE_TEST_RUN :: Word32
 pattern HEGEL_MODE_TEST_RUN = (#const HEGEL_MODE_TEST_RUN)
 
-pattern HEGEL_MODE_SINGLE_TEST_CASE :: CInt
+pattern HEGEL_MODE_SINGLE_TEST_CASE :: Word32
 pattern HEGEL_MODE_SINGLE_TEST_CASE = (#const HEGEL_MODE_SINGLE_TEST_CASE)
 
 -- $backend
 --
--- @CInt@ values passed to 'hegel_settings_set_backend', which select the
+-- @uint32_t@ values passed to 'hegel_settings_set_backend', which select the
 -- engine's source of randomness.
 
-pattern HEGEL_BACKEND_AUTO :: CInt
+pattern HEGEL_BACKEND_AUTO :: Word32
 pattern HEGEL_BACKEND_AUTO = (#const HEGEL_BACKEND_AUTO)
 
-pattern HEGEL_BACKEND_DEFAULT :: CInt
+pattern HEGEL_BACKEND_DEFAULT :: Word32
 pattern HEGEL_BACKEND_DEFAULT = (#const HEGEL_BACKEND_DEFAULT)
 
-pattern HEGEL_BACKEND_URANDOM :: CInt
+pattern HEGEL_BACKEND_URANDOM :: Word32
 pattern HEGEL_BACKEND_URANDOM = (#const HEGEL_BACKEND_URANDOM)
 
 -- $verbosity
 --
--- @CInt@ levels passed to 'hegel_settings_set_verbosity', which control how
+-- @uint32_t@ levels passed to 'hegel_settings_set_verbosity', which control how
 -- much diagnostic output the engine emits.
 
-pattern HEGEL_VERBOSITY_QUIET :: CInt
+pattern HEGEL_VERBOSITY_QUIET :: Word32
 pattern HEGEL_VERBOSITY_QUIET = (#const HEGEL_VERBOSITY_QUIET)
 
-pattern HEGEL_VERBOSITY_NORMAL :: CInt
+pattern HEGEL_VERBOSITY_NORMAL :: Word32
 pattern HEGEL_VERBOSITY_NORMAL = (#const HEGEL_VERBOSITY_NORMAL)
 
-pattern HEGEL_VERBOSITY_VERBOSE :: CInt
+pattern HEGEL_VERBOSITY_VERBOSE :: Word32
 pattern HEGEL_VERBOSITY_VERBOSE = (#const HEGEL_VERBOSITY_VERBOSE)
 
-pattern HEGEL_VERBOSITY_DEBUG :: CInt
+pattern HEGEL_VERBOSITY_DEBUG :: Word32
 pattern HEGEL_VERBOSITY_DEBUG = (#const HEGEL_VERBOSITY_DEBUG)
 
 -- $status
 --
--- @CInt@ values passed to 'hegel_mark_complete', which report a test case's
+-- @uint32_t@ values passed to 'hegel_mark_complete', which report a test case's
 -- outcome:
 --
 -- * valid
@@ -450,16 +452,16 @@ pattern HEGEL_VERBOSITY_DEBUG = (#const HEGEL_VERBOSITY_DEBUG)
 -- * overrun (the choice budget was exhausted)
 -- * interesting (a failure worth shrinking)
 
-pattern HEGEL_STATUS_VALID :: CInt
+pattern HEGEL_STATUS_VALID :: Word32
 pattern HEGEL_STATUS_VALID = (#const HEGEL_STATUS_VALID)
 
-pattern HEGEL_STATUS_INVALID :: CInt
+pattern HEGEL_STATUS_INVALID :: Word32
 pattern HEGEL_STATUS_INVALID = (#const HEGEL_STATUS_INVALID)
 
-pattern HEGEL_STATUS_OVERRUN :: CInt
+pattern HEGEL_STATUS_OVERRUN :: Word32
 pattern HEGEL_STATUS_OVERRUN = (#const HEGEL_STATUS_OVERRUN)
 
-pattern HEGEL_STATUS_INTERESTING :: CInt
+pattern HEGEL_STATUS_INTERESTING :: Word32
 pattern HEGEL_STATUS_INTERESTING = (#const HEGEL_STATUS_INTERESTING)
 
 -- $runstatus
@@ -522,12 +524,12 @@ foreign import ccall unsafe "hegel_settings_free"
 
 -- | Set the run mode (full test loop or single test case).
 foreign import ccall unsafe "hegel_settings_set_mode"
-  hegel_settings_set_mode :: Ptr HegelContext -> Ptr HegelSettings -> CInt -> IO CInt
+  hegel_settings_set_mode :: Ptr HegelContext -> Ptr HegelSettings -> Word32 -> IO CInt
 
 -- | Select the engine's randomness backend (one of the @HEGEL_BACKEND_*@
 -- values).
 foreign import ccall unsafe "hegel_settings_set_backend"
-  hegel_settings_set_backend :: Ptr HegelContext -> Ptr HegelSettings -> CInt -> IO CInt
+  hegel_settings_set_backend :: Ptr HegelContext -> Ptr HegelSettings -> Word32 -> IO CInt
 
 -- | Set the maximum number of valid test cases to run (default: 100).
 foreign import ccall unsafe "hegel_settings_set_test_cases"
@@ -535,7 +537,7 @@ foreign import ccall unsafe "hegel_settings_set_test_cases"
 
 -- | Set engine output verbosity.
 foreign import ccall unsafe "hegel_settings_set_verbosity"
-  hegel_settings_set_verbosity :: Ptr HegelContext -> Ptr HegelSettings -> CInt -> IO CInt
+  hegel_settings_set_verbosity :: Ptr HegelContext -> Ptr HegelSettings -> Word32 -> IO CInt
 
 -- | Fix the RNG seed (@has_seed = 1@ to use @seed@, @0@ for fresh).
 foreign import ccall unsafe "hegel_settings_set_seed"
@@ -575,25 +577,55 @@ foreign import ccall unsafe "hegel_settings_set_suppress_health_check"
 --
 -- Prefer 'withRun'.
 
--- | Spawn the engine worker thread and write a run handle into @*out_run@;
--- returns immediately.
-foreign import ccall unsafe "hegel_run_start"
-  hegel_run_start :: Ptr HegelContext -> Ptr HegelSettings -> Ptr (Ptr HegelRun) -> IO CInt
+-- | The Haskell side of a @hegel_output_callback_t@: one line of engine output
+-- per call, with the @user_data@ pointer threaded through verbatim.
+--
+-- @line@ is NUL-terminated UTF-8 whose 'CSize' length excludes the terminator,
+-- has no trailing newline, and is valid only for the duration of the call.
+--
+-- During a run the engine emits from its worker thread, so a sink must be
+-- thread-safe; a blob replay emits synchronously on the calling thread.
+--
+-- We pass a @NULL@ 'FunPtr' everywhere for now, leaving output on stderr; a real
+-- sink arrives with output routing.
+type OutputSink = Ptr () -> CString -> CSize -> IO ()
 
--- | Block until the engine produces the next test case, writing a borrowed
+-- | Spawn the engine worker thread and write a run handle into @*out_run@;
+-- returns immediately. @callback@ (with its @user_data@) receives engine output
+-- line by line; a @NULL@ 'FunPtr' leaves output on stderr.
+foreign import ccall unsafe "hegel_run_start"
+  hegel_run_start
+    :: Ptr HegelContext
+    -> Ptr HegelSettings
+    -> FunPtr OutputSink
+    -> Ptr ()
+    -> Ptr (Ptr HegelRun)
+    -> IO CInt
+
+-- | Block until the engine produces the next test case, writing a __caller-owned__
 -- handle into @*out_test_case@ (or @NULL@ when the run is finished).
+--
+-- The caller must release the handle with 'hegel_test_case_free'.
 --
 -- Declared @safe@ so it does not pin a GHC capability while blocked on the
 -- Rust worker.
 foreign import ccall safe "hegel_next_test_case"
   hegel_next_test_case :: Ptr HegelContext -> Ptr HegelRun -> Ptr (Ptr HegelTestCase) -> IO CInt
 
--- | Write the aggregated run result, borrowed from the run handle, into
--- @*out_result@.
+-- | Write a __caller-owned__ snapshot of the aggregated run result into
+-- @*out_result@. The snapshot is independent of the run — it stays valid after
+-- 'hegel_run_free' — and must be released with 'hegel_run_result_free'.
 --
 -- Only valid once 'hegel_next_test_case' has reported completion.
 foreign import ccall unsafe "hegel_run_result"
   hegel_run_result :: Ptr HegelContext -> Ptr HegelRun -> Ptr (Ptr HegelRunResult) -> IO CInt
+
+-- | Release a run-result snapshot from 'hegel_run_result', along with the
+-- strings read off it.
+--
+-- Safe to call with @NULL@.
+foreign import ccall unsafe "hegel_run_result_free"
+  hegel_run_result_free :: Ptr HegelContext -> Ptr HegelRunResult -> IO CInt
 
 -- | Join the worker thread and free the run handle.
 --
@@ -783,7 +815,7 @@ foreign import ccall unsafe "hegel_mark_complete"
   hegel_mark_complete
     :: Ptr HegelContext
     -> Ptr HegelTestCase
-    -> CInt    -- ^ @status@ (@HEGEL_STATUS_*@)
+    -> Word32  -- ^ @status@ (@HEGEL_STATUS_*@)
     -> CString -- ^ @origin@ (@NULL@ unless 'HEGEL_STATUS_INTERESTING')
     -> IO CInt
 
@@ -793,15 +825,9 @@ foreign import ccall unsafe "hegel_mark_complete"
 --
 -- == Ownership model
 --
--- @libhegel@ has two kinds of @hegel_test_case_t@, with different ownership:
---
--- * __Run-owned__: returned by 'hegel_next_test_case'; the 'HegelRun' handle
---   owns the memory, and it is freed by 'hegel_run_free'. Calling 'hegel_test_case_free'
---   on one of these handles is an error and @libhegel@ will loudly reject it
---   with a diagnostic.
---
--- * __Caller-owned__: returned by 'hegel_test_case_from_blob'; the caller is
---   responsible for freeing it with 'hegel_test_case_free'
+-- Every @hegel_test_case_t@ is __caller-owned__ and freed with
+-- 'hegel_test_case_free', whether it came from 'hegel_next_test_case' or from
+-- 'hegel_test_case_from_blob'.
 --
 -- Prefer 'withTestCaseFromBlob' over these functions wherever possible.
 
@@ -819,13 +845,13 @@ foreign import ccall unsafe "hegel_test_case_from_blob"
     :: Ptr HegelContext
     -> Ptr HegelSettings
     -> CString -- ^ @blob@: base64 failure blob from 'hegel_failure_reproduction_blob'
+    -> FunPtr OutputSink -- ^ @callback@ (@NULL@ leaves output on stderr)
+    -> Ptr ()  -- ^ @user_data@ threaded through to @callback@
     -> Ptr (Ptr HegelTestCase) -- ^ out: caller-owned test case
     -> IO CInt
 
--- | Free a __caller-owned__ test case returned by 'hegel_test_case_from_blob'.
---
--- __Do not call this on 'HegelRun'-owned handles__ (e.g. from
--- 'hegel_next_test_case'); @libhegel@ rejects it with 'HEGEL_E_INVALID_HANDLE'.
+-- | Free a __caller-owned__ test case, from either 'hegel_next_test_case' or
+-- 'hegel_test_case_from_blob'. Safe to call with @NULL@.
 foreign import ccall unsafe "hegel_test_case_free"
   hegel_test_case_free :: Ptr HegelContext -> Ptr HegelTestCase -> IO CInt
 
@@ -834,10 +860,10 @@ foreign import ccall unsafe "hegel_test_case_free"
 -- Read-only accessors over a completed run's result and its individual
 -- failures (aggregate status, run-level error, origin, reproduction blob).
 --
--- Returned strings and failure handles are borrowed and remain valid only
--- until 'hegel_run_free' is called.  To use a reproduction blob beyond the
--- run's lifetime, copy it (e.g. via 'failureReproductionBlob') before calling
--- 'hegel_run_free'.
+-- Strings read off the run-result snapshot are borrowed and live until
+-- 'hegel_run_result_free'; a failure snapshot's strings live until
+-- 'hegel_failure_free'. Copy anything you keep (e.g. a reproduction blob via
+-- 'failureReproductionBlob') before freeing the snapshot it came from.
 
 -- | Write the run's aggregate status (one of the @HEGEL_RUN_STATUS_*@ values)
 -- into @*out_status@.
@@ -845,7 +871,7 @@ foreign import ccall unsafe "hegel_run_result_status"
   hegel_run_result_status :: Ptr HegelContext -> Ptr HegelRunResult -> Ptr CInt -> IO CInt
 
 -- | Write the run-level error message into @*out_error@ (or @NULL@ when the
--- run completed normally rather than erroring). Valid until 'hegel_run_free'.
+-- run completed normally rather than erroring). Valid until 'hegel_run_result_free'.
 foreign import ccall unsafe "hegel_run_result_error"
   hegel_run_result_error :: Ptr HegelContext -> Ptr HegelRunResult -> Ptr CString -> IO CInt
 
@@ -853,10 +879,18 @@ foreign import ccall unsafe "hegel_run_result_error"
 foreign import ccall unsafe "hegel_run_result_failure_count"
   hegel_run_result_failure_count :: Ptr HegelContext -> Ptr HegelRunResult -> Ptr CSize -> IO CInt
 
--- | Write a borrowed pointer to the @i@-th failure (0-indexed) into
--- @*out_failure@ (or @NULL@ when out of range).
+-- | Write a __caller-owned__ snapshot of the @i@-th failure (0-indexed) into
+-- @*out_failure@ (or @NULL@ when out of range). Release it with
+-- 'hegel_failure_free'; the strings read off it live until then.
 foreign import ccall unsafe "hegel_run_result_failure"
   hegel_run_result_failure :: Ptr HegelContext -> Ptr HegelRunResult -> CSize -> Ptr (Ptr HegelFailure) -> IO CInt
+
+-- | Release a failure snapshot from 'hegel_run_result_failure', along with the
+-- strings read off it.
+--
+-- Safe to call with @NULL@.
+foreign import ccall unsafe "hegel_failure_free"
+  hegel_failure_free :: Ptr HegelContext -> Ptr HegelFailure -> IO CInt
 
 -- | Write the stable origin string passed to 'hegel_mark_complete' into
 -- @*out_origin@.
@@ -944,7 +978,7 @@ withRun :: Ptr HegelContext -> Ptr HegelSettings -> (Ptr HegelRun -> IO a) -> IO
 withRun ctx s = bracket acquire release
   where
     acquire = alloca $ \out -> do
-      rc <- hegel_run_start ctx s out
+      rc <- hegel_run_start ctx s nullFunPtr nullPtr out
       if rc == HEGEL_OK
         then peek out
         else lastErrorMessage ctx >>= \msg -> throwIO HegelError {code = rc, message = msg}
@@ -953,9 +987,9 @@ withRun ctx s = bracket acquire release
 -- | Copy the reproduction blob for @f@ into a fresh 'ByteString', or return
 -- 'Nothing' when the failure carries no blob (e.g. a health-check failure).
 --
--- The underlying C pointer is borrowed from the run result and only valid
--- until 'hegel_run_free'; this function copies it immediately so the
--- 'ByteString' is safe to use after the run is freed.
+-- The underlying C pointer is borrowed from the failure snapshot and only valid
+-- until 'hegel_failure_free'; this function copies it immediately so the
+-- 'ByteString' is safe to use after the snapshot is freed.
 --
 -- The blob is ASCII base64 and can be passed directly to 'withTestCaseFromBlob'.
 failureReproductionBlob :: Ptr HegelContext -> Ptr HegelFailure -> IO (Maybe ByteString)
@@ -989,7 +1023,7 @@ withTestCaseFromBlob ctx s blob action =
     bracket (acquire blobPtr) release action
   where
     acquire blobPtr = alloca $ \out -> do
-      rc <- hegel_test_case_from_blob ctx s blobPtr out
+      rc <- hegel_test_case_from_blob ctx s blobPtr nullFunPtr nullPtr out
       if rc == HEGEL_OK
         then peek out
         else lastErrorMessage ctx >>= \msg -> throwIO HegelError {code = rc, message = msg}

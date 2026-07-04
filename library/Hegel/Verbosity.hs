@@ -4,7 +4,7 @@ module Hegel.Verbosity
   )
 where
 
-import Foreign.C.Types (CInt)
+import Data.Word (Word32)
 import Hegel.Internal.Foreign.Raw
   ( pattern HEGEL_VERBOSITY_DEBUG,
     pattern HEGEL_VERBOSITY_NORMAL,
@@ -27,7 +27,7 @@ data Verbosity
   deriving stock (Show, Eq)
 
 -- | The @hegel_verbosity_t@ wire value.
-instance Witch.From Verbosity CInt where
+instance Witch.From Verbosity Word32 where
   from Quiet = HEGEL_VERBOSITY_QUIET
   from Normal = HEGEL_VERBOSITY_NORMAL
   from Verbose = HEGEL_VERBOSITY_VERBOSE
