@@ -105,6 +105,7 @@ library
     Hegel.Gen.DateTime
     Hegel.Gen.Domain
     Hegel.Gen.Duration
+    Hegel.Gen.Email
     Hegel.Gen.Float
     Hegel.Gen.HashMap
     Hegel.Gen.HashSet

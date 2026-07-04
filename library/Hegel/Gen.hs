@@ -129,6 +129,10 @@ module Hegel.Gen
     domain,
     maxLength,
 
+    -- * Email
+    EmailBuilder,
+    email,
+
     -- * Date
     DateBuilder,
     date,
@@ -200,6 +204,7 @@ import Hegel.Gen.Date (DateBuilder, date)
 import Hegel.Gen.DateTime (DateTimeBuilder, datetime, onDay)
 import Hegel.Gen.Domain (DomainBuilder, domain, maxLength)
 import Hegel.Gen.Duration (DurationBuilder, duration, hours, milliseconds, minutes, seconds)
+import Hegel.Gen.Email (EmailBuilder, email)
 import Hegel.Gen.Float
   ( FloatBuilder,
     disallowInfinity,

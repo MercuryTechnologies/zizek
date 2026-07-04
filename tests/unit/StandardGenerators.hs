@@ -235,6 +235,19 @@ spec = do
       prop (Gen.domain & Gen.maxLength 30 & Gen.build) $ \t ->
         T.length t `shouldSatisfy` (<= 30)
 
+  describe "Gen.email" $ do
+    it "draws addresses containing exactly one @" $ do
+      prop (Gen.email & Gen.build) $ \t ->
+        T.count "@" t `shouldBe` 1
+
+    it "draws addresses with a non-empty local part and domain" $ do
+      prop (Gen.email & Gen.build) $ \t ->
+        case T.splitOn "@" t of
+          [local, domain] -> do
+            local `shouldSatisfy` (not . T.null)
+            domain `shouldSatisfy` T.isInfixOf "."
+          _ -> expectationFailure ("expected exactly one @ in: " <> T.unpack t)
+
   describe "Gen.date" $ do
     it "draws Day values" $ do
       check_ (defaultSettings {testCases = 1}) $ forEach (Gen.date & Gen.build) $ \_ -> pure ()

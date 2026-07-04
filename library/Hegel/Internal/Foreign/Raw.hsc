@@ -6,8 +6,7 @@
 -- 'foreign import ccall' declaration together with phantom types representing
 -- handles to C constructs, error-code pattern synonyms, and bracket helpers.
 --
--- Not yet bound: @hegel_generate_ipv4@\/@_ipv6@ and
--- @hegel_string_generator_email@.
+-- Not yet bound: @hegel_generate_ipv4@\/@_ipv6@.
 --
 -- __Calling convention__: every @libhegel@ entry point takes a
 -- @hegel_context_t*@ as its first argument and returns a @hegel_result_t@,
@@ -194,6 +193,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_generate_datetime,
     hegel_string_generator_text,
     hegel_string_generator_regex,
+    hegel_string_generator_email,
     hegel_string_generator_url,
     hegel_string_generator_domain,
     hegel_string_generator_free,
@@ -1209,6 +1209,11 @@ foreign import ccall unsafe "hegel_string_generator_regex"
     -> Ptr HegelStringGenerator       -- ^ @alphabet@ (borrowed, nullable)
     -> Ptr (Ptr HegelStringGenerator) -- ^ out: caller-owned handle
     -> IO CInt
+
+-- | Build an __email-address__ string generator producing RFC 5321\/5322
+-- addresses like @alice\@example.com@.
+foreign import ccall unsafe "hegel_string_generator_email"
+  hegel_string_generator_email :: Ptr HegelContext -> Ptr (Ptr HegelStringGenerator) -> IO CInt
 
 -- | Build a __URL__ string generator producing RFC 3986 @http@\/@https@ URLs.
 foreign import ccall unsafe "hegel_string_generator_url"

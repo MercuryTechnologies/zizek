@@ -31,6 +31,7 @@ module Hegel.Internal.DataSource
     TextSpec (..),
     buildTextGen,
     buildRegexGen,
+    buildEmailGen,
     buildUrlGen,
     buildDomainGen,
 
@@ -527,6 +528,16 @@ buildRegexGen pat fullmatch mAlphabet =
     withNullableAlphabet :: Maybe (ForeignPtr HegelStringGenerator) -> (Ptr HegelStringGenerator -> IO a) -> IO a
     withNullableAlphabet Nothing k = k nullPtr
     withNullableAlphabet (Just fp) k = withForeignPtr fp k
+
+-- | Build an __email-address__ string generator
+-- (@hegel_string_generator_email@), producing RFC 5321\/5322 addresses like
+-- @alice\@example.com@.
+buildEmailGen :: IO (ForeignPtr HegelStringGenerator)
+buildEmailGen =
+  withContext \ctx ->
+    alloca \outGen -> do
+      hegel_string_generator_email ctx outGen >>= throwOnError ctx
+      peek outGen >>= wrapStringGenerator
 
 -- | Build a __URL__ string generator (@hegel_string_generator_url@),
 -- producing RFC 3986 @http@\/@https@ URLs.
