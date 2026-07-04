@@ -20,10 +20,11 @@ import Hegel.Database (Database (..))
 import Hegel.Internal.DatabaseKey (propKey)
 import Hegel.Property.Internal (Property)
 import Hegel.Report (Report (..), Result (..), renderReportRich, renderReportRichAnsi)
+import Hegel.Report.Encoding qualified as Encoding
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..), defaultSettings, withDatabaseKey)
 import System.Environment (lookupEnv)
-import System.IO (hIsTerminalDevice, stderr)
+import System.IO (hIsTerminalDevice, stderr, stdout)
 import Test.Tasty (TestName, TestTree)
 import Test.Tasty.Ingredients.ConsoleReporter (UseColor (..))
 import Test.Tasty.Options (lookupOption)
@@ -37,8 +38,9 @@ instance IsTest HegelTest where
   run opts (HegelTest settings prop) _progress = do
     report <- check settings prop
     useColor <- resolveColor (lookupOption opts)
+    pref <- Encoding.preference stdout
     let render = if useColor then renderReportRichAnsi else renderReportRich
-    rendered <- T.unpack <$> render report
+    rendered <- T.unpack . Encoding.cleanFor pref <$> render report
     pure case report.result of
       Ok -> testPassed rendered
       _ -> testFailed rendered

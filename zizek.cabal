@@ -121,6 +121,7 @@ library
     Hegel.Report
     Hegel.Report.Ann
     Hegel.Report.Discovery
+    Hegel.Report.Encoding
     Hegel.Report.Journal
     Hegel.Report.Note
     Hegel.Report.Source

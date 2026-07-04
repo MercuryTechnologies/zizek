@@ -40,10 +40,11 @@ import Hegel.Report
     renderReportRich,
     renderReportRichAnsi,
   )
+import Hegel.Report.Encoding qualified as Encoding
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..), defaultSettings, withDatabaseKey)
 import System.Environment (lookupEnv)
-import System.IO (hIsTerminalDevice, stderr)
+import System.IO (hIsTerminalDevice, stderr, stdout)
 import Test.Hspec.Core.Spec qualified as Hspec
 import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 
@@ -100,7 +101,8 @@ runProperty :: Settings -> Property () -> IO Hspec.Result
 runProperty settings body = do
   report <- check settings body
   useColor <- shouldUseColor
-  toHspecResult useColor report
+  pref <- Encoding.preference stdout
+  toHspecResult useColor pref report
 
 -- | A property as a keyed hspec example: a drop-in for @it@ that derives a
 -- stable example-database key from the test's @describe@ & @it@ labels (salted
@@ -203,24 +205,27 @@ shouldUseColor = do
     then pure False
     else hIsTerminalDevice stderr
 
-toHspecResult :: Bool -> Report -> IO Hspec.Result
-toHspecResult useColor report = case report.result of
-  Ok -> pure (Hspec.Result (T.unpack (render report)) Hspec.Success)
+toHspecResult :: Bool -> Encoding.Preference -> Report -> IO Hspec.Result
+toHspecResult useColor pref report = case report.result of
+  Ok -> pure (Hspec.Result (T.unpack (clean (render report))) Hspec.Success)
   Counterexample {loc} -> do
     -- The ┏━━ header already shows the file, so there's no need to duplicate
     -- it in hspec's Location slot — but we still fill that slot so hspec can
     -- jump to the right line.
     rendered <- richRender report
-    pure (failed (hspecLocation <$> loc) (Hspec.Reason (T.unpack rendered)))
+    pure (failed (hspecLocation <$> loc) (Hspec.Reason (T.unpack (clean rendered))))
   GaveUp msg ->
-    pure (failed Nothing (Hspec.Reason ("gave up: " <> T.unpack msg)))
+    pure (failed Nothing (Hspec.Reason (T.unpack (clean ("gave up: " <> msg)))))
   Aborted (Errored e) ->
     pure (failed Nothing (Hspec.Error Nothing e))
   Aborted (UnhealthyInput msg) ->
-    pure (failed Nothing (Hspec.Reason ("health check failed: " <> T.unpack msg)))
+    pure (failed Nothing (Hspec.Reason (T.unpack (clean ("health check failed: " <> msg)))))
   where
     render = if useColor then renderReportAnsi else renderReport
     richRender = if useColor then renderReportRichAnsi else renderReportRich
+    -- Every string handed to hspec is cleaned so the 7-bit guarantee covers
+    -- gave-up and abort messages (user text) too, not just counterexamples.
+    clean = Encoding.cleanFor pref
     failed loc reason = Hspec.Result "" (Hspec.Failure loc reason)
 
 hspecLocation :: SrcLoc -> Hspec.Location
