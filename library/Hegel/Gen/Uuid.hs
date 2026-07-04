@@ -21,9 +21,9 @@ import CBOR.Value (Value)
 import Data.UUID (UUID, fromText)
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Internal.CBOR (ParseError (..), hegelText)
-import Hegel.Internal.Schema (UuidSchema (version))
-import Hegel.Internal.Schema qualified as Schema
+import Hegel.Internal.Foreign.CBOR (ParseError (..), hegelText)
+import Hegel.Internal.Foreign.Schema (UuidSchema (version))
+import Hegel.Internal.Foreign.Schema qualified as Schema
 
 data UuidBuilder = UuidBuilder
   { bVersion :: !(Maybe Int)

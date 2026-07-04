@@ -18,9 +18,9 @@ import Data.Vector qualified as V
 import Hegel.Collection qualified as Collection
 import Hegel.Gen.Builder (Build (..), HasSize (..))
 import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), basic, draw, materialize, toBasic)
-import Hegel.Internal.CBOR (ParseError (..))
 import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
-import Hegel.Internal.Schema qualified as Schema
+import Hegel.Internal.Foreign.CBOR (ParseError (..))
+import Hegel.Internal.Foreign.Schema qualified as Schema
 
 data HashSetBuilder a = HashSetBuilder
   { sElement :: !(Gen a),

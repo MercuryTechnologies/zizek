@@ -29,8 +29,8 @@ import Foreign.C.String (withCString)
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Internal (draw)
 import Hegel.Internal.Control (TestStopped (..))
-import Hegel.Internal.FFI
-import Hegel.Internal.Schema qualified as Schema
+import Hegel.Internal.Foreign.Raw
+import Hegel.Internal.Foreign.Schema qualified as Schema
 import Hegel.Internal.TestCase (Handle (..), Status (..), mkTestCase)
 import Hegel.Internal.TestCase qualified as TC
 import Hegel.Internal.Tick qualified as Tick

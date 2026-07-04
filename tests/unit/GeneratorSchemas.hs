@@ -12,8 +12,8 @@ import Data.Vector qualified as V
 import Hegel (prop)
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Internal (BasicGenerator (..), Gen (..), materialize, schemaArity, toBasic)
-import Hegel.Internal.CBOR (ParseError (..))
-import Hegel.Internal.Schema qualified as Schema
+import Hegel.Internal.Foreign.CBOR (ParseError (..))
+import Hegel.Internal.Foreign.Schema qualified as Schema
 import Test.Hspec
 
 intR :: (Int, Int) -> Gen Int

@@ -12,9 +12,9 @@ where
 import CBOR.Value (Value (..))
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Internal (Gen (..), basic)
-import Hegel.Internal.CBOR (ParseError (..))
 import Hegel.Internal.DataSource (primitiveBoolean)
-import Hegel.Internal.Schema qualified as Schema
+import Hegel.Internal.Foreign.CBOR (ParseError (..))
+import Hegel.Internal.Foreign.Schema qualified as Schema
 
 -- | A boolean generator. The default ('bool') is a fair coin satisfied in a
 -- single schema round-trip; 'weighted' switches it to the @primitive_boolean@

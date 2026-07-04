@@ -1,5 +1,5 @@
 -- | UTF-8 C-string marshalling for the @libhegel@ FFI boundary.
-module Hegel.Internal.CString
+module Hegel.Internal.Foreign.CString
   ( withText,
     withFilePath,
   )

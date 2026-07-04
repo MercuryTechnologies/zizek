@@ -5,7 +5,7 @@ module Hegel.Backend
 where
 
 import Foreign.C.Types (CInt)
-import Hegel.Internal.FFI
+import Hegel.Internal.Foreign.Raw
   ( pattern HEGEL_BACKEND_AUTO,
     pattern HEGEL_BACKEND_DEFAULT,
     pattern HEGEL_BACKEND_URANDOM,
