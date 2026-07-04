@@ -296,11 +296,12 @@ connectionMachine =
         pure ConnModel {idle, active, inTx, nextConn, epoch, txEpoch, txOpen},
       rules =
         [ Stateful.Rule "connect" \m -> do
-            liftIO do
+            c <- liftIO do
               c <- readIORef m.nextConn
               modifyIORef' m.nextConn (+ 1)
               modifyIORef' m.epoch (+ 1)
-              Pool.add m.idle c
+              pure c
+            Pool.add m.idle c
             pure m,
           Stateful.Rule "checkout" \m -> do
             _ <- forAll (Pool.transfer m.idle m.active)
@@ -370,7 +371,7 @@ ledgerMachine =
               modifyIORef' m.nextAccount (+ 1)
               modifyIORef' m.balances (Map.insert n 0)
               pure n
-            liftIO (Pool.add m.accounts acc)
+            Pool.add m.accounts acc
             pure m,
           -- Posts interest to every account at once. It draws nothing from the
           -- pool, so this step touches no pool value: a blank gutter, and the

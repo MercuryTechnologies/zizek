@@ -57,7 +57,7 @@ machine bug =
               modifyIORef' m.nextHandle (+ 1)
               modifyIORef' m.contents (Map.insert h "")
               pure h
-            liftIO (Pool.add m.openHandles h)
+            Pool.add m.openHandles h
             Stateful.respond "ok"
             pure m,
           Stateful.Rule "write" \m -> do

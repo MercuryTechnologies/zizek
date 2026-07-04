@@ -50,46 +50,53 @@ import Hegel.Internal.DataSource (labelPool, newPool, poolAdd, poolAddFrom, pool
 import Hegel.Internal.Event (Var (..))
 import Hegel.Internal.TestCase (TestCase)
 import Hegel.Property.Internal (Env (..), PropertyT, askEnv)
-import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
+import UnliftIO.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 
 -- | Opaque handle to a @libhegel@-managed pool of values of type @a@.
 --
--- Holds a reference to the live 'TestCase', the engine-assigned pool id, and
--- a local mirror of the currently-live values (keyed by engine variable id).
+-- Holds the engine-assigned pool id and a local mirror of the currently-live
+-- values, keyed by engine variable id. It stores no 'TestCase'. Every
+-- operation that needs one reads whichever handle is live at the point of
+-- the call, so a pool can outlive the handle it was created against.
 data Pool a = Pool
-  { tc :: !TestCase,
-    poolId :: !Int,
+  { poolId :: !Int,
     values :: !(IORef (IntMap a))
   }
 
 -- | Create a new pool against the running property's test case. Allocates a
 -- pool id from the engine immediately.
 --
--- The failure report auto-names the pool's values (@v₁, w₁, ...@ by birth
--- order); use 'named' when a semantic letter (@h₁@ for handles) reads
+-- The failure report auto-names the pool's values @v₁, w₁, ...@ by birth
+-- order. Use 'named' when a semantic letter such as @h₁@ for handles reads
 -- better.
 new :: (MonadIO m) => PropertyT m (Pool a)
 new = do
   env <- askEnv
-  let tc = env.testCase
   liftIO do
-    pid <- newPool tc
+    pid <- newPool env.testCase
     ref <- newIORef IntMap.empty
-    pure Pool {tc, poolId = pid, values = ref}
+    pure Pool {poolId = pid, values = ref}
 
 -- | 'new' with a display label for the failure report: values of a pool
 -- named @"h"@ render as @h₁, h₂, ...@ in the event log.
 named :: (MonadIO m) => Text -> PropertyT m (Pool a)
 named label = do
   pool <- new
-  liftIO (labelPool pool.tc pool.poolId label)
+  env <- askEnv
+  liftIO (labelPool env.testCase pool.poolId label)
   pure pool
 
 -- | Add a value to the pool. The engine assigns the variable id.
-add :: Pool a -> a -> IO ()
+--
+-- Runs against whichever test case is live at the point of the call, so an
+-- add is attributed to the branch that performed it. The mirror insert is
+-- atomic, so concurrent 'add' calls sharing one pool do not lose entries.
+add :: (MonadIO m) => Pool a -> a -> PropertyT m ()
 add pool v = do
-  vid <- poolAdd pool.tc pool.poolId
-  modifyIORef' pool.values (IntMap.insert vid v)
+  env <- askEnv
+  liftIO do
+    vid <- poolAdd env.testCase pool.poolId
+    atomicModifyIORef' pool.values \m -> (IntMap.insert vid v m, ())
 
 -- | Number of values currently in the pool.
 size :: Pool a -> IO Int
@@ -161,5 +168,5 @@ transfer :: Pool a -> Pool a -> Gen a
 transfer src dst = Draw \tc -> do
   (vid, v) <- drawConsuming "transfer" src tc
   vid' <- poolAddFrom tc dst.poolId Var {pool = src.poolId, id = vid}
-  modifyIORef' dst.values (IntMap.insert vid' v)
+  atomicModifyIORef' dst.values \m -> (IntMap.insert vid' v m, ())
   pure v

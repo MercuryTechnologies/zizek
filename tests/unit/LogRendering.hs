@@ -3,7 +3,6 @@
 -- path.
 module LogRendering (spec) where
 
-import Control.Monad.IO.Class (liftIO)
 import Data.Function ((&))
 import Data.List (nub)
 import Data.Maybe (fromJust)
@@ -464,7 +463,7 @@ transferMachine =
         pure (open, closed),
       rules =
         [ Stateful.Rule "open" \m@(open, _) -> do
-            liftIO (Pool.add open 1)
+            Pool.add open 1
             pure m,
           Stateful.Rule "close" \m@(open, closed) -> do
             _ <- forAll (Pool.transfer open closed)

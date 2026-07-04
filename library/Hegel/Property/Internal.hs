@@ -323,8 +323,10 @@ registerFinalizer :: (MonadIO m) => IO () -> PropertyT m ()
 registerFinalizer act = do
   env <- askEnv
   let Finalizers ref = env.finalizers
-  -- Newest-first, so 'drainFinalizers' can run the stack LIFO.
-  liftIO (modifyIORef' ref (act :))
+  -- Newest-first, so 'drainFinalizers' can run the stack LIFO. The push is
+  -- atomic so that concurrent registrations against one shared registry do
+  -- not lose each other's entries.
+  liftIO (atomicModifyIORef' ref \xs -> (act : xs, ()))
 {-# INLINEABLE registerFinalizer #-}
 
 -- * Runner hooks

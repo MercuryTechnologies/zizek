@@ -24,8 +24,9 @@ import Hegel.Report (Abort (..), Note (..), NoteKind (..), Report (..), Result (
 import Hegel.Settings (Settings (..), defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
+import UnliftIO.Async (replicateConcurrently_)
 import UnliftIO.Exception (throwIO)
-import UnliftIO.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import UnliftIO.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 
 intR :: (Int, Int) -> Gen Int
 intR (lo, hi) = Gen.integral & Gen.min lo & Gen.max hi & Gen.build
@@ -85,6 +86,21 @@ spec = describe "registerFinalizer" do
       registerFinalizer (modifyIORef' order (++ ["b"]))
       pure ()
     readIORef order `shouldReturn` ["b", "a"]
+
+  it "loses no registrations under concurrent registerFinalizer calls" do
+    -- Each registration pushes onto one shared registry. Fired concurrently,
+    -- every push must survive, so the drained count equals the number of
+    -- registrations.
+    counter <- newIORef (0 :: Int)
+    let n = 2000
+    report <- check (defaultSettings {testCases = 1}) do
+      replicateConcurrently_
+        n
+        (registerFinalizer (atomicModifyIORef' counter \x -> (x + 1, ())))
+    report.result `shouldSatisfy` \case
+      Ok -> True
+      _ -> False
+    readIORef counter `shouldReturn` n
 
   it "aborts the run as Errored when a finalizer throws" do
     report <- check defaultSettings do

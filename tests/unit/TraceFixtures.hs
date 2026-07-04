@@ -31,7 +31,6 @@ module TraceFixtures
   )
 where
 
-import Control.Monad.IO.Class (liftIO)
 import Data.Function ((&))
 import Data.Maybe (fromJust)
 import Data.Text (Text)
@@ -213,7 +212,7 @@ eventfulMachine =
       rules =
         [ Stateful.Rule "register" \m -> do
             n <- forAll (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
-            liftIO (Pool.add m.pool n)
+            Pool.add m.pool n
             pure m,
           Stateful.Rule "reuse" \m -> do
             _ <- forAll (Pool.reuse m.pool)

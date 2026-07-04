@@ -87,7 +87,7 @@ poolSpec = describe "Pool" do
     report <- check defaultSettings do
       pool <- Pool.new
       n <- forAll intGen
-      liftIO (Pool.add pool n)
+      Pool.add pool n
       a <- forAll (Pool.reuse pool)
       b <- forAll (Pool.reuse pool)
       assert (a == n && b == n) "reusable draw returns the added value each time"
@@ -99,7 +99,7 @@ poolSpec = describe "Pool" do
     report <- check defaultSettings do
       pool <- Pool.new
       n <- forAll intGen
-      liftIO (Pool.add pool n)
+      Pool.add pool n
       v <- forAll (Pool.consume pool)
       assert (v == n) "consumed value matches what was added"
       empty <- liftIO (Pool.isEmpty pool)
@@ -263,7 +263,7 @@ register :: Stateful.Rule Model IO
 register =
   Stateful.Rule "register" \m -> do
     n <- forAll intGen
-    liftIO (Pool.add m.pool n)
+    Pool.add m.pool n
     pure m {registered = Set.insert n m.registered}
 
 -- | Draw a value from the pool without removing it; it must be one we added.
