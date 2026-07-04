@@ -34,6 +34,7 @@ module Hegel.Property.Internal
     runPropertyT,
     propertyAction,
     observeProperty,
+    tryProperty,
     failureDetails,
 
     -- * Env access

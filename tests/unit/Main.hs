@@ -1,6 +1,7 @@
 module Main (main) where
 
 import BasicProperties qualified
+import ConcurrentProperties qualified
 import ControlSignals qualified
 import DatabaseReplay qualified
 import Finalizers qualified
@@ -37,6 +38,7 @@ main = do
   traceModel <- testSpec "trace model" TraceModel.spec
   ledger <- testSpec "event-log rendering" LogRendering.spec
   testCaseClone <- testSpec "TestCase cloning" TestCaseClone.spec
+  concurrentProperties <- testSpec "concurrent combinators" ConcurrentProperties.spec
   defaultMain
     ( testGroup
         "zizek:unit"
@@ -57,6 +59,7 @@ main = do
           poolEvents,
           traceModel,
           ledger,
-          testCaseClone
+          testCaseClone,
+          concurrentProperties
         ]
     )

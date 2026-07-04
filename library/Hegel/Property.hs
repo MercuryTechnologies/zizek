@@ -52,6 +52,17 @@ module Hegel.Property
     -- * Finalizers
     registerFinalizer,
 
+    -- * Concurrency
+    concurrently,
+    concurrently_,
+    mapConcurrently,
+    mapConcurrently_,
+    forConcurrently,
+    forConcurrently_,
+    replicateConcurrently,
+    replicateConcurrently_,
+    replicateConcurrentlyBounded,
+
     -- * Assertions
     assert,
     failure,
@@ -64,6 +75,17 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Text (Text)
 import Hegel.Assertion (assert, failure, (/==), (===))
 import Hegel.Gen.Internal (Gen)
+import Hegel.Property.Concurrent
+  ( concurrently,
+    concurrently_,
+    forConcurrently,
+    forConcurrently_,
+    mapConcurrently,
+    mapConcurrently_,
+    replicateConcurrently,
+    replicateConcurrentlyBounded,
+    replicateConcurrently_,
+  )
 import Hegel.Property.Internal
   ( Property,
     PropertyT,

@@ -17,6 +17,17 @@ module Hegel
     forEachWith,
     registerFinalizer,
 
+    -- * Concurrency
+    concurrently,
+    concurrently_,
+    mapConcurrently,
+    mapConcurrently_,
+    forConcurrently,
+    forConcurrently_,
+    replicateConcurrently,
+    replicateConcurrently_,
+    replicateConcurrentlyBounded,
+
     -- * Settings and reports
     module Hegel.Settings,
     module Hegel.Backend,
@@ -43,7 +54,21 @@ import Hegel.Database
 import Hegel.Gen.Internal (Gen)
 import Hegel.Phase
 import Hegel.Pool
-import Hegel.Property (check_, forEach, forEachWith, registerFinalizer)
+import Hegel.Property
+  ( check_,
+    concurrently,
+    concurrently_,
+    forConcurrently,
+    forConcurrently_,
+    forEach,
+    forEachWith,
+    mapConcurrently,
+    mapConcurrently_,
+    registerFinalizer,
+    replicateConcurrently,
+    replicateConcurrentlyBounded,
+    replicateConcurrently_,
+  )
 import Hegel.Property.Internal (PropertyT)
 import Hegel.Report
 import Hegel.Settings
