@@ -92,11 +92,10 @@ x === y
             { message = "=== failed, values are not equal",
               callStack = Stack.callStack,
               diff =
-                Just
-                  ( fromMaybe
-                      (diffLines (renderValue x) (renderValue y))
-                      (diffShown (renderValue x) (renderValue y))
-                  )
+                Just $
+                  fromMaybe
+                    (diffLines (renderValue x) (renderValue y))
+                    (diffShown (renderValue x) (renderValue y))
             }
 {-# INLINEABLE (===) #-}
 

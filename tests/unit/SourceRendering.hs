@@ -68,43 +68,43 @@ spec :: Spec
 spec = do
   describe "Discovery.findDeclarations" $ do
     it "finds a single top-level binding" $ do
-      let src = "foo = 1\n"
+      let src = "foo = 1\n" :: String
           decls = findDeclarations src
       Map.member "foo" decls `shouldBe` True
 
     it "finds multiple top-level bindings" $ do
-      let src = "foo = 1\n\nbar = 2\n"
+      let src = "foo = 1\n\nbar = 2\n" :: String
           decls = findDeclarations src
       Map.member "foo" decls `shouldBe` True
       Map.member "bar" decls `shouldBe` True
 
     it "does not mistake indented lines for declarations" $ do
-      let src = "foo = do\n  bar\n  baz\n\nqux = 4\n"
+      let src = "foo = do\n  bar\n  baz\n\nqux = 4\n" :: String
           decls = findDeclarations src
       Map.member "foo" decls `shouldBe` True
       Map.member "qux" decls `shouldBe` True
       Map.size decls `shouldBe` 2
 
     it "ignores line comments at column 1" $ do
-      let src = "-- this is a comment\nfoo = 1\n"
+      let src = "-- this is a comment\nfoo = 1\n" :: String
           decls = findDeclarations src
       Map.member "foo" decls `shouldBe` True
       Map.member "--" decls `shouldBe` False
 
     it "ignores block-comment content at column 1" $ do
-      let src = "{- block\ncomment -}\nfoo = 1\n"
+      let src = "{- block\ncomment -}\nfoo = 1\n" :: String
           decls = findDeclarations src
       Map.member "foo" decls `shouldBe` True
       Map.size decls `shouldBe` 1
 
     it "handles nested block comments" $ do
-      let src = "{- outer {- inner -} still comment -}\nfoo = 1\n"
+      let src = "{- outer {- inner -} still comment -}\nfoo = 1\n" :: String
           decls = findDeclarations src
       Map.member "foo" decls `shouldBe` True
       Map.size decls `shouldBe` 1
 
     it "records the correct start line" $ do
-      let src = "foo = 1\n\nbar = 2\n"
+      let src = "foo = 1\n\nbar = 2\n" :: String
           decls = findDeclarations src
       case Map.lookup "bar" decls of
         Nothing -> expectationFailure "bar not found"
@@ -163,7 +163,8 @@ spec = do
       -- The per-rule stateful layout stacks one value per step under a single
       -- drawing line; merging must preserve journal order or the steps would
       -- render descending.
-      let withDoc txt decl =
+      let withDoc :: String -> Declaration Annot -> Declaration Annot
+          withDoc txt decl =
             decl
               { declarationSource =
                   Map.adjust

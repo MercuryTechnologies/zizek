@@ -263,14 +263,14 @@ composed style decls trace notes message loc diff databaseKey =
   where
     sections =
       [ prelude,
-        Just (Layout.logDoc style trace),
+        Just $ Layout.logDoc style trace,
         failingGroupDoc decls notes,
         footnotesDoc notes,
         footerDoc style.phrases databaseKey
       ]
     prelude
       | hasInBandFailure notes = Nothing
-      | otherwise = Just (PP.vsep (headlineBlock message diff loc))
+      | otherwise = Just $ PP.vsep $ headlineBlock message diff loc
 
 -- | Footnote notes, rendered after the report body (their documented
 -- position, regardless of form).

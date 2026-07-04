@@ -68,7 +68,7 @@ data Group = Group
   }
 
 toGroups :: [Note] -> ([Group], [Note])
-toGroups notes = (fmap toGroup (numberDraws (groupByDepth inline)), footers)
+toGroups notes = (toGroup <$> numberDraws (groupByDepth inline), footers)
   where
     (footers, inline) = partition (\n -> n.kind == Footnote) notes
     toGroup (Node r children) = Group {root = r, body = concatMap flatten children}
@@ -118,6 +118,6 @@ spliceNote decls x@(_, n) =
     let sp = spanFromSrcLoc sl
     case n.kind of
       Failure diff ->
-        ppFailureLocation decls (fmap PP.pretty (T.lines n.text)) diff sp
+        ppFailureLocation decls (PP.pretty <$> T.lines n.text) diff sp
       _ ->
-        ppInlinedValue decls (fmap (PP.annotate AnnotationValue . PP.pretty) (T.lines n.text)) sp
+        ppInlinedValue decls ((PP.annotate AnnotationValue . PP.pretty) <$> T.lines n.text) sp

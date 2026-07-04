@@ -3,6 +3,7 @@
 module TraceModel (spec) where
 
 import Data.Maybe (isJust)
+import Data.Text (Text)
 import Hegel.Report
   ( Event (..),
     Note (..),
@@ -153,7 +154,9 @@ spec = do
     -- anything else — a plain non-pool payload, or a composite multi-pool draw —
     -- is a free draw, surfaced as a detail line. These pin that partition.
     let h2 = Var {pool = 1, id = 9}
+        kindsOf :: Trace.Trace -> [Operation]
         kindsOf t = [tch.kind | s <- t.steps, tch <- s.touches]
+        freeDrawsOf :: Trace.Trace -> [Text]
         freeDrawsOf t = concatMap (.freeDraws) t.steps
 
     it "keeps a pool draw out of the free draws (its touch represents it)" do

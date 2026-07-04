@@ -23,11 +23,12 @@ where
 import Control.Exception (Exception (..), throwIO)
 import Data.Text (Text)
 import Data.Text qualified as T
+import GHC.Stack (HasCallStack)
 import Hegel.Gen.Internal (Gen)
 
 -- | Materialize a fully-configured builder into a 'Gen'.
 class Build b a | b -> a where
-  build :: b -> Gen a
+  build :: (HasCallStack) => b -> Gen a
 
 -- | Builders that accept an inclusive lower bound.
 class HasMin b a | b -> a where

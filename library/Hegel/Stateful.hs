@@ -156,7 +156,8 @@ data Machine s m = Machine
 run :: forall s m. (MonadUnliftIO m) => Machine s m -> PropertyT m ()
 run machine = do
   when (null machine.rules) $
-    throwIO (MalformedTest "Hegel.Stateful.run: a Machine must have at least one rule")
+    throwIO $
+      MalformedTest "Hegel.Stateful.run: a Machine must have at least one rule"
 
   env <- askEnv
   let tc = env.testCase

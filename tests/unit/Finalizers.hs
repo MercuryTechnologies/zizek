@@ -92,7 +92,7 @@ spec = describe "registerFinalizer" do
     -- every push must survive, so the drained count equals the number of
     -- registrations.
     counter <- newIORef (0 :: Int)
-    let n = 2000
+    let n = 2000 :: Int
     report <- check (defaultSettings {testCases = 1}) do
       replicateConcurrently_
         n

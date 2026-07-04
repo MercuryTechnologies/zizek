@@ -114,7 +114,7 @@ instance MonadTrans PropertyT where
 --
 -- > check settings (hoist (runAppM env) myProp)
 hoist :: (forall x. m x -> n x) -> PropertyT m a -> PropertyT n a
-hoist f (PropertyT (ReaderT g)) = PropertyT (ReaderT (f . g))
+hoist f (PropertyT (ReaderT g)) = PropertyT $ ReaderT (f . g)
 
 -- | Expose the full 'Env' to a caller.
 askEnv :: (Monad m) => PropertyT m Env
@@ -158,7 +158,7 @@ journalNote kind loc text = PropertyT do
 -- 'Hegel.Stateful' uses this to nest a rule\/invariant's draws under the step
 -- that produced them. Purely a reporting concern: draw behavior is unchanged.
 nested :: PropertyT m a -> PropertyT m a
-nested (PropertyT r) = PropertyT (local (\e -> e {noteDepth = e.noteDepth + 1}) r)
+nested (PropertyT r) = PropertyT $ local (\e -> e {noteDepth = e.noteDepth + 1}) r
 {-# INLINE nested #-}
 
 -- | Draw a value from a generator mid-test.
@@ -413,7 +413,7 @@ tryProperty act =
       -- 'E.NoBacktrace' because the original throw already collected any
       -- backtrace it wanted (see the same wrapper in
       -- 'Hegel.Internal.Control.onFailure').
-      | otherwise -> E.throwIO (NoBacktrace e)
+      | otherwise -> E.throwIO $ NoBacktrace e
 
 -- | Attempt to recover an 'AssertionFailure' from the given exception, and (if
 -- present) extract the message, callsite, and diff associated with it.

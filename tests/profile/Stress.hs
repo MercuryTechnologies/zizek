@@ -190,6 +190,7 @@ charClassOfWidth w = "[a-" <> T.singleton (toEnum (fromEnum 'a' + w - 1)) <> "]+
 strgenChurnProperty :: Property ()
 strgenChurnProperty = go (100 :: Int) 1
   where
+    go :: Int -> Int -> Property ()
     go 0 _ = pure ()
     go n width = do
       x <- forAllSilent (Gen.int & Gen.min 1 & Gen.max 25 & Gen.build)

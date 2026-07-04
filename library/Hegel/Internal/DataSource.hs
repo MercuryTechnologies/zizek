@@ -104,8 +104,9 @@ handleReturnCode _ HEGEL_E_STOP_TEST = throwIO TestStopped
 handleReturnCode _ HEGEL_E_ASSUME = throwIO AssumeRejected
 handleReturnCode tc rc = throwOnError tc.handle.ctx rc
 
--- | Draw a single boolean that is 'True' with probability @p@ (clamped to
--- @[0,1]@ by the engine).
+-- | Draw a single boolean that is 'True' with probability @p@. Callers must
+-- validate @p@ is in @[0,1]@ and not NaN before calling; the engine rejects
+-- values outside that range with 'HEGEL_E_INVALID_ARG'.
 --
 -- Throws 'TestStopped' on exhaustion.
 drawBool :: TestCase -> Double -> IO Bool

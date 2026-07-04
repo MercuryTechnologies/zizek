@@ -69,7 +69,7 @@ diffShown :: Text -> Text -> Maybe Diff
 diffShown lhs rhs = do
   x <- parseValue (T.unpack lhs)
   y <- parseValue (T.unpack rhs)
-  pure (diffValues x y)
+  pure $ diffValues x y
 
 -- | Line-level diff of two texts.
 --

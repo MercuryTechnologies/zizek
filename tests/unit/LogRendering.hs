@@ -231,8 +231,8 @@ spec = do
       out <- renderReportRich ((reportOf events withFootnote) {databaseKey = Just "k"})
       out `shouldSatisfy` T.isInfixOf "handle table dump: {}"
       -- After the splice, before the reproduction line.
-      T.breakOn "handle table dump" out `shouldSatisfy` \(before, rest) ->
-        "Step 8: read" `T.isInfixOf` before && "stored: k" `T.isInfixOf` rest
+      T.breakOn "handle table dump" out `shouldSatisfy` \(pre, rest) ->
+        "Step 8: read" `T.isInfixOf` pre && "stored: k" `T.isInfixOf` rest
 
     it "the footer only renders when a database key exists" do
       out <- renderReportRich (uncurry (flip reportOf) handoffFixture)

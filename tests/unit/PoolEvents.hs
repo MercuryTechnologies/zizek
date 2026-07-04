@@ -79,7 +79,8 @@ spec = describe "pool-event stream" do
       merged `shouldSatisfy` \xs -> and (zipWith (<) xs (drop 1 xs))
 
   it "a pool-free machine records no events" do
-    let machine =
+    let machine :: Stateful.Machine Int IO
+        machine =
           Stateful.Machine
             { initial = pure (0 :: Int),
               rules = [Stateful.Rule "increment" \n -> pure (n + 1)],

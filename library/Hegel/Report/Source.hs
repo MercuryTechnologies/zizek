@@ -174,9 +174,8 @@ ppFailedInput cache ix (mspan, val) =
   maybe (Left (ppFallbackInput ix val)) Right do
     sloc <- mspan
     let valLines =
-          fmap
-            (PP.annotate AnnotationValue . PP.pretty)
-            (lines (T.unpack val))
+          (PP.annotate AnnotationValue . PP.pretty)
+            <$> lines (T.unpack val)
     ppInlinedValue cache valLines sloc
 
 -- * ppFailureLocation
@@ -204,7 +203,7 @@ ppFailureLocation cache msgs mdiff sloc = do
       locLine =
         inline . PP.annotate LocAnn $
           "at" <+> PP.pretty sloc.spanFile <> ":" <> PP.pretty sloc.spanStartLine.unLineNo
-      docs = fmap (StyleFailure,) (arrowDoc : msgDocs <> diffLines <> [locLine])
+      docs = (StyleFailure,) <$> (arrowDoc : msgDocs <> diffLines <> [locLine])
   pure (spliceDocs StyleFailure docs sloc decl)
 
 -- * Shared lookup\/splice machinery
@@ -323,6 +322,7 @@ mergeFileDeclarations = fmap (foldr1 union') . List.groupBy ((==) `on` (.declara
   where
     -- Keeps the leftmost (earliest) declaration's start line and name; the
     -- line maps are disjoint, so the per-line merge never actually fires.
+    union' :: Declaration Annotation -> Declaration Annotation -> Declaration Annotation
     union' d1 d2 =
       d1 {declarationSource = Map.unionWith mergeLine d1.declarationSource d2.declarationSource}
 
