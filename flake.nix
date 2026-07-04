@@ -14,26 +14,16 @@
               inherit system;
               overlays = [ self.overlays.default ];
             };
-            self'.packages = self.packages.${system};
           }
         );
     in
     {
       packages = forAllSystems ({ pkgs, ... }: {
-        hegel-core = (pkgs.callPackage ./nix/hegel-core.nix { });
         inherit (pkgs) libhegel;
       });
 
       devShells = forAllSystems (
-        { pkgs, self', ... }:
-        let
-          python = pkgs.python3.withPackages (ps: [
-            self'.packages.hegel-core
-            ps.pytest
-            ps."pytest-subtests"
-            ps."pytest-xdist"
-          ]);
-        in
+        { pkgs, ... }:
         {
           default = pkgs.mkShell {
             buildInputs =
@@ -58,8 +48,6 @@
                 haskellPackages.ghc-prof-flamegraph
                 haskellPackages.profiterole
                 haskellPackages.profiteur
-                # python interpreter with hegel-core + conformance test deps
-                python
                 # native libhegel C library + pkg-config for discovery
                 libhegel
                 pkg-config

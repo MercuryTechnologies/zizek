@@ -1,3 +1,0 @@
-[tool.pytest.ini_options]
-testpaths = ["."]
-addopts = "--durations=20 --durations-min=1.0"

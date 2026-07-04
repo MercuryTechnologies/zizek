@@ -23,15 +23,7 @@ profiles/
 # local claude settings
 .claude/settings.local.json
 
-# engine working directories (constants/unicode caches + example database),
-# created at the cwd by libhegel (.hegel) and hegel-core (.hypothesis)
+# engine working directory (constants/unicode caches + example database),
+# created at the cwd by libhegel
 .hegel/
-.hypothesis/
-
-# conformance test binaries (built by just check-conformance)
-tests/conformance/pytest/bin/*
-!tests/conformance/pytest/bin/.gitkeep
-
-# python bytecode cache
-__pycache__/
 

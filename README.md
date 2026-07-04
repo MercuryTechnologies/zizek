@@ -343,7 +343,6 @@ $ just check             # CI checks: check-format + build + test
 $ just build             # compile the library & test suite
 $ just test              # run the unit test suite
 $ just test <name>       # run a specific test suite
-$ just check-conformance # build the conformance binaries and run the pytest harness
 $ just format            # run all formatters
 $ just check-format      # verify formatting without modifying files
 $ just docs              # build Haddocks
@@ -354,7 +353,7 @@ $ just repl              # start a GHCi session with this library in-scope
 
 ### What's missing?
 
-`zizek` passes `hegel-core`'s conformance tests, but some work remains outstanding:
+Some work remains outstanding:
 
 * an API to seed the `Explicit` phase with hand-written examples
 * stateful/state-machine testing

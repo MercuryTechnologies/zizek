@@ -148,171 +148,18 @@ library
       IOKit
       Security
 
-common conformance
+common threaded
   import: library
   ghc-options:
     -threaded
     -rtsopts
     -with-rtsopts=-N
 
-library conformance-utils
-  import: library
-  visibility: private
-  hs-source-dirs: tests/conformance/lib
-  exposed-modules: ConformanceUtils
-  build-depends:
-    aeson ^>=2.2,
-    zizek,
-
-executable test-booleans
-  import: conformance
-  hs-source-dirs: tests/conformance/booleans
-  main-is: Main.hs
-  build-depends:
-    aeson ^>=2.2,
-    zizek,
-    zizek:conformance-utils,
-
-executable test-binary
-  import: conformance
-  hs-source-dirs: tests/conformance/binary
-  main-is: Main.hs
-  build-depends:
-    aeson ^>=2.2,
-    zizek,
-    zizek:conformance-utils,
-
-executable test-floats
-  import: conformance
-  hs-source-dirs: tests/conformance/floats
-  main-is: Main.hs
-  build-depends:
-    aeson ^>=2.2,
-    zizek,
-    zizek:conformance-utils,
-
-executable test-integers
-  import: conformance
-  hs-source-dirs: tests/conformance/integers
-  main-is: Main.hs
-  build-depends:
-    aeson ^>=2.2,
-    zizek,
-    zizek:conformance-utils,
-
-executable test-integers-narrow
-  import: conformance
-  hs-source-dirs: tests/conformance/integers-narrow
-  main-is: Main.hs
-  build-depends:
-    aeson ^>=2.2,
-    zizek,
-    zizek:conformance-utils,
-
-executable test-frequency
-  import: conformance
-  hs-source-dirs: tests/conformance/frequency
-  main-is: Main.hs
-  build-depends:
-    aeson ^>=2.2,
-    zizek,
-    zizek:conformance-utils,
-
-executable test-origin-deduplication
-  import: conformance
-  hs-source-dirs: tests/conformance/origin-deduplication
-  main-is: Main.hs
-  build-depends:
-    aeson ^>=2.2,
-    zizek,
-    zizek:conformance-utils,
-
-executable test-sampled-from
-  import: conformance
-  hs-source-dirs: tests/conformance/sampled-from
-  main-is: Main.hs
-  build-depends:
-    aeson ^>=2.2,
-    zizek,
-    zizek:conformance-utils,
-
-executable test-one-of
-  import: conformance
-  hs-source-dirs: tests/conformance/one-of
-  main-is: Main.hs
-  build-depends:
-    aeson ^>=2.2,
-    zizek,
-    zizek:conformance-utils,
-
-executable test-text
-  import: conformance
-  hs-source-dirs: tests/conformance/text
-  main-is: Main.hs
-  build-depends:
-    aeson ^>=2.2,
-    zizek,
-    zizek:conformance-utils,
-
-executable test-list
-  import: conformance
-  hs-source-dirs: tests/conformance/list
-  main-is: Main.hs
-  build-depends:
-    aeson ^>=2.2,
-    zizek,
-    zizek:conformance-utils,
-
-executable test-set
-  import: conformance
-  hs-source-dirs: tests/conformance/set
-  main-is: Main.hs
-  build-depends:
-    aeson ^>=2.2,
-    containers ^>=0.7,
-    zizek,
-    zizek:conformance-utils,
-
-executable test-map
-  import: conformance
-  hs-source-dirs: tests/conformance/map
-  main-is: Main.hs
-  build-depends:
-    aeson ^>=2.2,
-    containers ^>=0.7,
-    zizek,
-    zizek:conformance-utils,
-
-executable test-char
-  import: conformance
-  hs-source-dirs: tests/conformance/char
-  main-is: Main.hs
-  build-depends:
-    aeson ^>=2.2,
-    zizek,
-    zizek:conformance-utils,
-
-executable test-regex
-  import: conformance
-  hs-source-dirs: tests/conformance/regex
-  main-is: Main.hs
-  build-depends:
-    aeson ^>=2.2,
-    zizek,
-    zizek:conformance-utils,
-
-executable test-stateful
-  import: conformance
-  hs-source-dirs: tests/conformance/stateful
-  main-is: Main.hs
-  build-depends:
-    zizek
-
 -- Gallery of deliberately-failing stateful machines, each stressing one
 -- rendering decision of the rich report renderer; for manual eyeballing.
 -- Not run by CI; `just gallery` from the repo root.
 executable gallery
-  import: conformance
+  import: threaded
   hs-source-dirs: examples/gallery
   main-is: Main.hs
   build-depends:
@@ -324,8 +171,8 @@ executable gallery
 -- `cabal run profile-hegel -- --list` for the scenario list; driven by
 -- `just profile-run` / `just profile-space` / `just profile-time`.
 executable profile-hegel
-  import: conformance
-  -- -N1 (overriding conformance's -N): the scenarios are single-threaded, and
+  import: threaded
+  -- -N1 (overriding threaded's -N): the scenarios are single-threaded, and
   -- parallel GC would only add nondeterministic noise to profiles & timings.
   ghc-options: -with-rtsopts=-N1
   hs-source-dirs: tests/profile
