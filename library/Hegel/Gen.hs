@@ -28,6 +28,7 @@ module Hegel.Gen
     HasMin (min),
     HasMax (max),
     HasSize (minSize, maxSize),
+    HasAlphabet (alphabet),
 
     -- * Boolean
     BoolBuilder,
@@ -130,7 +131,6 @@ module Hegel.Gen
     RegexBuilder,
     regex,
     fullMatch,
-    alphabet,
 
     -- * Choice
     oneOf,
@@ -162,6 +162,7 @@ import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasSize (..))
 import Hegel.Gen.Char
   ( CharBuilder,
     Codec (..),
+    HasAlphabet (..),
     categories,
     char,
     codec,
@@ -219,7 +220,7 @@ import Hegel.Gen.Internal
   )
 import Hegel.Gen.List (ListBuilder, list, unique)
 import Hegel.Gen.Map (MapBuilder, map)
-import Hegel.Gen.Regex (RegexBuilder, alphabet, fullMatch, regex)
+import Hegel.Gen.Regex (RegexBuilder, fullMatch, regex)
 import Hegel.Gen.Set (SetBuilder, set)
 import Hegel.Gen.Text (TextBuilder, text)
 import Hegel.Gen.Uri (UriBuilder, UriTextBuilder, uri, uriText)

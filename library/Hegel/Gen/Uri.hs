@@ -22,10 +22,10 @@ import Control.Exception (throwIO)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Gen.Builder (Build (..))
-import Hegel.Gen.Internal (Gen (..))
-import Hegel.Internal.DataSource (InvariantViolation (..), buildUrlGen, drawString)
+import Hegel.Gen.Internal.String (stringDraw, stringGen)
+import Hegel.Internal.DataSource (InvariantViolation (..), buildUrlGen)
+import Hegel.Internal.TestCase (TestCase)
 import Network.URI (URI, parseURI)
-import System.IO.Unsafe (unsafePerformIO)
 
 data UriBuilder = UriBuilder
 
@@ -40,19 +40,13 @@ uriText :: UriTextBuilder
 uriText = UriTextBuilder
 
 instance Build UriBuilder URI where
-  build _ = Draw drawParsedUri
+  build _ = stringDraw buildUrlGen postProcess
     where
-      genFP = unsafePerformIO buildUrlGen
-      {-# NOINLINE genFP #-}
-      drawParsedUri tc = do
-        t <- drawString tc genFP
-        case parseURI (T.unpack t) of
-          Just u -> pure u
-          Nothing ->
-            throwIO InvariantViolation {detail = "libhegel: unparseable URI from a url draw: " <> t}
+      postProcess :: TestCase -> Text -> IO URI
+      postProcess _tc t = case parseURI (T.unpack t) of
+        Just u -> pure u
+        Nothing ->
+          throwIO InvariantViolation {detail = "libhegel: unparseable URI from a url draw: " <> t}
 
 instance Build UriTextBuilder Text where
-  build _ = Draw \tc -> drawString tc genFP
-    where
-      genFP = unsafePerformIO buildUrlGen
-      {-# NOINLINE genFP #-}
+  build _ = stringGen buildUrlGen

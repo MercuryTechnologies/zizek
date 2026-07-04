@@ -21,9 +21,9 @@ import Control.Exception (throwIO)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Gen.Builder (Build (..), GenValidationError (..))
-import Hegel.Gen.Internal (Gen (..))
-import Hegel.Internal.DataSource (buildDomainGen, drawString)
-import System.IO.Unsafe (unsafePerformIO)
+import Hegel.Gen.Internal (Gen (..), draw)
+import Hegel.Gen.Internal.String (stringGen)
+import Hegel.Internal.DataSource (buildDomainGen)
 
 newtype DomainBuilder = DomainBuilder
   { bMaxLength :: Int
@@ -41,10 +41,12 @@ maxLength n b = b {bMaxLength = n}
 instance Build DomainBuilder Text where
   build b = Draw \tc -> do
     checkMaxLength b.bMaxLength
-    drawString tc genFP
+    draw tc domainGen
     where
-      genFP = unsafePerformIO (buildDomainGen (fromIntegral b.bMaxLength))
-      {-# NOINLINE genFP #-}
+      -- 'domainGen' must stay bound here, outside the 'Draw' lambda above,
+      -- so 'stringGen' builds its handle once and shares it across every
+      -- draw of this 'Gen' value.
+      domainGen = stringGen (buildDomainGen (fromIntegral b.bMaxLength))
       checkMaxLength :: Int -> IO ()
       checkMaxLength n
         | n < 4 || n > 255 =

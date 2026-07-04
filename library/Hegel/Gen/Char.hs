@@ -24,6 +24,7 @@ module Hegel.Gen.Char
     excludeCategories,
     includeCharacters,
     excludeCharacters,
+    HasAlphabet (..),
 
     -- * Internal
     buildCharTextGen,
@@ -39,9 +40,9 @@ import Data.Text qualified as T
 import Data.Word (Word32, Word64)
 import Foreign.ForeignPtr (ForeignPtr)
 import Hegel.Gen.Builder (Build (..), checkNonNegative, checkOrderedMaybe)
-import Hegel.Gen.Internal (Gen (..))
-import Hegel.Internal.DataSource (HegelStringGenerator, InvariantViolation (..), buildTextGen, drawString)
-import System.IO.Unsafe (unsafePerformIO)
+import Hegel.Gen.Internal.String (stringDraw)
+import Hegel.Internal.DataSource (HegelStringGenerator, InvariantViolation (..), TextSpec (..), buildTextGen)
+import Hegel.Internal.TestCase (TestCase)
 
 -- | Which base range a text\/char\/regex-alphabet draw's alphabet starts
 -- from, before codepoint bounds and category filters narrow it further.
@@ -116,6 +117,10 @@ includeCharacters t b = b {bIncludeCharacters = Just t}
 excludeCharacters :: Text -> CharBuilder -> CharBuilder
 excludeCharacters t b = b {bExcludeCharacters = Just t}
 
+-- | Builders that accept a character-set restriction.
+class HasAlphabet b where
+  alphabet :: CharBuilder -> b -> b
+
 -- | The two-letter Unicode general-category abbreviation
 -- @hegel_string_generator_text@'s @categories@\/@exclude_categories@ expect.
 categoryCode :: GeneralCategory -> Text
@@ -164,15 +169,17 @@ buildCharTextGen minSz maxSz b = do
   mapM_ (checkNonNegative "Hegel.Gen.Char") b.bMinCodepoint
   mapM_ (checkNonNegative "Hegel.Gen.Char") b.bMaxCodepoint
   buildTextGen
-    minSz
-    maxSz
-    (codecArg b.bCodec)
-    (maybe 0 fromIntegral b.bMinCodepoint)
-    (maybe maxBound fromIntegral b.bMaxCodepoint :: Word32)
-    (fmap (fmap categoryCode) b.bCategories)
-    exclCats
-    b.bIncludeCharacters
-    b.bExcludeCharacters
+    TextSpec
+      { minSize = minSz,
+        maxSize = maxSz,
+        codec = codecArg b.bCodec,
+        minCodepoint = maybe 0 fromIntegral b.bMinCodepoint,
+        maxCodepoint = maybe maxBound fromIntegral b.bMaxCodepoint :: Word32,
+        categories = fmap (fmap categoryCode) b.bCategories,
+        excludeCategories = exclCats,
+        includeCharacters = b.bIncludeCharacters,
+        excludeCharacters = b.bExcludeCharacters
+      }
   where
     -- Haskell 'Text' cannot represent lone surrogates, so exclude them by
     -- default unless the caller explicitly took over category filtering
@@ -182,16 +189,13 @@ buildCharTextGen minSz maxSz b = do
       | otherwise = Just (fmap categoryCode (nub (Surrogate : fromMaybe [] b.bExcludeCategories)))
 
 instance Build CharBuilder Char where
-  build b = Draw drawOneChar
+  build b = stringDraw (buildCharTextGen 1 1 b) postProcess
     where
-      genFP = unsafePerformIO (buildCharTextGen 1 1 b)
-      {-# NOINLINE genFP #-}
-      drawOneChar tc = do
-        t <- drawString tc genFP
-        case T.uncons t of
-          Just (c, _) -> pure c
-          Nothing ->
-            throwIO
-              InvariantViolation
-                { detail = "libhegel: a minSize=maxSize=1 text draw returned an empty string"
-                }
+      postProcess :: TestCase -> Text -> IO Char
+      postProcess _tc t = case T.uncons t of
+        Just (c, _) -> pure c
+        Nothing ->
+          throwIO
+            InvariantViolation
+              { detail = "libhegel: a minSize=maxSize=1 text draw returned an empty string"
+              }
