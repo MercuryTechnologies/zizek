@@ -1,5 +1,5 @@
--- | Unit tests for the 'Hegel.Property.Concurrent' combinators.
-module ConcurrentProperties (spec) where
+-- | Unit tests for the 'Hegel.Property.Branch' combinators.
+module BranchProperties (spec) where
 
 import Control.Monad (replicateM)
 import Control.Monad.IO.Class (liftIO)
@@ -14,15 +14,11 @@ import Hegel.Property
   ( annotateShow,
     assert,
     check,
-    concurrently,
-    concurrently_,
     discard,
     forAll,
     forAllWithLabel,
-    mapConcurrently,
-    replicateConcurrently,
-    replicateConcurrentlyBounded,
   )
+import Hegel.Property.Branch qualified as Branch
 import Hegel.Report (Note (..), Report (..), Result (..), isBranchFailure, isBranchHeader, renderReport, renderReportRich)
 import Hegel.Settings (Settings (..), defaultSettings)
 import Test.Hspec
@@ -38,23 +34,23 @@ isOk = \case
 
 spec :: Spec
 spec = describe "concurrent combinators" do
-  describe "concurrently" do
+  describe "Branch.concurrently" do
     it "runs both branches and combines their results" do
       report <- check defaultSettings do
-        (x, y) <- concurrently (pure (1 :: Int)) (pure (2 :: Int))
+        (x, y) <- Branch.concurrently (pure (1 :: Int)) (pure (2 :: Int))
         assert (x == 1 && y == 2) "both branch results survive"
       report.result `shouldSatisfy` isOk
 
     it "lets each branch draw independently" do
       report <- check defaultSettings do
-        (x, y) <- concurrently (forAll (intR (0, 100))) (forAll (intR (0, 100)))
+        (x, y) <- Branch.concurrently (forAll (intR (0, 100))) (forAll (intR (0, 100)))
         annotateShow (x :: Int, y :: Int)
         assert (x >= 0 && y >= 0) "draws succeed"
       report.result `shouldSatisfy` isOk
 
     it "reports a branch assertion failure as a shrinkable counterexample, not Errored" do
       report <- check defaultSettings do
-        _ <- concurrently (assert False "left branch always fails") (pure ())
+        _ <- Branch.concurrently (assert False "left branch always fails") (pure ())
         pure ()
       case report.result of
         Counterexample {message} -> message `shouldBe` "left branch always fails"
@@ -66,7 +62,7 @@ spec = describe "concurrent combinators" do
       let oneRun = do
             report <-
               check defaultSettings do
-                _ <- concurrently (assert False "left") (assert False "right")
+                _ <- Branch.concurrently (assert False "left") (assert False "right")
                 pure ()
             pure case report.result of
               Counterexample {message} -> Just message
@@ -76,7 +72,7 @@ spec = describe "concurrent combinators" do
 
     it "nests each branch's notes under its own Branch N header" do
       report <- check defaultSettings do
-        _ <- concurrently (annotateShow (1 :: Int)) (annotateShow (2 :: Int))
+        _ <- Branch.concurrently (annotateShow (1 :: Int)) (annotateShow (2 :: Int))
         assert False "force a counterexample so the journal renders"
       case report.result of
         Counterexample {notes} -> do
@@ -89,7 +85,7 @@ spec = describe "concurrent combinators" do
       -- branch's failure must still be visible in the journal, not silently
       -- dropped in favor of the winning ("left") branch's headline.
       report <- check defaultSettings do
-        _ <- concurrently (assert False "left branch always fails") (assert False "right branch always fails")
+        _ <- Branch.concurrently (assert False "left branch always fails") (assert False "right branch always fails")
         pure ()
       case report.result of
         Counterexample {message, notes} -> do
@@ -103,7 +99,7 @@ spec = describe "concurrent combinators" do
       -- already carries an in-band failure; both branches' messages must
       -- still show up somewhere in the rendered body.
       report <- check defaultSettings do
-        _ <- concurrently (assert False "left branch always fails") (assert False "right branch always fails")
+        _ <- Branch.concurrently (assert False "left branch always fails") (assert False "right branch always fails")
         pure ()
       let rendered = renderReport report
       ("left branch always fails" `T.isInfixOf` rendered) `shouldBe` True
@@ -114,7 +110,7 @@ spec = describe "concurrent combinators" do
       -- has no in-band failure to anchor the reason, so the headline must
       -- survive.
       report <- check defaultSettings do
-        _ <- concurrently (annotateShow (1 :: Int)) (annotateShow (2 :: Int))
+        _ <- Branch.concurrently (annotateShow (1 :: Int)) (annotateShow (2 :: Int))
         assert False "unrelated top-level assertion"
       case report.result of
         Counterexample {notes} -> [n.text | n <- notes, isBranchFailure n] `shouldBe` []
@@ -124,14 +120,14 @@ spec = describe "concurrent combinators" do
     it "splices every branch's source into the rich report" do
       -- End-to-end through 'renderReportRich' (requires cwd = repo root, as
       -- under `just test`): this is the regression test for the render-path
-      -- misclassification bug — a concurrently failure must route to the
+      -- misclassification bug — a Branch.concurrently failure must route to the
       -- concurrent splice, not silently degrade or misrender as a stateful
       -- composed report.
       report <- check defaultSettings do
-        _ <- concurrently (assert False "left branch always fails") (assert False "right branch always fails")
+        _ <- Branch.concurrently (assert False "left branch always fails") (assert False "right branch always fails")
         pure ()
       rich <- renderReportRich report
-      ("┏━━ tests/unit/ConcurrentProperties.hs" `T.isInfixOf` rich) `shouldBe` True
+      ("┏━━ tests/unit/BranchProperties.hs" `T.isInfixOf` rich) `shouldBe` True
       ("left branch always fails" `T.isInfixOf` rich) `shouldBe` True
       ("right branch always fails" `T.isInfixOf` rich) `shouldBe` True
 
@@ -140,7 +136,7 @@ spec = describe "concurrent combinators" do
         pool <- Pool.new
         Pool.add pool (1 :: Int)
         Pool.add pool (2 :: Int)
-        (x, y) <- concurrently (forAll (Pool.consume pool)) (forAll (Pool.consume pool))
+        (x, y) <- Branch.concurrently (forAll (Pool.consume pool)) (forAll (Pool.consume pool))
         remaining <- liftIO (Pool.size pool)
         annotateShow (sort [x, y], remaining)
         assert (sort [x, y] == [1, 2] && remaining == 0) "each value consumed exactly once"
@@ -149,7 +145,7 @@ spec = describe "concurrent combinators" do
   describe "branch splice threshold and merge" do
     it "merges branches sharing an enclosing declaration into one labeled block" do
       report <- check defaultSettings do
-        _ <- concurrently (assert False "left branch always fails") (assert False "right branch always fails")
+        _ <- Branch.concurrently (assert False "left branch always fails") (assert False "right branch always fails")
         pure ()
       rich <- renderReportRich report
       T.count "┏━━" rich `shouldBe` 1
@@ -162,14 +158,14 @@ spec = describe "concurrent combinators" do
       -- merged into the labeled listing below, which read as if the listing
       -- belonged only to whichever header happened to sit closest to it.
       report <- check defaultSettings do
-        _ <- concurrently (assert False "left branch always fails") (assert False "right branch always fails")
+        _ <- Branch.concurrently (assert False "left branch always fails") (assert False "right branch always fails")
         pure ()
       rich <- renderReportRich report
       T.count "\n  Branch " ("\n" <> rich) `shouldBe` 0
 
     it "collapses passing branches into a summary once past the splice threshold" do
       report <- check defaultSettings do
-        _ <- mapConcurrently (\i -> assert (i /= (7 :: Int)) "branch seven fails") [1 .. 10]
+        _ <- Branch.mapConcurrently (\i -> assert (i /= (7 :: Int)) "branch seven fails") [1 .. 10]
         pure ()
       rich <- renderReportRich report
       ("9 branches passed" `T.isInfixOf` rich) `shouldBe` True
@@ -181,7 +177,7 @@ spec = describe "concurrent combinators" do
 
     it "shows a summary with no branch dump when every branch passed" do
       report <- check defaultSettings do
-        _ <- replicateConcurrently 10 (pure ())
+        _ <- Branch.replicateConcurrently 10 (pure ())
         assert False "unrelated top-level assertion"
       rich <- renderReportRich report
       ("10 branches passed" `T.isInfixOf` rich) `shouldBe` True
@@ -190,34 +186,34 @@ spec = describe "concurrent combinators" do
 
     it "still shows every branch's data below the splice threshold" do
       report <- check defaultSettings do
-        rs <- replicateConcurrently 3 (forAll (intR (0, 1000)))
+        rs <- Branch.replicateConcurrently 3 (forAll (intR (0, 1000)))
         assert (all (< 42) rs) "every branch stays small"
       rich <- renderReportRich report
       ("Branch 1:" `T.isInfixOf` rich) `shouldBe` True
       ("Branch 2:" `T.isInfixOf` rich) `shouldBe` True
       ("Branch 3:" `T.isInfixOf` rich) `shouldBe` True
 
-  describe "concurrently_" do
+  describe "Branch.concurrently_" do
     it "runs both branches, discarding results" do
-      report <- check defaultSettings (concurrently_ (pure ()) (pure ()))
+      report <- check defaultSettings (Branch.concurrently_ (pure ()) (pure ()))
       report.result `shouldSatisfy` isOk
 
-  describe "mapConcurrently / replicateConcurrently" do
+  describe "Branch.mapConcurrently / Branch.replicateConcurrently" do
     it "returns one result per input, in order" do
       report <- check defaultSettings do
-        rs <- mapConcurrently (\i -> pure (i * 2)) [1 .. 5 :: Int]
+        rs <- Branch.mapConcurrently (\i -> pure (i * 2)) [1 .. 5 :: Int]
         assert (rs == [2, 4 .. 10]) "results preserve input order"
       report.result `shouldSatisfy` isOk
 
     it "fans out to n branches, each drawing independently" do
       report <- check defaultSettings do
-        rs <- replicateConcurrently 5 (forAll (intR (0, 1000)))
+        rs <- Branch.replicateConcurrently 5 (forAll (intR (0, 1000)))
         assert (length rs == 5) "one result per branch"
       report.result `shouldSatisfy` isOk
 
     it "a failing branch among many shrinks like any other counterexample" do
       report <- check defaultSettings do
-        rs <- replicateConcurrently 3 (forAll (intR (0, 1000)))
+        rs <- Branch.replicateConcurrently 3 (forAll (intR (0, 1000)))
         assert (all (< 42) rs) "every branch stays small"
       case report.result of
         Counterexample {} -> pure ()
@@ -238,7 +234,7 @@ spec = describe "concurrent combinators" do
                 & Gen.build
             )
         mapM_ (Pool.add pool) values
-        results <- replicateConcurrently n (forAll (Pool.consume pool))
+        results <- Branch.replicateConcurrently n (forAll (Pool.consume pool))
         remaining <- liftIO (Pool.size pool)
         annotateShow (n, sort values, sort results, remaining)
         assert
@@ -250,7 +246,7 @@ spec = describe "concurrent combinators" do
       report <- check defaultSettings do
         n <- forAllWithLabel "branchCount" (intR (1, 8))
         pool <- Pool.new
-        added <- replicateConcurrently n do
+        added <- Branch.replicateConcurrently n do
           v <- forAll (intR (-1000, 1000))
           Pool.add pool v
           pure v
@@ -282,7 +278,7 @@ spec = describe "concurrent combinators" do
         dst <- Pool.new
         mapM_ (Pool.add src) srcValues
         mapM_ (Pool.add dst) dstValues
-        transferred <- replicateConcurrently n (forAll (Pool.transfer src dst))
+        transferred <- Branch.replicateConcurrently n (forAll (Pool.transfer src dst))
         srcRemaining <- liftIO (Pool.size src)
         dstFinal <- liftIO (Pool.size dst)
         annotateShow (n, sort srcValues, sort transferred, srcRemaining, dstFinal)
@@ -294,10 +290,10 @@ spec = describe "concurrent combinators" do
           "every src value transfers exactly once; dst gains n entries with none of its own lost"
       report.result `shouldSatisfy` isOk
 
-  describe "replicateConcurrentlyBounded" do
+  describe "Branch.replicateConcurrentlyBounded" do
     it "still returns n results when capped below n" do
       report <- check defaultSettings do
-        rs <- replicateConcurrentlyBounded 2 6 (pure ())
+        rs <- Branch.replicateConcurrentlyBounded 2 6 (pure ())
         assert (length rs == 6) "cap limits concurrency, not the result count"
       report.result `shouldSatisfy` isOk
 
@@ -306,7 +302,7 @@ spec = describe "concurrent combinators" do
       maxLiveRef <- newIORef (0 :: Int)
       report <- check defaultSettings do
         _ <-
-          replicateConcurrentlyBounded
+          Branch.replicateConcurrentlyBounded
             2
             8
             ( liftIO do
@@ -326,7 +322,7 @@ spec = describe "concurrent combinators" do
       -- engine's FilterTooMuch health check before GaveUp classification.
       let settings = defaultSettings {suppressHealthCheck = [FilterTooMuch]}
       report <- check settings do
-        _ <- concurrently discard (pure ())
+        _ <- Branch.concurrently discard (pure ())
         pure ()
       case report.result of
         GaveUp _ -> pure ()

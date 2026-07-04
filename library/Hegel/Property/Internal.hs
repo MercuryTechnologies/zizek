@@ -30,6 +30,25 @@ module Hegel.Property.Internal
     registerFinalizer,
     drainFinalizers,
 
+    -- * Open forks
+    OpenForks,
+    ForkState (..),
+    ForkEntry (..),
+    newOpenForks,
+    registerFork,
+    deregisterFork,
+    collectLeaks,
+    closeOpenForks,
+    checkCloneDepth,
+
+    -- * Concurrent-branch mechanics shared by "Hegel.Property.Branch" and
+
+    -- "Hegel.Property.Fork"
+    withBaseRunInIO,
+    foldForkNotes,
+    foldBranchNotes,
+    runBranch,
+
     -- * Runner hooks
     runPropertyT,
     propertyAction,
@@ -44,10 +63,14 @@ where
 
 import Control.Exception (SomeException, fromException)
 import Control.Exception qualified as E
+import Control.Monad (void, when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Class (MonadTrans (..))
 import Control.Monad.Trans.Reader (ReaderT (..), ask, local)
-import Data.Foldable (for_, toList)
+import Data.Foldable (for_, toList, traverse_)
+import Data.IntMap.Strict (IntMap)
+import Data.IntMap.Strict qualified as IntMap
+import Data.Maybe (catMaybes, listToMaybe)
 import Data.Sequence ((|>))
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
@@ -56,13 +79,13 @@ import GHC.Stack (HasCallStack, SrcLoc, callStack, withFrozenCallStack)
 import Hegel.Assertion (AssertionFailure (..), callSite)
 import Hegel.Diff (Diff)
 import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
-import Hegel.Internal.Control (NoBacktrace (..), isControlSignal, isFailure)
+import Hegel.Internal.Control (MalformedTest (..), NoBacktrace (..), isControlSignal, isFailure)
 import Hegel.Internal.Event qualified as Event
 import Hegel.Internal.TestCase (TestCase (..))
 import Hegel.Internal.TestCase qualified as TestCase
 import Hegel.Internal.Tick qualified as Tick
 import Hegel.Report.Note (Note (..), NoteKind (..), renderValue)
-import UnliftIO (MonadUnliftIO)
+import UnliftIO (MonadUnliftIO, withRunInIO)
 import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 
 -- | Whether the current run records its journal.
@@ -84,7 +107,15 @@ data Env = Env
     -- 'nested'.
     noteDepth :: !Int,
     -- | Cleanup actions registered by 'registerFinalizer'.
-    finalizers :: !Finalizers
+    finalizers :: !Finalizers,
+    -- | Forks spawned in this scope, settled at scope exit.
+    openForks :: !OpenForks,
+    -- | Clone-stream nesting depth of this scope: 0 at the top level, one
+    -- higher in each concurrent branch or fork body.
+    cloneDepth :: !Int,
+    -- | Ceiling 'cloneDepth' is checked against before acquiring another
+    -- clone, constant for the whole run.
+    cloneDepthLimit :: !Int
   }
 
 -- | A property: test logic interleaved with generator draws against a live
@@ -330,6 +361,192 @@ registerFinalizer act = do
   liftIO (atomicModifyIORef' ref \xs -> (act : xs, ()))
 {-# INLINEABLE registerFinalizer #-}
 
+-- * Open forks
+
+-- | Whether a registered fork has been joined, cancelled, or is still
+-- running.
+data ForkState = NotJoined | JoinedOk | JoinedFailure | Cancelled
+  deriving stock (Eq, Show)
+
+-- | A fork's registry entry. Its result type is erased behind 'settle' so
+-- 'OpenForks' can hold forks of differing result types uniformly.
+data ForkEntry = ForkEntry
+  { -- | The fork's current lifecycle state.
+    state :: !(IORef ForkState),
+    -- | Await-or-cancel the fork so its clone is freed, idempotently against
+    -- a fork already joined or cancelled by its owner. Returns the fork's
+    -- failure message when it was still 'NotJoined' and had already failed;
+    -- 'Nothing' otherwise, including when it was still running and had to be
+    -- cancelled outright.
+    settle :: IO (Maybe Text)
+  }
+
+-- | A scope's live forks, spawned by 'Hegel.Property.Fork.spawn' or
+-- 'Hegel.Property.Fork.scoped', settled at scope exit via 'closeOpenForks'.
+--
+-- Opaque, so only this module's registry operations touch the underlying
+-- reference.
+newtype OpenForks = OpenForks (IORef (IntMap ForkEntry))
+
+-- | A fresh, empty registry.
+newOpenForks :: IO OpenForks
+newOpenForks = OpenForks <$> newIORef IntMap.empty
+
+-- | Register a fork, returning the 1-based key its entry is settled under
+-- and shown by in a @Fork N@ header.
+registerFork :: OpenForks -> ForkEntry -> IO Int
+registerFork (OpenForks ref) entry =
+  atomicModifyIORef' ref \m ->
+    let k = maybe 1 (succ . fst) (IntMap.lookupMax m)
+     in (IntMap.insert k entry m, k)
+
+-- | Remove a fork from the registry once its owner has joined or cancelled
+-- it, so 'closeOpenForks' no longer considers it a leak.
+deregisterFork :: OpenForks -> Int -> IO ()
+deregisterFork (OpenForks ref) k = atomicModifyIORef' ref \m -> (IntMap.delete k m, ())
+
+-- | Settle every fork still in the registry, in creation order, and report
+-- whether any of them had never been joined or cancelled by their owner.
+--
+-- Always settles regardless of the outcome, so every clone is freed and no
+-- forked thread survives the scope closing; callers decide whether an
+-- unjoined fork should abort the run, as 'closeOpenForks' does, or be
+-- discarded quietly because a more pressing exception is already in flight.
+collectLeaks :: OpenForks -> IO (Maybe Text)
+collectLeaks (OpenForks ref) = do
+  leaked <- atomicModifyIORef' ref \m -> (IntMap.empty, IntMap.toAscList m)
+  results <- traverse (\(_, e) -> e.settle) leaked
+  pure case leaked of
+    [] -> Nothing
+    _ -> Just (leakMessage (length leaked) (listToMaybe (catMaybes results)))
+
+-- | Describe how many forks leaked and, when the first of them had already
+-- failed, what it said.
+leakMessage :: Int -> Maybe Text -> Text
+leakMessage n mFailure =
+  "Hegel.Property.Fork.spawn left "
+    <> T.pack (show n)
+    <> (if n == 1 then " fork" else " forks")
+    <> " unjoined when its scope ended; every fork must be joined with"
+    <> " Hegel.Property.Fork.join or abandoned with Hegel.Property.Fork.cancel"
+    <> " before the property finishes"
+    <> maybe "" ("\nthe first unjoined fork had failed: " <>) mFailure
+
+-- | Settle every fork still in the registry and abort the run as a malformed
+-- test if any of them were never joined or cancelled by their owner.
+--
+-- Must run before the case is reported complete: a fork still drawing
+-- against its clone when the parent completes fails with an engine error of
+-- its own, rather than the well-formed 'MalformedTest' this produces.
+closeOpenForks :: OpenForks -> IO ()
+closeOpenForks forks = collectLeaks forks >>= traverse_ (E.throwIO . MalformedTest)
+
+-- * Concurrent-branch mechanics
+
+-- | Fail the case immediately when the ambient clone-stream nesting depth has
+-- already reached 'cloneDepthLimit', rather than letting the engine's own
+-- clone-depth limit invalidate the whole clone family.
+checkCloneDepth :: Env -> IO ()
+checkCloneDepth env =
+  when (env.cloneDepth >= env.cloneDepthLimit) $
+    E.throwIO (MalformedTest (cloneDepthMessage env.cloneDepthLimit))
+
+-- | Describe a tripped clone-depth guard.
+cloneDepthMessage :: Int -> Text
+cloneDepthMessage limit =
+  "clone-stream nesting exceeded Settings.maxCloneDepth ("
+    <> T.pack (show limit)
+    <> "); raise it for a test that nests Hegel.Property.Fork.spawn or"
+    <> " Hegel.Property.Branch.concurrently this deeply on purpose, or use"
+    <> " Hegel.Property.Branch.replicateConcurrently for fan-out"
+
+-- | Obtain a way to run the base monad's actions in 'IO', independent of the
+-- ambient 'Env'. "Hegel.Property.Branch" and "Hegel.Property.Fork" use
+-- this to step outside the parent's environment before assembling each
+-- branch's own.
+withBaseRunInIO :: (MonadUnliftIO m) => ((forall x. m x -> IO x) -> IO b) -> PropertyT m b
+withBaseRunInIO inner = withRunInIO \run -> inner (run . lift)
+
+-- | Fold one branch's or fork's buffered notes into the ambient journal, one
+-- level deeper than the caller's own 'noteDepth', under a header labeled
+-- with the given word ("Branch" or "Fork") and index.
+--
+-- A no-op under a 'Silent' journal, matching every other journaling
+-- primitive's cost discipline.
+foldForkNotes :: Env -> Text -> Int -> [Note] -> IO ()
+foldForkNotes env label i notes = case env.journal of
+  Silent -> pure ()
+  Recording sink -> do
+    clock <- Tick.next env.testCase.recording
+    sink Note {kind = BranchHeader i, text = label <> " " <> T.pack (show i), loc = Nothing, depth = env.noteDepth, clock}
+    for_ notes sink
+
+-- | 'foldForkNotes' over every branch of a fixed-arity combinator
+-- ('Hegel.Property.Branch.concurrently' and its siblings), labeled
+-- "Branch" and numbered in call order.
+foldBranchNotes :: Env -> [[Note]] -> IO ()
+foldBranchNotes env branchNotes =
+  for_ (zip [1 :: Int ..] branchNotes) \(i, notes) -> foldForkNotes env "Branch" i notes
+
+-- | Run one branch of a concurrent combinator or fork body against its own
+-- clone, in a fresh 'Env' nested one level deeper than the parent's.
+--
+-- Neither a control signal nor an 'Hegel.Assertion.AssertionFailure' escapes
+-- as an exception: each comes back as 'Left' so a caller running several
+-- branches at once (as 'Hegel.Property.Branch.concurrently' does) can let
+-- every branch run to completion regardless of a sibling's fate, and decide
+-- deterministically which failure, if any, to report as the case's shrink
+-- target.
+--
+-- A real failure additionally gets journaled in-band as a 'BranchFailure', so
+-- a branch that does not win the shrink target still shows its own message,
+-- location, and diff in the report. A discard or budget stop does not, since
+-- neither is a failure to explain.
+--
+-- A finalizer registered inside the branch is drained at the branch's own
+-- exit, and any fork spawned inside it is settled there too; a teardown
+-- failure or a leaked fork propagates immediately, the same severity a
+-- top-level occurrence of either carries.
+runBranch ::
+  (forall x. m x -> IO x) ->
+  Env ->
+  TestCase ->
+  PropertyT m a ->
+  IO (Either E.SomeException a, [Note])
+runBranch runBase parentEnv testCase body = do
+  finalizers <- newFinalizers
+  openForks <- newOpenForks
+  notesRef <- newIORef Seq.empty
+  let branchJournal = case parentEnv.journal of
+        Silent -> Silent
+        Recording _ -> Recording \n -> modifyIORef' notesRef (|> n)
+      branchEnv =
+        Env
+          { testCase,
+            journal = branchJournal,
+            noteDepth = parentEnv.noteDepth + 1,
+            finalizers,
+            openForks,
+            cloneDepth = parentEnv.cloneDepth + 1,
+            cloneDepthLimit = parentEnv.cloneDepthLimit
+          }
+  eRes <-
+    tryProperty (runBase (runPropertyT branchEnv body))
+      `E.onException` (drainFinalizers finalizers *> void (collectLeaks openForks))
+  failures <- drainFinalizers finalizers
+  case failures of
+    [] -> pure ()
+    e : _ -> E.throwIO e
+  closeOpenForks openForks
+  notes <- toList <$> readIORef notesRef
+  failureNotes <- case (branchJournal, eRes) of
+    (Recording _, Left e) | isFailure e -> do
+      clock <- Tick.next testCase.recording
+      let (msg, mloc, diff) = failureDetails e
+      pure [Note {kind = BranchFailure diff, text = msg, loc = mloc, depth = branchEnv.noteDepth, clock}]
+    _ -> pure []
+  pure (eRes, notes <> failureNotes)
+
 -- * Runner hooks
 
 -- | Run a property against the given 'Env'.
@@ -338,13 +555,16 @@ runPropertyT env (PropertyT r) = runReaderT r env
 {-# INLINE runPropertyT #-}
 
 -- | Lower a property to a per-case run loop, against a caller-owned finalizer
--- registry.
+-- registry and fork registry, checking fork/branch nesting against the given
+-- clone-depth ceiling.
 --
 -- Ordinary cases run with a no-op journal; failing cases are journaled later
 -- via 'observeProperty' on the engine's minimal counterexample.
-propertyAction :: Property () -> Finalizers -> TestCase -> IO ()
-propertyAction prop fin tc =
-  runPropertyT Env {testCase = tc, journal = Silent, noteDepth = 0, finalizers = fin} prop
+propertyAction :: Int -> Property () -> Finalizers -> OpenForks -> TestCase -> IO ()
+propertyAction cloneDepthLimit prop finalizers openForks testCase =
+  runPropertyT
+    Env {testCase, journal = Silent, noteDepth = 0, finalizers, openForks, cloneDepth = 0, cloneDepthLimit}
+    prop
 
 -- | Run every registered finalizer, LIFO, capturing each one's exception so a
 -- thrower does not skip the rest, and returning them all.
@@ -368,19 +588,24 @@ drainFinalizers (Finalizers ref) = E.uninterruptibleMask_ do
 -- how the run ended together with the journal contents and the test case's
 -- event stream (empty unless @tc@ was built with a recording
 -- 'Hegel.Internal.Tick.Recording').
-observeProperty :: TestCase -> Property () -> IO (Either SomeException (), [Note], [Event.Event])
-observeProperty tc prop = do
+observeProperty :: Int -> TestCase -> Property () -> IO (Either SomeException (), [Note], [Event.Event])
+observeProperty cloneDepthLimit testCase prop = do
   j <- newIORef Seq.empty
-  fin <- newFinalizers
+  finalizers <- newFinalizers
+  openForks <- newOpenForks
   let record n = modifyIORef' j (|> n)
   eRes <-
-    tryProperty (runPropertyT Env {testCase = tc, journal = Recording record, noteDepth = 0, finalizers = fin} prop)
-      `E.onException` drainFinalizers fin
+    tryProperty
+      ( runPropertyT
+          Env {testCase, journal = Recording record, noteDepth = 0, finalizers, openForks, cloneDepth = 0, cloneDepthLimit}
+          prop
+      )
+      `E.onException` (drainFinalizers finalizers *> void (collectLeaks openForks))
   -- This is the terminal replay: nothing runs after it, so a failed teardown
   -- cannot contaminate another case.
-  failures <- drainFinalizers fin
+  failures <- drainFinalizers finalizers
   for_ failures \e -> do
-    clock <- Tick.next tc.recording
+    clock <- Tick.next testCase.recording
     record
       Note
         { kind = Footnote,
@@ -389,8 +614,18 @@ observeProperty tc prop = do
           depth = 0,
           clock
         }
+  -- A leak here should never actually happen: if the original run had left a
+  -- fork unjoined, it would have aborted the whole run as a 'MalformedTest'
+  -- before ever reaching a stored reproduction blob for this replay to
+  -- reconstruct. Settle unconditionally regardless, for the same resource
+  -- safety 'closeOpenForks' provides elsewhere, and note it rather than
+  -- override the counterexample already captured in 'eRes'.
+  mLeak <- collectLeaks openForks
+  for_ mLeak \msg -> do
+    clock <- Tick.next testCase.recording
+    record Note {kind = Footnote, text = "fork leak during replay: " <> msg, loc = Nothing, depth = 0, clock}
   notes <- toList <$> readIORef j
-  events <- Tick.drain tc.events
+  events <- Tick.drain testCase.events
   pure (eRes, notes, events)
 
 -- NOTE: This function _needs_ to use 'Control.Exception.throwIO' so that

@@ -41,7 +41,12 @@ data Settings = Settings
     -- stopping at the first.
     reportMultipleFailures :: !Bool,
     -- | Health checks to skip.
-    suppressHealthCheck :: ![HealthCheck]
+    suppressHealthCheck :: ![HealthCheck],
+    -- | Ceiling on how deeply 'Hegel.Property.Fork.spawn' and the
+    -- @Branch.concurrently@ family may nest clone streams within one test
+    -- case. Exceeding it aborts the run immediately rather than invalidating
+    -- the engine's whole clone family.
+    maxCloneDepth :: !Int
   }
   deriving stock (Show)
 
@@ -62,7 +67,8 @@ defaultSettings =
       backend = Auto,
       verbosity = Quiet,
       reportMultipleFailures = False,
-      suppressHealthCheck = []
+      suppressHealthCheck = [],
+      maxCloneDepth = 32
     }
 
 -- | Alias for 'defaultSettings'.

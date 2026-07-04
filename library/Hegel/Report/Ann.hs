@@ -85,6 +85,9 @@ data Ann
     ResponseAnn
   | -- | Elision rows and other droppable log detail (dim).
     ElidedAnn
+  | -- | A concurrent branch or fork's attribution tag (@Branch N@ \/
+    -- @Fork N@), dim like other structural, non-content labels.
+    BranchLabelAnn
   deriving stock (Show, Eq)
 
 -- | Render a 'Doc Ann' as plain text, stripping all annotations.
@@ -159,6 +162,7 @@ annToAnsi = \case
   StepNoAnn -> PP.Terminal.colorDull PP.Terminal.White
   ResponseAnn -> mempty
   ElidedAnn -> PP.Terminal.colorDull PP.Terminal.White
+  BranchLabelAnn -> PP.Terminal.colorDull PP.Terminal.White
 
 -- | The shared five-hue identity palette, keyed by a value's strand index.
 --

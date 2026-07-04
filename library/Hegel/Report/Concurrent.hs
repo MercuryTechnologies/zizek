@@ -1,6 +1,6 @@
--- | A concurrent combinator's branches, spliced into their source
+-- | A concurrent combinator's or fork's branches, spliced into their source
 -- declarations. Backs 'Hegel.Report.renderReportRich' for journals produced
--- by "Hegel.Property.Concurrent".
+-- by "Hegel.Property.Branch" and "Hegel.Property.Fork".
 --
 -- Below 'branchSpliceThreshold' branches, every branch splices its own source
 -- lines in full: a branch that ran to completion without failing still shows
@@ -23,6 +23,7 @@ module Hegel.Report.Concurrent
   )
 where
 
+import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Report.Ann (Ann (..))
 import Hegel.Report.Discovery (Declarations)
@@ -85,8 +86,8 @@ concurrentGroupsDoc phrases decls notes
 perBranchDoc :: Declarations -> Group -> ([Doc Ann], [Declaration Annotation])
 perBranchDoc decls g = (renderedHeader, fragments)
   where
-    bIx = branchIndex g
-    results = [(nt, spliceNote decls bIx x) | x@(_, nt) <- g.root : g.body]
+    label = groupHeaderLabel g
+    results = [(nt, spliceNote decls label x) | x@(_, nt) <- g.root : g.body]
     structured = [d | (_, Left d) <- results]
     fragments = [f | (_, Right f) <- results]
     anchored
@@ -107,28 +108,37 @@ branchSpliceThreshold = 4
 groupHasBranchFailure :: Group -> Bool
 groupHasBranchFailure g = any (isBranchFailure . snd) (g.root : g.body)
 
--- | The branch number a group's 'BranchHeader' root carries.
-branchIndex :: Group -> Int
-branchIndex g = case (snd g.root).kind of
-  BranchHeader i -> i
-  _ -> 0
+-- | The label a group's header note carries, e.g. @"Branch 1"@ for
+-- 'Hegel.Property.Branch' or @"Fork 1"@ for 'Hegel.Property.Fork'. Read
+-- straight from the header note's own text, so a fork's group renders under
+-- @Fork N@ without a distinct 'NoteKind'.
+--
+-- 'Nothing' when the group's root isn't a header at all: a
+-- 'Hegel.Property.Fork.spawn' call alongside genuine top-level code gives
+-- its own top-level notes a depth-0 group rooted at an ordinary note rather
+-- than a 'BranchHeader'. Those render like any other splice, with no label.
+groupHeaderLabel :: Group -> Maybe Text
+groupHeaderLabel g = case (snd g.root).kind of
+  BranchHeader _ -> Just (snd g.root).text
+  _ -> Nothing
 
 -- | Splice one note into its enclosing source declaration, labeled by its
--- branch number so a merge across branches (see 'concurrentGroupsDoc') keeps
--- each stacked line attributable: a 'BranchFailure' gets the
--- arrows\/message\/diff treatment, draws and annotations get their text
--- inlined under the line that produced them. Falls back to the structured
--- journal line when the note has no location or its source cannot be read.
+-- group's header text when it has one, so a merge across groups (see
+-- 'concurrentGroupsDoc') keeps each stacked line attributable: a
+-- 'BranchFailure' gets the arrows\/message\/diff treatment, draws and
+-- annotations get their text inlined under the line that produced them.
+-- Falls back to the structured journal line when the note has no location or
+-- its source cannot be read.
 spliceNote ::
   Declarations ->
-  Int ->
+  Maybe Text ->
   (Maybe Int, Note) ->
   Either (Doc Ann) (Declaration Annotation)
-spliceNote decls bIx x@(_, n) =
+spliceNote decls label x@(_, n) =
   maybe (Left (noteLineAtDepth x)) Right do
     sl <- n.loc
     let sp = spanFromSrcLoc sl
-        tag d = PP.pretty ("Branch " <> show bIx <> ": ") <> d
+        tag d = maybe d (\l -> PP.annotate BranchLabelAnn (PP.pretty (l <> ": ")) <> d) label
     case n.kind of
       BranchFailure diff ->
         ppFailureLocation decls (tag . PP.pretty <$> T.lines n.text) diff sp

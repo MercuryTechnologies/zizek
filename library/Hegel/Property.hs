@@ -52,16 +52,14 @@ module Hegel.Property
     -- * Finalizers
     registerFinalizer,
 
-    -- * Concurrency
-    concurrently,
-    concurrently_,
-    mapConcurrently,
-    mapConcurrently_,
-    forConcurrently,
-    forConcurrently_,
-    replicateConcurrently,
-    replicateConcurrently_,
-    replicateConcurrentlyBounded,
+    -- * Forks
+
+    -- | Only the handle type is exported here. Its operations
+    -- ('Hegel.Property.Fork.spawn', 'Hegel.Property.Fork.join', etc.) and the
+    -- bracketed 'Hegel.Property.Branch.concurrently' family are meant for
+    -- qualified import, since their bare names collide with
+    -- @Control.Concurrent.Async@\/@UnliftIO.Async@'s own.
+    Fork,
 
     -- * Assertions
     assert,
@@ -75,17 +73,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Text (Text)
 import Hegel.Assertion (assert, failure, (/==), (===))
 import Hegel.Gen.Internal (Gen)
-import Hegel.Property.Concurrent
-  ( concurrently,
-    concurrently_,
-    forConcurrently,
-    forConcurrently_,
-    mapConcurrently,
-    mapConcurrently_,
-    replicateConcurrently,
-    replicateConcurrentlyBounded,
-    replicateConcurrently_,
-  )
+import Hegel.Property.Fork (Fork)
 import Hegel.Property.Internal
   ( Property,
     PropertyT,

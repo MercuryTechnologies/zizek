@@ -1,10 +1,11 @@
 module Main (main) where
 
 import BasicProperties qualified
-import ConcurrentProperties qualified
+import BranchProperties qualified
 import ControlSignals qualified
 import DatabaseReplay qualified
 import Finalizers qualified
+import ForkProperties qualified
 import GenValidation qualified
 import Integrations qualified
 import KeyedProperties qualified
@@ -38,7 +39,8 @@ main = do
   traceModel <- testSpec "trace model" TraceModel.spec
   ledger <- testSpec "event-log rendering" LogRendering.spec
   testCaseClone <- testSpec "TestCase cloning" TestCaseClone.spec
-  concurrentProperties <- testSpec "concurrent combinators" ConcurrentProperties.spec
+  branchProperties <- testSpec "branch combinators" BranchProperties.spec
+  forkProperties <- testSpec "fork combinators" ForkProperties.spec
   defaultMain
     ( testGroup
         "zizek:unit"
@@ -60,6 +62,7 @@ main = do
           traceModel,
           ledger,
           testCaseClone,
-          concurrentProperties
+          branchProperties,
+          forkProperties
         ]
     )

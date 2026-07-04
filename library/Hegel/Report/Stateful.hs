@@ -40,7 +40,7 @@ data JournalShape
     PlainShape
   | -- | A 'Hegel.Stateful.Machine' run: the composed event-log report.
     StatefulShape
-  | -- | A 'Hegel.Property.Concurrent' combinator's branches: the per-branch
+  | -- | A 'Hegel.Property.Branch' combinator's branches: the per-branch
     -- source splice.
     ConcurrentShape
   deriving stock (Show, Eq)

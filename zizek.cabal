@@ -128,7 +128,8 @@ library
     Hegel.Phase
     Hegel.Pool
     Hegel.Property
-    Hegel.Property.Concurrent
+    Hegel.Property.Branch
+    Hegel.Property.Fork
     Hegel.Property.Internal
     Hegel.Report
     Hegel.Report.Ann
@@ -209,10 +210,11 @@ test-suite unit
   -- cabal-gild: discover tests/unit --exclude=tests/unit/Main.hs
   other-modules:
     BasicProperties
-    ConcurrentProperties
+    BranchProperties
     ControlSignals
     DatabaseReplay
     Finalizers
+    ForkProperties
     GenValidation
     Golden
     Integrations

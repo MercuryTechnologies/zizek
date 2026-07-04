@@ -26,7 +26,19 @@ import Hegel.Internal.Foreign.Raw
 import Hegel.Internal.TestCase (Handle (..), Status (..), TestCase, markComplete, mkTestCase)
 import Hegel.Internal.Tick qualified as Tick
 import Hegel.Phase (Phase)
-import Hegel.Property.Internal (Finalizers, Property, drainFinalizers, failureDetails, newFinalizers, observeProperty, propertyAction)
+import Hegel.Property.Internal
+  ( Finalizers,
+    OpenForks,
+    Property,
+    closeOpenForks,
+    collectLeaks,
+    drainFinalizers,
+    failureDetails,
+    newFinalizers,
+    newOpenForks,
+    observeProperty,
+    propertyAction,
+  )
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
 import Hegel.Settings (Settings (..))
 import UnliftIO.Exception (catch, catchAny, throwIO)
@@ -67,7 +79,7 @@ check settings prop =
         -- Read and copy everything out of the run handle before withRun frees
         -- it on bracket exit (see 'readRunOutcome').
         (nValid, nInvalid, outcome) <- withRun ctx s \run -> do
-          (nv, ni) <- driveLoop ctx (propertyAction prop) run
+          (nv, ni) <- driveLoop ctx (propertyAction settings.maxCloneDepth prop) run
           o <- readRunOutcome ctx run
           pure (nv, ni, o)
         result <- case outcome.status of
@@ -76,7 +88,7 @@ check settings prop =
             | otherwise -> pure Ok
           RunFailed -> case outcome.failure of
             Just f
-              | Just blob <- f.reproductionBlob -> reconstructProperty ctx prop s blob
+              | Just blob <- f.reproductionBlob -> reconstructProperty ctx prop s settings.maxCloneDepth blob
               | otherwise -> pure (Aborted (UnhealthyInput f.origin))
             Nothing ->
               pure (Aborted (Errored (toException (userError "run reported a failure but exposed no counterexample"))))
@@ -242,12 +254,12 @@ readRunError ctx res =
 --
 -- A replay that passes, discards, or runs out of choices did not reproduce the
 -- engine's failure and will be reported as an unexpected divergence.
-reconstructProperty :: Ptr HegelContext -> Property () -> Ptr HegelSettings -> ByteString -> IO Result
-reconstructProperty ctx prop s blob =
+reconstructProperty :: Ptr HegelContext -> Property () -> Ptr HegelSettings -> Int -> ByteString -> IO Result
+reconstructProperty ctx prop s cloneDepthLimit blob =
   withTestCaseFromBlob ctx s blob \tcPtr -> do
     recording <- Tick.newRecording
     tc <- mkTestCase recording Handle {ctx, ptr = tcPtr}
-    (eRes, notes, events) <- observeProperty tc prop
+    (eRes, notes, events) <- observeProperty cloneDepthLimit tc prop
     pure case eRes of
       Left e
         -- A discard or budget stop during replay means the engine's failure
@@ -265,7 +277,7 @@ reconstructProperty ctx prop s blob =
 
 driveLoop ::
   Ptr HegelContext ->
-  (Finalizers -> TestCase -> IO ()) ->
+  (Finalizers -> OpenForks -> TestCase -> IO ()) ->
   Ptr HegelRun ->
   IO (Int, Int)
 driveLoop ctx action run = loop 0 0
@@ -306,11 +318,12 @@ driveLoop ctx action run = loop 0 0
 -- counterexample.
 runTestCase ::
   Ptr HegelContext ->
-  (Finalizers -> TestCase -> IO ()) ->
+  (Finalizers -> OpenForks -> TestCase -> IO ()) ->
   Ptr HegelTestCase ->
   IO Status
 runTestCase ctx action tcPtr = do
   finalizers <- newFinalizers
+  forks <- newOpenForks
   -- The case's own failure origin, if it failed before teardown ran; carried
   -- into 'FinalizerFailed' so aborting on teardown does not silently drop the
   -- fact that a counterexample was in hand.
@@ -320,8 +333,13 @@ runTestCase ctx action tcPtr = do
   -- primary diagnostic and must win over a 'FinalizerFailed' the drain would
   -- raise.
   mask \restore -> do
-    result <- try $ restore $ run finalizers caseOrigin
+    result <- try $ restore $ run finalizers forks caseOrigin
     failures <- drainFinalizers finalizers
+    -- Defense in depth: 'run' already settles every fork itself, before
+    -- 'markComplete'. This only does anything if 'run' escaped via a
+    -- genuinely asynchronous exception before reaching that point, since
+    -- 'catchAny' below absorbs every synchronous one.
+    _ <- collectLeaks forks
     case result of
       -- The run threw: it takes precedence; finalizers were still drained.
       Left (e :: SomeException) -> throwIO $ NoBacktrace e
@@ -333,14 +351,14 @@ runTestCase ctx action tcPtr = do
           origin <- readIORef caseOrigin
           throwIO $ FinalizerFailed origin es
   where
-    run finalizers caseOrigin = do
+    run finalizers forks caseOrigin = do
       tc <- mkTestCase Tick.Silent Handle {ctx, ptr = tcPtr}
       status <-
         -- 'catchControl' catches only Hegel's async control signals via base
         -- 'E.catches'; 'catchAny' (unliftio) then catches all remaining
         -- synchronous exceptions and marks them as failures /except/ for
         -- 'MalformedTest', which is re-thrown so 'check' can abort the run.
-        (action finalizers tc $> Valid)
+        (action finalizers forks tc $> Valid)
           `catchControl` \case
             Assume -> pure Invalid
             -- @libhegel@ owns the choice budget but does not observe that we
@@ -349,6 +367,11 @@ runTestCase ctx action tcPtr = do
           `catchAny` \e -> case fromException e of
             Just malformed -> throwIO (malformed :: MalformedTest)
             Nothing -> pure . Interesting $ originOf e
+      -- Must settle every fork before markComplete: one still drawing
+      -- against its clone when the family completes fails with an engine
+      -- error of its own, rather than the well-formed 'MalformedTest'
+      -- 'closeOpenForks' produces here.
+      closeOpenForks forks
       case status of
         Interesting origin -> writeIORef caseOrigin (Just origin)
         _ -> pure ()

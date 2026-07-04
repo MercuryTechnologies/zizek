@@ -17,16 +17,13 @@ module Hegel
     forEachWith,
     registerFinalizer,
 
-    -- * Concurrency
-    concurrently,
-    concurrently_,
-    mapConcurrently,
-    mapConcurrently_,
-    forConcurrently,
-    forConcurrently_,
-    replicateConcurrently,
-    replicateConcurrently_,
-    replicateConcurrentlyBounded,
+    -- * Forks
+
+    -- | Only the handle type is exported here; import
+    -- "Hegel.Property.Fork" or "Hegel.Property.Branch" qualified for the
+    -- operations, since their bare names collide with
+    -- @Control.Concurrent.Async@\/@UnliftIO.Async@'s own.
+    Fork,
 
     -- * Settings and reports
     module Hegel.Settings,
@@ -55,19 +52,11 @@ import Hegel.Gen.Internal (Gen)
 import Hegel.Phase
 import Hegel.Pool
 import Hegel.Property
-  ( check_,
-    concurrently,
-    concurrently_,
-    forConcurrently,
-    forConcurrently_,
+  ( Fork,
+    check_,
     forEach,
     forEachWith,
-    mapConcurrently,
-    mapConcurrently_,
     registerFinalizer,
-    replicateConcurrently,
-    replicateConcurrentlyBounded,
-    replicateConcurrently_,
   )
 import Hegel.Property.Internal (PropertyT)
 import Hegel.Report

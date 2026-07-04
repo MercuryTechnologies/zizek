@@ -1,9 +1,9 @@
 -- | A gallery of deliberately-failing properties: the permanent eyeball
--- harness for the failure renderers. Six scenarios span the spectrum of report
--- shapes, each earning its place. Every stateful failure renders as one flat
--- chronological event log, oldest step through the failing step, then that
--- step's source splice; runs of steps unrelated to the failure collapse into
--- a single elision row:
+-- harness for the failure renderers. Eight scenarios span the spectrum of
+-- report shapes. Every stateful failure renders as
+-- one flat chronological event log, oldest step through the failing step,
+-- then that step's source splice; runs of steps unrelated to the failure
+-- collapse into a single elision row:
 --
 --   1. plain property — the non-stateful base case: drawn values splice into
 --      their source and a '(===)' failure carries a structural diff, with no
@@ -28,17 +28,25 @@
 --      roots and every step is kept — there is no step that touches neither
 --      account, so nothing elides, including the load-bearing @accrue@ step.
 --   6. concurrently — two independent branches, each on its own cloned
---      choice stream ('Hegel.Property.concurrently'), fail independently.
---      Not stateful, so no event log; below the branch-splice threshold every
---      branch renders, merged into one listing since both share this file's
---      enclosing declaration, each stacked line labeled @Branch N:@ so
---      attribution survives the merge, and each failing branch is marked and
---      spliced on its own, not only the one the case shrinks on.
+--      choice stream ('Hegel.Property.Branch.concurrently'), fail
+--      independently. Not stateful, so no event log; below the
+--      branch-splice threshold every branch renders, merged into one
+--      listing since both share this file's enclosing declaration, each
+--      stacked line labeled @Branch N:@ so attribution survives the merge,
+--      and each failing branch is marked and spliced on its own, not only
+--      the one the case shrinks on.
 --   7. fan-out — ten independent client sessions
---      ('Hegel.Property.mapConcurrently'), rigged so only client #7 ever
---      fails. Crosses the branch-splice threshold, so the nine passing
+--      ('Hegel.Property.Branch.forConcurrently'), rigged so only client #7
+--      ever fails. Crosses the branch-splice threshold, so the nine passing
 --      clients collapse into one summary line instead of flooding the report
 --      with nine near-identical splices, and only #7 splices, marked.
+--   8. fork — a worker spawned mid-property ('Hegel.Property.Fork.spawn'),
+--      alongside genuine top-level draws before and after the fork call.
+--      Where scenario 6 keeps every line inside one of two branch arguments,
+--      this property has top-level activity that renders unlabeled, with only
+--      the forked worker's own lines tagged @Fork 1:@. It runs through the
+--      same 'Hegel.Report.Concurrent' machinery as scenario 6, rendering the
+--      @Branch N@ header shape under a @Fork N@ label.
 --
 -- Run with @just gallery@ from the repo root (source splicing resolves
 -- @srcLocFile@ relative to the working directory). Every scenario renders
@@ -57,7 +65,16 @@ import Hegel.Assertion (assert)
 import Hegel.Gen qualified as Gen
 import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
-import Hegel.Property (Property, annotate, assume, concurrently_, forAll, forAllWithLabel, mapConcurrently, (===))
+import Hegel.Property
+  ( Property,
+    annotate,
+    assume,
+    forAll,
+    forAllWithLabel,
+    (===),
+  )
+import Hegel.Property.Branch qualified as Branch
+import Hegel.Property.Fork qualified as Fork
 import Hegel.Report (Report (..), renderReportRichAnsi, renderReportRichAnsiWith, renderValue)
 import Hegel.Report.Style qualified as Style
 import Hegel.Report.Style (defaultStyle)
@@ -75,6 +92,7 @@ main = do
   runTraceScenario False "5: ledger — two accounts settled, flat log" (Stateful.run ledgerMachine)
   runScenario "6: concurrently — two branches fail independently, spliced" concurrentProperty
   runScenario "7: fan-out — ten clients, only #7 fails, threshold collapses the rest" fanOutProperty
+  runScenario "8: fork — spawned worker fails independently, top-level lines unlabeled" forkedWorkerProperty
 
 runScenario :: Text -> Property () -> IO ()
 runScenario title prop = showReport title =<< check defaultSettings prop
@@ -412,7 +430,7 @@ ledgerMachine =
 -- not only the branch the case shrinks on.
 concurrentProperty :: Property ()
 concurrentProperty =
-  concurrently_
+  Branch.concurrently_
     ( do
         v <- forAll (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
         annotate ("client A drew " <> renderValue v)
@@ -435,11 +453,26 @@ concurrentProperty =
 fanOutProperty :: Property ()
 fanOutProperty = do
   _ <-
-    mapConcurrently
-      ( \i -> do
-          v <- forAll (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
-          annotate ("client " <> renderValue (i :: Int) <> " drew " <> renderValue v)
-          assert (i /= 7 || v < 30) "client stayed under budget"
-      )
-      [1 .. 10]
+    Branch.forConcurrently [1 .. 10] \i -> do
+      v <- forAll (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
+      annotate ("client " <> renderValue (i :: Int) <> " drew " <> renderValue v)
+      assert (i /= 7 || v < 30) "client stayed under budget"
   pure ()
+
+-- * Scenario 8: fork (spawn, join, independent failure)
+
+-- | A worker forked mid-property, drawing and asserting on its own cloned
+-- choice stream, alongside genuine top-level draws before and after the fork
+-- call. Unlike 'concurrentProperty', where every line lives inside one of two
+-- branch arguments, this property has top-level activity of its own: the
+-- budget draw and annotation render unlabeled, and only the forked worker's
+-- own lines carry the @Fork 1:@ tag.
+forkedWorkerProperty :: Property ()
+forkedWorkerProperty = do
+  budget <- forAll (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
+  annotate ("budget " <> renderValue budget)
+  worker <- Fork.spawn do
+    v <- forAll (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
+    annotate ("worker drew " <> renderValue v)
+    assert (v < 30) "worker: value too big"
+  Fork.join worker
