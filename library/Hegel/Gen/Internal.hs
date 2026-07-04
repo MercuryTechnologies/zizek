@@ -48,10 +48,10 @@ import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import GHC.Stack (HasCallStack)
-import Hegel.Internal.CBOR (ParseError (..))
 import Hegel.Internal.Control (AssumeRejected (..))
 import Hegel.Internal.DataSource (Label (..), generate, generateEncoded, startSpan, stopSpan)
-import Hegel.Internal.Schema qualified as Schema
+import Hegel.Internal.Foreign.CBOR (ParseError (..))
+import Hegel.Internal.Foreign.Schema qualified as Schema
 import Hegel.Internal.TestCase (TestCase)
 import Prelude hiding (either, maybe)
 

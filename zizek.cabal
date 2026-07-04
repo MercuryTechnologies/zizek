@@ -106,14 +106,14 @@ library
     Hegel.Gen.Uuid
     Hegel.HealthCheck
     Hegel.Hspec
-    Hegel.Internal.CBOR
-    Hegel.Internal.CString
     Hegel.Internal.Control
     Hegel.Internal.DataSource
     Hegel.Internal.DatabaseKey
     Hegel.Internal.Event
-    Hegel.Internal.FFI
-    Hegel.Internal.Schema
+    Hegel.Internal.Foreign.CBOR
+    Hegel.Internal.Foreign.CString
+    Hegel.Internal.Foreign.Raw
+    Hegel.Internal.Foreign.Schema
     Hegel.Internal.TestCase
     Hegel.Internal.Tick
     Hegel.Phase

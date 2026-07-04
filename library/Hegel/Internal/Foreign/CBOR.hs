@@ -4,7 +4,7 @@
 -- __Internal module.__ Implementation substrate of @zizek@ itself, exposed so
 -- you can reach past the public API when you must; it is not part of the
 -- stable public interface and may change without notice.
-module Hegel.Internal.CBOR
+module Hegel.Internal.Foreign.CBOR
   ( -- * Errors
     ParseError (..),
 

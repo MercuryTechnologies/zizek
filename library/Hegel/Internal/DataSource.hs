@@ -47,11 +47,11 @@ import Data.Text (Text)
 import Data.Word (Word64)
 import Foreign (nullPtr, peek, withArray, withMany)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt)
-import Hegel.Internal.CString qualified as CString
 import Hegel.Internal.Control (AssumeRejected (..), TestStopped (..))
 import Hegel.Internal.Event qualified as Event
-import Hegel.Internal.FFI hiding (generate)
-import Hegel.Internal.FFI qualified as FFI (generate)
+import Hegel.Internal.Foreign.CString qualified as CString
+import Hegel.Internal.Foreign.Raw hiding (generate)
+import Hegel.Internal.Foreign.Raw qualified as FFI (generate)
 import Hegel.Internal.TestCase (Handle (..), TestCase (..))
 import Hegel.Internal.Tick qualified as Tick
 import UnliftIO.Exception (catch)

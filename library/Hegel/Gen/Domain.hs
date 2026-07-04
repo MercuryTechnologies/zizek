@@ -20,9 +20,9 @@ where
 import Data.Text (Text)
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Internal (basic)
-import Hegel.Internal.CBOR (hegelText)
-import Hegel.Internal.Schema (DomainSchema (maxLength))
-import Hegel.Internal.Schema qualified as Schema
+import Hegel.Internal.Foreign.CBOR (hegelText)
+import Hegel.Internal.Foreign.Schema (DomainSchema (maxLength))
+import Hegel.Internal.Foreign.Schema qualified as Schema
 
 data DomainBuilder = DomainBuilder
   { bMaxLength :: !(Maybe Int)
