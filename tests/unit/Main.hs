@@ -13,6 +13,7 @@ import LogRendering qualified
 import PoolEvents qualified
 import PropertyChecks qualified
 import ReportRendering qualified
+import Resources qualified
 import SourceRendering qualified
 import StandardGenerators qualified
 import Stateful qualified
@@ -35,6 +36,7 @@ main = do
   keyed <- testSpec "keyed properties" KeyedProperties.spec
   stateful <- testSpec "stateful testing" Stateful.spec
   finalizers <- testSpec "finalizers" Finalizers.spec
+  resources <- testSpec "resources" Resources.spec
   poolEvents <- testSpec "pool events" PoolEvents.spec
   traceModel <- testSpec "trace model" TraceModel.spec
   ledger <- testSpec "event-log rendering" LogRendering.spec
@@ -58,6 +60,7 @@ main = do
           KeyedProperties.tastyTree,
           stateful,
           finalizers,
+          resources,
           poolEvents,
           traceModel,
           ledger,

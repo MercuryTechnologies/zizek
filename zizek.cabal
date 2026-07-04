@@ -223,6 +223,7 @@ test-suite unit
     PoolEvents
     PropertyChecks
     ReportRendering
+    Resources
     SourceRendering
     StandardGenerators
     Stateful

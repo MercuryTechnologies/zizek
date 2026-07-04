@@ -16,6 +16,8 @@ module Hegel
     forEach,
     forEachWith,
     registerFinalizer,
+    resource,
+    resource_,
 
     -- * Forks
 
@@ -57,6 +59,8 @@ import Hegel.Property
     forEach,
     forEachWith,
     registerFinalizer,
+    resource,
+    resource_,
   )
 import Hegel.Property.Internal (PropertyT)
 import Hegel.Report

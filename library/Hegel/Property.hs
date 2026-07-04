@@ -51,6 +51,8 @@ module Hegel.Property
 
     -- * Finalizers
     registerFinalizer,
+    resource,
+    resource_,
 
     -- * Forks
 
@@ -88,6 +90,8 @@ import Hegel.Property.Internal
     forAllWithLabel,
     hoist,
     registerFinalizer,
+    resource,
+    resource_,
   )
 import Hegel.Report (throwOnFailure)
 import Hegel.Runner (check)

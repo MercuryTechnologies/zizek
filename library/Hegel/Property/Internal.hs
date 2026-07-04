@@ -4,6 +4,8 @@ module Hegel.Property.Internal
     Property,
     Env (..),
     Journal (..),
+    Scope (..),
+    withScope,
     hoist,
 
     -- * Draws
@@ -29,6 +31,8 @@ module Hegel.Property.Internal
     newFinalizers,
     registerFinalizer,
     drainFinalizers,
+    resource,
+    resource_,
 
     -- * Open forks
     OpenForks,
@@ -99,6 +103,23 @@ data Journal
   = Silent
   | Recording !(Note -> IO ())
 
+-- | How restricted the ambient context is for primitives like 'resource'
+-- whose release is deferred to the case boundary.
+--
+-- Ordered least to most restrictive. 'withScope' only ever raises the
+-- ambient scope via 'max', so 'InStep', the type's maximum, absorbs any other
+-- scope once a call chain has entered it and cannot be downgraded by
+-- anything nested inside.
+data Scope
+  = -- | The default: no restriction from this mechanism.
+    Unrestricted
+  | -- | A stateful machine's per-case setup, e.g. @Machine.initial@.
+    CaseSetup
+  | -- | A stateful rule's @apply@ or an invariant's @check@, either of which
+    -- may run any number of times in one case.
+    InStep
+  deriving stock (Eq, Ord, Show)
+
 -- | The per-test-case environment a property runs against.
 data Env = Env
   { testCase :: !TestCase,
@@ -115,7 +136,9 @@ data Env = Env
     cloneDepth :: !Int,
     -- | Ceiling 'cloneDepth' is checked against before acquiring another
     -- clone, constant for the whole run.
-    cloneDepthLimit :: !Int
+    cloneDepthLimit :: !Int,
+    -- | The ambient 'Scope' for the current context, raised by 'withScope'.
+    scope :: !Scope
   }
 
 -- | A property: test logic interleaved with generator draws against a live
@@ -192,6 +215,15 @@ journalNote kind loc text = PropertyT do
 nested :: PropertyT m a -> PropertyT m a
 nested (PropertyT r) = PropertyT $ local (\e -> e {noteDepth = e.noteDepth + 1}) r
 {-# INLINE nested #-}
+
+-- | Run a property with its ambient 'Scope' raised to at least @s@.
+--
+-- 'Hegel.Stateful' uses this to mark a rule's @apply@ and an invariant's
+-- @check@ as 'InStep', so 'resource' can refuse to run somewhere its release
+-- would never fire between applications.
+withScope :: Scope -> PropertyT m a -> PropertyT m a
+withScope s (PropertyT r) = PropertyT $ local (\e -> e {scope = max s e.scope}) r
+{-# INLINE withScope #-}
 
 -- | Draw a value from a generator mid-test.
 --
@@ -339,7 +371,7 @@ newFinalizers = Finalizers <$> newIORef []
 -- * __Acquire, then register, with no draw in between__: a draw ('forAll') can
 --   discard or stop the case, so acquiring a resource and then drawing before
 --   'registerFinalizer' runs leaks it on that path. Register immediately after
---   acquisition.
+--   acquisition, or use 'resource' to pair the two atomically.
 --
 -- * __Must return promptly__: finalizers drain under
 --   'Control.Exception.uninterruptibleMask_', so one that blocks indefinitely
@@ -360,6 +392,51 @@ registerFinalizer act = do
   -- not lose each other's entries.
   liftIO (atomicModifyIORef' ref \xs -> (act : xs, ()))
 {-# INLINEABLE registerFinalizer #-}
+
+-- | Acquire a resource and register its release as a per-case finalizer in
+-- one step, so no draw can slip in between acquisition and registration.
+--
+-- Release runs at the end of the enclosing scope: the case boundary on the
+-- live run, every shrink probe, and the reconstruction replay, or a branch's
+-- own exit when called inside 'Hegel.Property.Branch.concurrently' or
+-- 'Hegel.Property.Fork.spawn'. That is what gives a resource like a database
+-- transaction its per-case isolation.
+--
+-- Throws 'MalformedTest' when called from a stateful rule's @apply@ or an
+-- invariant's @check@. Either may run any number of times in one case, so a
+-- release deferred to scope end would never fire between applications;
+-- acquire case-scoped resources in a stateful 'Hegel.Stateful.Machine'\'s
+-- @initial@ instead, or use
+-- 'Control.Exception.bracket'\/'Control.Exception.finally' for cleanup
+-- scoped to one step.
+resource :: (MonadIO m) => IO a -> (a -> IO ()) -> PropertyT m a
+resource open close = do
+  env <- askEnv
+  when (env.scope >= InStep) $ liftIO (E.throwIO (MalformedTest inStepMessage))
+  let Finalizers ref = env.finalizers
+  -- Acquire and register as one step under 'E.mask_': an async exception
+  -- landing between the two, e.g. a sibling branch failing or a fork being
+  -- cancelled, would otherwise leak the resource with nothing registered yet
+  -- to release it.
+  liftIO $ E.mask_ do
+    a <- open
+    atomicModifyIORef' ref \xs -> (close a : xs, ())
+    pure a
+{-# INLINEABLE resource #-}
+
+-- | 'resource' for setup/teardown with no handle to thread through.
+resource_ :: (MonadIO m) => IO () -> IO () -> PropertyT m ()
+resource_ open close = resource open (const close)
+{-# INLINEABLE resource_ #-}
+
+-- | Describe why 'resource' refused to run.
+inStepMessage :: Text
+inStepMessage =
+  "resource: called inside a stateful rule's apply or an invariant's check. \
+  \A rule or invariant can run any number of times per case, so its \
+  \case-scoped release would never fire between applications. Acquire it in \
+  \Machine.initial instead, or use Control.Exception.bracket/finally for \
+  \cleanup scoped to one step."
 
 -- * Open forks
 
@@ -525,6 +602,7 @@ runBranch runBase parentEnv testCase body = do
           { testCase,
             journal = branchJournal,
             noteDepth = parentEnv.noteDepth + 1,
+            scope = parentEnv.scope,
             finalizers,
             openForks,
             cloneDepth = parentEnv.cloneDepth + 1,
@@ -563,7 +641,7 @@ runPropertyT env (PropertyT r) = runReaderT r env
 propertyAction :: Int -> Property () -> Finalizers -> OpenForks -> TestCase -> IO ()
 propertyAction cloneDepthLimit prop finalizers openForks testCase =
   runPropertyT
-    Env {testCase, journal = Silent, noteDepth = 0, finalizers, openForks, cloneDepth = 0, cloneDepthLimit}
+    Env {testCase, journal = Silent, noteDepth = 0, finalizers, openForks, cloneDepth = 0, cloneDepthLimit, scope = Unrestricted}
     prop
 
 -- | Run every registered finalizer, LIFO, capturing each one's exception so a
@@ -597,7 +675,7 @@ observeProperty cloneDepthLimit testCase prop = do
   eRes <-
     tryProperty
       ( runPropertyT
-          Env {testCase, journal = Recording record, noteDepth = 0, finalizers, openForks, cloneDepth = 0, cloneDepthLimit}
+          Env {testCase, journal = Recording record, noteDepth = 0, finalizers, openForks, cloneDepth = 0, cloneDepthLimit, scope = Unrestricted}
           prop
       )
       `E.onException` (drainFinalizers finalizers *> void (collectLeaks openForks))

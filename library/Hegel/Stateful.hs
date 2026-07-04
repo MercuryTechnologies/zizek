@@ -73,11 +73,13 @@ import Hegel.Property.Internal
   ( Env (..),
     Journal (..),
     PropertyT,
+    Scope (..),
     askEnv,
     failureDetails,
     nested,
     note,
     noteFailure,
+    withScope,
   )
 import Hegel.Report (NoteKind (Annotation, Response, StepHeader), renderValue)
 import UnliftIO (MonadUnliftIO, throwIO, withRunInIO)
@@ -185,11 +187,11 @@ run machine = do
       -- step header, via 'nested'.
       checkInvariants s =
         forM_ machine.invariants \invariant ->
-          nested (withFailureNote (invariant.check s))
+          nested (withFailureNote (withScope InStep (invariant.check s)))
 
   machineId <- liftIO (newStateMachine tc (map (.name) machine.rules) (map (.name) machine.invariants))
 
-  s0 <- withFailureNote machine.initial
+  s0 <- withFailureNote (withScope CaseSetup machine.initial)
   stepNote "Initial invariant check."
   checkInvariants s0
 
@@ -230,7 +232,7 @@ run machine = do
                 -- propagates out to the runner as the counterexample.
                 verdict <-
                   withRunInIO \runInIO ->
-                    (Right <$> runInIO (nested (withFailureNote (rule.apply s))))
+                    (Right <$> runInIO (nested (withFailureNote (withScope InStep (rule.apply s)))))
                       `catchControl` (pure . Left)
                 case verdict of
                   Right s' -> do
