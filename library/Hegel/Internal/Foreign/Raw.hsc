@@ -6,8 +6,8 @@
 -- 'foreign import ccall' declaration together with phantom types representing
 -- handles to C constructs, error-code pattern synonyms, and bracket helpers.
 --
--- Not yet bound: @hegel_generate_date@\/@_time@\/@_datetime@,
--- @hegel_generate_ipv4@\/@_ipv6@, and @hegel_string_generator_email@.
+-- Not yet bound: @hegel_generate_ipv4@\/@_ipv6@ and
+-- @hegel_string_generator_email@.
 --
 -- __Calling convention__: every @libhegel@ entry point takes a
 -- @hegel_context_t*@ as its first argument and returns a @hegel_result_t@,
@@ -42,6 +42,9 @@ module Hegel.Internal.Foreign.Raw
     -- $typedrawresults
     HegelBytesResult (..),
     HegelStringResult (..),
+    HegelDate (..),
+    HegelTime (..),
+    HegelDatetime (..),
 
     -- * Error types
     -- $errortypes
@@ -186,6 +189,9 @@ module Hegel.Internal.Foreign.Raw
     hegel_generate_bytes,
     hegel_generate_bytes_result_free,
     hegel_generate_uuid,
+    hegel_generate_date,
+    hegel_generate_time,
+    hegel_generate_datetime,
     hegel_string_generator_text,
     hegel_string_generator_regex,
     hegel_string_generator_url,
@@ -235,7 +241,7 @@ import Control.Exception (Exception (..), bracket, throwIO)
 import Control.Monad (void)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
-import Data.Int (Int64)
+import Data.Int (Int32, Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -317,6 +323,70 @@ instance Storable HegelStringResult where
   poke p v = do
     (#poke hegel_generate_string_result_t, data) p v.resultData
     (#poke hegel_generate_string_result_t, len) p v.resultLen
+
+-- | Mirrors @hegel_date_t@: a proleptic Gregorian calendar date, with @year@
+-- in @[-999999, 999999]@, @month@ in @[1, 12]@, and @day@ bounded by the
+-- days in that month.
+data HegelDate = HegelDate
+  { year :: !Int32,
+    month :: !Word8,
+    day :: !Word8
+  }
+
+instance Storable HegelDate where
+  sizeOf _ = (#size hegel_date_t)
+  alignment _ = (#alignment hegel_date_t)
+  peek p =
+    HegelDate
+      <$> (#peek hegel_date_t, year) p
+      <*> (#peek hegel_date_t, month) p
+      <*> (#peek hegel_date_t, day) p
+  poke p v = do
+    (#poke hegel_date_t, year) p v.year
+    (#poke hegel_date_t, month) p v.month
+    (#poke hegel_date_t, day) p v.day
+
+-- | Mirrors @hegel_time_t@: a time of day, with @hour@ in @[0, 23]@,
+-- @minute@\/@second@ in @[0, 59]@, and @microsecond@ in @[0, 999999]@.
+data HegelTime = HegelTime
+  { hour :: !Word8,
+    minute :: !Word8,
+    second :: !Word8,
+    microsecond :: !Word32
+  }
+
+instance Storable HegelTime where
+  sizeOf _ = (#size hegel_time_t)
+  alignment _ = (#alignment hegel_time_t)
+  peek p =
+    HegelTime
+      <$> (#peek hegel_time_t, hour) p
+      <*> (#peek hegel_time_t, minute) p
+      <*> (#peek hegel_time_t, second) p
+      <*> (#peek hegel_time_t, microsecond) p
+  poke p v = do
+    (#poke hegel_time_t, hour) p v.hour
+    (#poke hegel_time_t, minute) p v.minute
+    (#poke hegel_time_t, second) p v.second
+    (#poke hegel_time_t, microsecond) p v.microsecond
+
+-- | Mirrors @hegel_datetime_t@: a naive date and time of day, with no
+-- timezone.
+data HegelDatetime = HegelDatetime
+  { date :: !HegelDate,
+    time :: !HegelTime
+  }
+
+instance Storable HegelDatetime where
+  sizeOf _ = (#size hegel_datetime_t)
+  alignment _ = (#alignment hegel_datetime_t)
+  peek p =
+    HegelDatetime
+      <$> (#peek hegel_datetime_t, date) p
+      <*> (#peek hegel_datetime_t, time) p
+  poke p v = do
+    (#poke hegel_datetime_t, date) p v.date
+    (#poke hegel_datetime_t, time) p v.time
 
 -- $errortypes
 --
@@ -904,10 +974,11 @@ foreign import ccall unsafe "hegel_state_machine_next_rule"
 
 -- $typeddraws
 --
--- One typed draw per primitive (bool, integer, float, bytes, uuid, string).
--- There is no server-side compound generation: lists, sets, maps,
--- tuples, and choices are composed client-side from spans + 'hegel_new_collection'
--- (see "Hegel.Collection" and "Hegel.Gen.Internal").
+-- One typed draw per primitive (bool, integer, float, bytes, uuid, date,
+-- time, datetime, string). There is no server-side compound generation:
+-- lists, sets, maps, tuples, and choices are composed client-side from
+-- spans + 'hegel_new_collection' (see "Hegel.Collection" and
+-- "Hegel.Gen.Internal").
 --
 -- String draws are two-step: build an immutable, caller-owned
 -- 'HegelStringGenerator' once via a @hegel_string_generator_*@ constructor
@@ -1038,6 +1109,55 @@ foreign import ccall unsafe "hegel_generate_uuid"
     -> Word8    -- ^ @version@ (used only when @has_version@ is set)
     -> CBool    -- ^ @has_version@
     -> Ptr Word8 -- ^ out: 16 big-endian bytes
+    -> IO CInt
+
+-- | Draw a Gregorian calendar date in @[min_value, max_value]@ (both
+-- inclusive), shrinking toward 2000-01-01, or the nearest bound when that is
+-- out of range. Calls through @cbits/datetime_shim.c@, which takes the
+-- bounds by pointer since GHC's FFI cannot pass a C struct by value.
+--
+-- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted. Returns
+-- 'HEGEL_E_INVALID_ARG' for an invalid calendar date in either bound, or
+-- @min_value > max_value@.
+foreign import ccall unsafe "hegel_zizek_generate_date"
+  hegel_generate_date
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Ptr HegelDate -- ^ @min_value@
+    -> Ptr HegelDate -- ^ @max_value@
+    -> Ptr HegelDate -- ^ out: drawn value
+    -> IO CInt
+
+-- | Draw a time of day in @[min_value, max_value]@ (both inclusive),
+-- shrinking toward @min_value@, the representable time closest to midnight.
+-- Calls through @cbits/datetime_shim.c@; see 'hegel_generate_date'.
+--
+-- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted. Returns
+-- 'HEGEL_E_INVALID_ARG' for an out-of-range field in either bound, or
+-- @min_value > max_value@.
+foreign import ccall unsafe "hegel_zizek_generate_time"
+  hegel_generate_time
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Ptr HegelTime -- ^ @min_value@
+    -> Ptr HegelTime -- ^ @max_value@
+    -> Ptr HegelTime -- ^ out: drawn value
+    -> IO CInt
+
+-- | Draw a naive datetime, no timezone, in @[min_value, max_value]@ (both
+-- inclusive), shrinking toward 2000-01-01T00:00:00 clamped into range.
+-- Calls through @cbits/datetime_shim.c@; see 'hegel_generate_date'.
+--
+-- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted. Returns
+-- 'HEGEL_E_INVALID_ARG' for an invalid date or time in either bound, or
+-- @min_value > max_value@.
+foreign import ccall unsafe "hegel_zizek_generate_datetime"
+  hegel_generate_datetime
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Ptr HegelDatetime -- ^ @min_value@
+    -> Ptr HegelDatetime -- ^ @max_value@
+    -> Ptr HegelDatetime -- ^ out: drawn value
     -> IO CInt
 
 -- | Build a __text__ string generator: strings with length in

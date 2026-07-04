@@ -13,6 +13,7 @@
 -- > gen5 = Gen.text  & Gen.minSize 1 & Gen.maxSize 64           & Gen.build
 -- > gen6 = Gen.char                                             & Gen.build
 -- > gen7 = Gen.regex "[a-z]+" & Gen.fullMatch                   & Gen.build
+-- > gen8 = Gen.date                                             & Gen.build
 --
 -- Applying a modifier that doesn't belong to a builder (e.g.
 -- @Gen.integral & Gen.disallowNan@) is a type error.
@@ -28,6 +29,7 @@ module Hegel.Gen
     HasMin (min),
     HasMax (max),
     HasSize (minSize, maxSize),
+    HasYear (minYear, maxYear),
     HasAlphabet (alphabet),
 
     -- * Boolean
@@ -127,6 +129,27 @@ module Hegel.Gen
     domain,
     maxLength,
 
+    -- * Date
+    DateBuilder,
+    date,
+
+    -- * Time
+    TimeBuilder,
+    time,
+
+    -- * DateTime
+    DateTimeBuilder,
+    datetime,
+    onDay,
+
+    -- * Duration
+    DurationBuilder,
+    duration,
+    milliseconds,
+    seconds,
+    minutes,
+    hours,
+
     -- * Regex
     RegexBuilder,
     regex,
@@ -158,7 +181,7 @@ where
 
 import Hegel.Gen.Binary (BinaryBuilder, binary)
 import Hegel.Gen.Bool (BoolBuilder, bool, weighted)
-import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasSize (..))
+import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasSize (..), HasYear (..))
 import Hegel.Gen.Char
   ( CharBuilder,
     Codec (..),
@@ -172,7 +195,10 @@ import Hegel.Gen.Char
     maxCodepoint,
     minCodepoint,
   )
+import Hegel.Gen.Date (DateBuilder, date)
+import Hegel.Gen.DateTime (DateTimeBuilder, datetime, onDay)
 import Hegel.Gen.Domain (DomainBuilder, domain, maxLength)
+import Hegel.Gen.Duration (DurationBuilder, duration, hours, milliseconds, minutes, seconds)
 import Hegel.Gen.Float
   ( FloatBuilder,
     disallowInfinity,
@@ -223,6 +249,7 @@ import Hegel.Gen.Map (MapBuilder, map)
 import Hegel.Gen.Regex (RegexBuilder, fullMatch, regex)
 import Hegel.Gen.Set (SetBuilder, set)
 import Hegel.Gen.Text (TextBuilder, text)
+import Hegel.Gen.Time (TimeBuilder, time)
 import Hegel.Gen.Uri (UriBuilder, UriTextBuilder, uri, uriText)
 import Hegel.Gen.Uuid (UuidBuilder, uuid, version)
 import Hegel.Internal.TestCase (TestCase)

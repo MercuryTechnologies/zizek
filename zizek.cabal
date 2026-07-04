@@ -75,6 +75,7 @@ common library
     prettyprinter-ansi-terminal ^>=1.1,
     tasty ^>=1.5,
     text ^>=2.1,
+    time ^>=1.12 || ^>=1.14,
     transformers ^>=0.6,
     unliftio ^>=0.2,
     unordered-containers ^>=0.2,
@@ -86,6 +87,7 @@ library
   import: library
   hs-source-dirs: library
   pkgconfig-depends: hegel
+  c-sources: cbits/datetime_shim.c
   -- cabal-gild: discover library
   exposed-modules:
     Hegel
@@ -99,7 +101,10 @@ library
     Hegel.Gen.Bool
     Hegel.Gen.Builder
     Hegel.Gen.Char
+    Hegel.Gen.Date
+    Hegel.Gen.DateTime
     Hegel.Gen.Domain
+    Hegel.Gen.Duration
     Hegel.Gen.Float
     Hegel.Gen.HashMap
     Hegel.Gen.HashSet
@@ -113,6 +118,7 @@ library
     Hegel.Gen.Regex
     Hegel.Gen.Set
     Hegel.Gen.Text
+    Hegel.Gen.Time
     Hegel.Gen.Uri
     Hegel.Gen.Uuid
     Hegel.HealthCheck

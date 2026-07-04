@@ -9,6 +9,7 @@ module Hegel.Gen.Builder
     HasMin (..),
     HasMax (..),
     HasSize (..),
+    HasYear (..),
 
     -- * Validation
     -- $validation
@@ -42,6 +43,16 @@ class HasMax b a | b -> a where
 class HasSize b where
   minSize :: Int -> b -> b
   maxSize :: Int -> b -> b
+
+-- | Builders that accept a bound expressed as a whole calendar year, e.g.
+-- bounding a date by year alone instead of spelling out a full Gregorian
+-- date for the first and last day.
+class HasYear b where
+  -- | Set the lower bound to January 1st of the given year.
+  minYear :: Integer -> b -> b
+
+  -- | Set the upper bound to December 31st of the given year.
+  maxYear :: Integer -> b -> b
 
 -- $validation
 -- 'build' is pure, so a misconfigured builder can only be caught once its

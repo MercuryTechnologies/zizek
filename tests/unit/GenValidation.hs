@@ -8,6 +8,8 @@ module GenValidation (spec) where
 
 import Data.Function ((&))
 import Data.Text qualified as T
+import Data.Time.Calendar (fromGregorian)
+import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), midnight)
 import Hegel (prop)
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Builder (GenValidationError (..), checkNonNegative, checkOrdered, checkOrderedMaybe, checkSizeBounds)
@@ -144,3 +146,67 @@ spec = do
       it "rejects a NaN bound" $ do
         prop (Gen.double & Gen.min (0 / 0) & Gen.build) (\_ -> pure ())
           `shouldThrow` messageContains "Hegel.Gen.Float"
+
+    describe "Gen.date" $ do
+      it "rejects an inverted min/max" $ do
+        prop (Gen.date & Gen.min (fromGregorian 2000 1 2) & Gen.max (fromGregorian 2000 1 1) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Date"
+
+      it "rejects a year above libhegel's representable range" $ do
+        prop (Gen.date & Gen.min (fromGregorian 1000000 1 1) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Date"
+
+      it "rejects a year below libhegel's representable range" $ do
+        prop (Gen.date & Gen.max (fromGregorian (-1000000) 1 1) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Date"
+
+      it "rejects a minYear above libhegel's representable range" $ do
+        prop (Gen.date & Gen.minYear 1000000 & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Date"
+
+    describe "Gen.time" $ do
+      it "rejects an inverted min/max" $ do
+        prop (Gen.time & Gen.min (TimeOfDay 12 0 0) & Gen.max (TimeOfDay 6 0 0) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Time"
+
+      it "rejects an hour above 23" $ do
+        prop (Gen.time & Gen.max (TimeOfDay 24 0 0) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Time"
+
+      it "rejects a minute above 59" $ do
+        prop (Gen.time & Gen.max (TimeOfDay 23 60 0) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Time"
+
+      it "rejects a leap-second bound" $ do
+        prop (Gen.time & Gen.max (TimeOfDay 23 59 60) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Time"
+
+      it "rejects a bound finer than microsecond resolution" $ do
+        prop (Gen.time & Gen.max (TimeOfDay 0 0 0.0000005) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Time"
+
+    describe "Gen.datetime" $ do
+      it "rejects an inverted min/max" $ do
+        let lo = LocalTime (fromGregorian 2000 1 2) midnight
+            hi = LocalTime (fromGregorian 2000 1 1) midnight
+        prop (Gen.datetime & Gen.min lo & Gen.max hi & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.DateTime"
+
+      it "rejects a year outside libhegel's representable range, attributed to Gen.DateTime" $ do
+        let hi = LocalTime (fromGregorian 1000000 1 1) midnight
+        prop (Gen.datetime & Gen.max hi & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.DateTime"
+
+      it "rejects an out-of-range time-of-day field, attributed to Gen.DateTime" $ do
+        let hi = LocalTime (fromGregorian 2000 1 1) (TimeOfDay 24 0 0)
+        prop (Gen.datetime & Gen.max hi & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.DateTime"
+
+    describe "Gen.duration" $ do
+      it "rejects an inverted min/max" $ do
+        prop (Gen.duration & Gen.min 20 & Gen.max 10 & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Duration"
+
+      it "rejects a negative min" $ do
+        prop (Gen.duration & Gen.min (-1) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Duration"

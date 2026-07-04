@@ -24,6 +24,9 @@ module Hegel.Internal.DataSource
     drawFloat,
     drawBytes,
     drawUuid,
+    drawDate,
+    drawTime,
+    drawDatetime,
     drawString,
     TextSpec (..),
     buildTextGen,
@@ -67,6 +70,7 @@ import Control.Monad (void)
 import Data.Bits (bit, shiftL, shiftR, testBit, (.&.))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
+import Data.Fixed (Fixed (MkFixed), Pico)
 import Data.IORef (IORef, newIORef, readIORef)
 #ifdef HEGEL_CENSUS
 import Data.IORef (atomicModifyIORef')
@@ -76,8 +80,10 @@ import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Data.Time.Calendar (Day, fromGregorianValid, toGregorian)
+import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), makeTimeOfDayValid)
 import Data.Word (Word32, Word64, Word8)
-import Foreign (ForeignPtr, Ptr, alloca, allocaBytes, castPtr, nullPtr, peek, withArray, withForeignPtr, withMany)
+import Foreign (ForeignPtr, Ptr, alloca, allocaBytes, castPtr, nullPtr, peek, with, withArray, withForeignPtr, withMany)
 import Foreign.C.String (CString)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt, CSize (..))
 import Foreign.Concurrent qualified as Concurrent
@@ -258,6 +264,95 @@ drawUuid tc mVersion =
       outBytes
       >>= handleReturnCode tc
     BS.packCStringLen (castPtr outBytes, 16)
+
+-- | Draw a date in the inclusive range @[lo, hi]@, shrinking toward
+-- 2000-01-01 or the nearest bound in range.
+--
+-- Throws 'TestStopped' on exhaustion.
+drawDate :: TestCase -> Day -> Day -> IO Day
+drawDate tc lo hi =
+  with (dayToHegelDate lo) \loPtr ->
+    with (dayToHegelDate hi) \hiPtr ->
+      alloca \outPtr -> do
+        hegel_generate_date tc.handle.ctx tc.handle.ptr loPtr hiPtr outPtr >>= handleReturnCode tc
+        out <- peek outPtr
+        case hegelDateToDay out of
+          Just d -> pure d
+          Nothing ->
+            throwIO InvariantViolation {detail = "libhegel: date draw returned an invalid calendar date"}
+
+-- | Draw a time of day in the inclusive range @[lo, hi]@, shrinking toward
+-- @lo@.
+--
+-- Throws 'TestStopped' on exhaustion.
+drawTime :: TestCase -> TimeOfDay -> TimeOfDay -> IO TimeOfDay
+drawTime tc lo hi =
+  with (timeOfDayToHegelTime lo) \loPtr ->
+    with (timeOfDayToHegelTime hi) \hiPtr ->
+      alloca \outPtr -> do
+        hegel_generate_time tc.handle.ctx tc.handle.ptr loPtr hiPtr outPtr >>= handleReturnCode tc
+        out <- peek outPtr
+        case hegelTimeToTimeOfDay out of
+          Just t -> pure t
+          Nothing ->
+            throwIO InvariantViolation {detail = "libhegel: time draw returned an invalid time of day"}
+
+-- | Draw a naive datetime, no timezone, in the inclusive range @[lo, hi]@,
+-- shrinking toward 2000-01-01T00:00:00 clamped into range.
+--
+-- Throws 'TestStopped' on exhaustion.
+drawDatetime :: TestCase -> LocalTime -> LocalTime -> IO LocalTime
+drawDatetime tc lo hi =
+  with (localTimeToHegelDatetime lo) \loPtr ->
+    with (localTimeToHegelDatetime hi) \hiPtr ->
+      alloca \outPtr -> do
+        hegel_generate_datetime tc.handle.ctx tc.handle.ptr loPtr hiPtr outPtr >>= handleReturnCode tc
+        out <- peek outPtr
+        case hegelDatetimeToLocalTime out of
+          Just lt -> pure lt
+          Nothing ->
+            throwIO InvariantViolation {detail = "libhegel: datetime draw returned an invalid date or time"}
+
+dayToHegelDate :: Day -> HegelDate
+dayToHegelDate d = HegelDate {year = fromIntegral y, month = fromIntegral m, day = fromIntegral dd}
+  where
+    (y, m, dd) = toGregorian d
+
+hegelDateToDay :: HegelDate -> Maybe Day
+hegelDateToDay hd = fromGregorianValid (fromIntegral hd.year) (fromIntegral hd.month) (fromIntegral hd.day)
+
+timeOfDayToHegelTime :: TimeOfDay -> HegelTime
+timeOfDayToHegelTime t =
+  HegelTime {hour = fromIntegral t.todHour, minute = fromIntegral t.todMin, second = wholeSeconds, microsecond = micros}
+  where
+    (wholeSeconds, micros) = picoToMicros t.todSec
+
+hegelTimeToTimeOfDay :: HegelTime -> Maybe TimeOfDay
+hegelTimeToTimeOfDay ht =
+  makeTimeOfDayValid (fromIntegral ht.hour) (fromIntegral ht.minute) (microsToPico ht.second ht.microsecond)
+
+localTimeToHegelDatetime :: LocalTime -> HegelDatetime
+localTimeToHegelDatetime lt =
+  HegelDatetime {date = dayToHegelDate lt.localDay, time = timeOfDayToHegelTime lt.localTimeOfDay}
+
+hegelDatetimeToLocalTime :: HegelDatetime -> Maybe LocalTime
+hegelDatetimeToLocalTime hdt = LocalTime <$> hegelDateToDay hdt.date <*> hegelTimeToTimeOfDay hdt.time
+
+-- | Split a time-of-day second component into whole seconds and a
+-- microsecond count. Callers must ensure @s@ carries no finer-than-microsecond
+-- precision; 'Hegel.Gen.Time.checkFields' rejects such a bound before this
+-- ever runs.
+picoToMicros :: Pico -> (Word8, Word32)
+picoToMicros (MkFixed ps) = (fromInteger wholeSeconds, fromInteger micros)
+  where
+    (wholeSeconds, remainder) = ps `divMod` 1_000_000_000_000
+    micros = remainder `div` 1_000_000
+
+-- | Combine a whole second count and a microsecond count into a
+-- picosecond-precision time-of-day second component.
+microsToPico :: Word8 -> Word32 -> Pico
+microsToPico wholeSeconds micros =
+  MkFixed (toInteger wholeSeconds * 1_000_000_000_000 + toInteger micros * 1_000_000)
 
 -- | Draw a string from a generator built by a @build*Gen@ constructor below.
 --

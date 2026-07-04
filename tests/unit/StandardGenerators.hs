@@ -3,6 +3,9 @@ module StandardGenerators (spec) where
 import Data.ByteString qualified as BS
 import Data.Function ((&))
 import Data.Text qualified as T
+import Data.Time.Calendar (fromGregorian)
+import Data.Time.Clock (NominalDiffTime)
+import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), midnight)
 import Hegel (Gen, prop)
 import Hegel.Gen qualified as Gen
 import Hegel.HealthCheck (HealthCheck (..))
@@ -231,6 +234,134 @@ spec = do
     it "respects maxLength" $ do
       prop (Gen.domain & Gen.maxLength 30 & Gen.build) $ \t ->
         T.length t `shouldSatisfy` (<= 30)
+
+  describe "Gen.date" $ do
+    it "draws Day values" $ do
+      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.date & Gen.build) $ \_ -> pure ()
+
+    it "respects lower bound" $ do
+      prop (Gen.date & Gen.min (fromGregorian 2000 1 1) & Gen.build) $ \d ->
+        d `shouldSatisfy` (>= fromGregorian 2000 1 1)
+
+    it "respects upper bound" $ do
+      prop (Gen.date & Gen.max (fromGregorian 2000 12 31) & Gen.build) $ \d ->
+        d `shouldSatisfy` (<= fromGregorian 2000 12 31)
+
+    it "respects both bounds" $ do
+      prop (Gen.date & Gen.min (fromGregorian 2000 1 1) & Gen.max (fromGregorian 2000 1 31) & Gen.build) $ \d -> do
+        d `shouldSatisfy` (>= fromGregorian 2000 1 1)
+        d `shouldSatisfy` (<= fromGregorian 2000 1 31)
+
+    it "respects minYear" $ do
+      prop (Gen.date & Gen.minYear 2000 & Gen.build) $ \d ->
+        d `shouldSatisfy` (>= fromGregorian 2000 1 1)
+
+    it "respects maxYear" $ do
+      prop (Gen.date & Gen.maxYear 2000 & Gen.build) $ \d ->
+        d `shouldSatisfy` (<= fromGregorian 2000 12 31)
+
+    it "respects both minYear and maxYear" $ do
+      prop (Gen.date & Gen.minYear 2000 & Gen.maxYear 2000 & Gen.build) $ \d -> do
+        d `shouldSatisfy` (>= fromGregorian 2000 1 1)
+        d `shouldSatisfy` (<= fromGregorian 2000 12 31)
+
+  describe "Gen.time" $ do
+    it "draws TimeOfDay values" $ do
+      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.time & Gen.build) $ \_ -> pure ()
+
+    it "respects lower bound" $ do
+      prop (Gen.time & Gen.min (TimeOfDay 12 0 0) & Gen.build) $ \t ->
+        t `shouldSatisfy` (>= TimeOfDay 12 0 0)
+
+    it "respects upper bound" $ do
+      prop (Gen.time & Gen.max (TimeOfDay 12 0 0) & Gen.build) $ \t ->
+        t `shouldSatisfy` (<= TimeOfDay 12 0 0)
+
+    it "respects both bounds" $ do
+      prop (Gen.time & Gen.min (TimeOfDay 8 0 0) & Gen.max (TimeOfDay 17 0 0) & Gen.build) $ \t -> do
+        t `shouldSatisfy` (>= TimeOfDay 8 0 0)
+        t `shouldSatisfy` (<= TimeOfDay 17 0 0)
+
+    -- A single-point range pinned to a whole-microsecond value exercises the
+    -- microsecond round-trip exactly, confirming a bound isn't floored below
+    -- itself when it carries sub-second precision.
+    it "respects a microsecond-precision bound exactly" $ do
+      let t = TimeOfDay 0 0 0.999999
+      prop (Gen.time & Gen.min t & Gen.max t & Gen.build) $ \d ->
+        d `shouldBe` t
+
+  describe "Gen.datetime" $ do
+    it "draws LocalTime values" $ do
+      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.datetime & Gen.build) $ \_ -> pure ()
+
+    it "respects lower bound" $ do
+      let lo = LocalTime (fromGregorian 2000 1 1) midnight
+      prop (Gen.datetime & Gen.min lo & Gen.build) $ \dt ->
+        dt `shouldSatisfy` (>= lo)
+
+    it "respects upper bound" $ do
+      let hi = LocalTime (fromGregorian 2000 12 31) (TimeOfDay 23 59 59)
+      prop (Gen.datetime & Gen.max hi & Gen.build) $ \dt ->
+        dt `shouldSatisfy` (<= hi)
+
+    it "respects both bounds" $ do
+      let lo = LocalTime (fromGregorian 2000 1 1) midnight
+          hi = LocalTime (fromGregorian 2000 1 2) midnight
+      prop (Gen.datetime & Gen.min lo & Gen.max hi & Gen.build) $ \dt -> do
+        dt `shouldSatisfy` (>= lo)
+        dt `shouldSatisfy` (<= hi)
+
+    it "respects both minYear and maxYear" $ do
+      let lo = LocalTime (fromGregorian 2000 1 1) midnight
+          hi = LocalTime (fromGregorian 2000 12 31) (TimeOfDay 23 59 59.999999)
+      prop (Gen.datetime & Gen.minYear 2000 & Gen.maxYear 2000 & Gen.build) $ \dt -> do
+        dt `shouldSatisfy` (>= lo)
+        dt `shouldSatisfy` (<= hi)
+
+    it "respects onDay, confining draws to the given calendar day" $ do
+      let d = fromGregorian 2024 6 15
+      prop (Gen.datetime & Gen.onDay d & Gen.build) $ \dt ->
+        dt.localDay `shouldBe` d
+
+  describe "Gen.duration" $ do
+    it "draws NominalDiffTime values" $ do
+      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.duration & Gen.build) $ \_ -> pure ()
+
+    it "never negative" $ do
+      prop (Gen.duration & Gen.build) $ \d ->
+        d `shouldSatisfy` (>= 0)
+
+    it "respects lower bound" $ do
+      prop (Gen.duration & Gen.min 3600 & Gen.build) $ \d ->
+        d `shouldSatisfy` (>= 3600)
+
+    it "respects upper bound" $ do
+      prop (Gen.duration & Gen.max 60 & Gen.build) $ \d ->
+        d `shouldSatisfy` (<= 60)
+
+    it "respects both bounds" $ do
+      prop (Gen.duration & Gen.min 10 & Gen.max 20 & Gen.build) $ \d -> do
+        d `shouldSatisfy` (>= 10)
+        d `shouldSatisfy` (<= 20)
+
+    -- The draw composes over 'Hegel.Internal.DataSource.drawInteger's
+    -- arbitrary-precision path, so an explicit bound isn't limited to a
+    -- Word64 nanosecond count.
+    it "supports a duration beyond a Word64 nanosecond count" $ do
+      let hi = 10 ^ (30 :: Int) :: NominalDiffTime
+      prop (Gen.duration & Gen.max hi & Gen.build) $ \d ->
+        d `shouldSatisfy` (<= hi)
+
+    it "converts unit constructors to the equivalent count of seconds" $ do
+      Gen.milliseconds 1500 `shouldBe` (1.5 :: NominalDiffTime)
+      Gen.seconds 90 `shouldBe` (90 :: NominalDiffTime)
+      Gen.minutes 2 `shouldBe` (120 :: NominalDiffTime)
+      Gen.hours 1 `shouldBe` (3600 :: NominalDiffTime)
+
+    it "respects bounds expressed with unit constructors" $ do
+      prop (Gen.duration & Gen.min (Gen.seconds 30) & Gen.max (Gen.hours 2) & Gen.build) $ \d -> do
+        d `shouldSatisfy` (>= Gen.seconds 30)
+        d `shouldSatisfy` (<= Gen.hours 2)
 
   describe "Gen.assume" $ do
     -- A true condition is a no-op, so every case stays valid.
