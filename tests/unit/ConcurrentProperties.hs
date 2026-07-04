@@ -18,6 +18,7 @@ import Hegel.Property
     concurrently_,
     discard,
     forAll,
+    forAllWithLabel,
     mapConcurrently,
     replicateConcurrently,
     replicateConcurrentlyBounded,
@@ -221,6 +222,77 @@ spec = describe "concurrent combinators" do
       case report.result of
         Counterexample {} -> pure ()
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
+
+  describe "Pool concurrency safety" do
+    it "shares a Pool across n concurrent consuming branches with no duplicate or lost value" do
+      report <- check defaultSettings do
+        n <- forAllWithLabel "branchCount" (intR (1, 8))
+        pool <- Pool.new
+        values <-
+          forAllWithLabel
+            "values"
+            ( Gen.list (intR (-1000, 1000))
+                & Gen.unique (==)
+                & Gen.minSize n
+                & Gen.maxSize n
+                & Gen.build
+            )
+        mapM_ (Pool.add pool) values
+        results <- replicateConcurrently n (forAll (Pool.consume pool))
+        remaining <- liftIO (Pool.size pool)
+        annotateShow (n, sort values, sort results, remaining)
+        assert
+          (sort results == sort values && remaining == 0)
+          "each preloaded value is consumed exactly once, across n branches"
+      report.result `shouldSatisfy` isOk
+
+    it "loses no entries when Pool.add is called concurrently from many branches" do
+      report <- check defaultSettings do
+        n <- forAllWithLabel "branchCount" (intR (1, 8))
+        pool <- Pool.new
+        added <- replicateConcurrently n do
+          v <- forAll (intR (-1000, 1000))
+          Pool.add pool v
+          pure v
+        remaining <- liftIO (Pool.size pool)
+        consumed <- replicateM remaining (forAll (Pool.consume pool))
+        annotateShow (n, sort added, remaining, sort consumed)
+        assert
+          (remaining == n && sort consumed == sort added)
+          "every concurrently-added value survives, none lost or duplicated"
+      report.result `shouldSatisfy` isOk
+
+    it "transfers n values between pools under concurrent access with no loss or duplication" do
+      report <- check defaultSettings do
+        n <- forAllWithLabel "branchCount" (intR (1, 8))
+        srcValues <-
+          forAllWithLabel
+            "srcValues"
+            ( Gen.list (intR (-1000, 1000))
+                & Gen.unique (==)
+                & Gen.minSize n
+                & Gen.maxSize n
+                & Gen.build
+            )
+        dstValues <-
+          forAllWithLabel
+            "dstValues"
+            (Gen.list (intR (-1000, 1000)) & Gen.unique (==) & Gen.maxSize 5 & Gen.build)
+        src <- Pool.new
+        dst <- Pool.new
+        mapM_ (Pool.add src) srcValues
+        mapM_ (Pool.add dst) dstValues
+        transferred <- replicateConcurrently n (forAll (Pool.transfer src dst))
+        srcRemaining <- liftIO (Pool.size src)
+        dstFinal <- liftIO (Pool.size dst)
+        annotateShow (n, sort srcValues, sort transferred, srcRemaining, dstFinal)
+        assert
+          ( sort transferred == sort srcValues
+              && srcRemaining == 0
+              && dstFinal == length dstValues + n
+          )
+          "every src value transfers exactly once; dst gains n entries with none of its own lost"
+      report.result `shouldSatisfy` isOk
 
   describe "replicateConcurrentlyBounded" do
     it "still returns n results when capped below n" do
