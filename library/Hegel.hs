@@ -19,6 +19,10 @@ module Hegel
     resource,
     resource_,
 
+    -- * Sampling
+    sample,
+    samples,
+
     -- * Properties
     Property,
     PropertyT,
@@ -93,6 +97,7 @@ import Hegel.Property
     resource_,
   )
 import Hegel.Report
+import Hegel.Runner (sample, samples)
 import Hegel.Settings
 import Hegel.Stateful (Invariant (..), Machine (..), Rule (..))
 import Hegel.Stateful qualified as Stateful

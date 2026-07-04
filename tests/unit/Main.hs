@@ -15,6 +15,7 @@ import PoolEvents qualified
 import PropertyChecks qualified
 import ReportRendering qualified
 import Resources qualified
+import Sampling qualified
 import SourceRendering qualified
 import StandardGenerators qualified
 import Stateful qualified
@@ -45,6 +46,7 @@ main = do
   testCaseClone <- testSpec "TestCase cloning" TestCaseClone.spec
   branchProperties <- testSpec "branch combinators" BranchProperties.spec
   forkProperties <- testSpec "fork combinators" ForkProperties.spec
+  sampling <- testSpec "sampling" Sampling.spec
   defaultMain
     ( testGroup
         "zizek:unit"
@@ -69,6 +71,7 @@ main = do
           ledger,
           testCaseClone,
           branchProperties,
-          forkProperties
+          forkProperties,
+          sampling
         ]
     )

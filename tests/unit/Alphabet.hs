@@ -7,24 +7,15 @@ module Alphabet (spec) where
 
 import Data.Char (GeneralCategory (..), generalCategory, ord)
 import Data.Function ((&))
-import Data.Set (Set)
 import Data.Set qualified as Set
-import Hegel (prop)
+import Hegel (defaultSettings, prop, samples)
 import Hegel.Alphabet qualified as Alphabet
 import Hegel.Gen qualified as Gen
-import Hegel.Property (check_, forEach)
-import Hegel.Settings (Settings (..), defaultSettings)
 import Test.Hspec
-import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
 
 -- | The distinct characters a builder draws over @n@ test cases.
-sample :: Int -> Gen.CharBuilder -> IO (Set Char)
-sample n b = do
-  ref <- newIORef Set.empty
-  check_ (defaultSettings {testCases = n}) $
-    forEach (b & Gen.build) $
-      \c -> modifyIORef' ref (Set.insert c)
-  readIORef ref
+sample :: Int -> Gen.CharBuilder -> IO (Set.Set Char)
+sample n b = Set.fromList <$> samples defaultSettings n (b & Gen.build)
 
 -- | A codepoint-range membership predicate, inclusive on both ends.
 inRange :: Int -> Int -> Char -> Bool

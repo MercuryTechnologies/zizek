@@ -1,12 +1,14 @@
 -- | @libhegel@ property runner.
 module Hegel.Runner
   ( check,
+    sample,
+    samples,
   )
 where
 
 import Control.Concurrent.Async (wait, withAsyncBound)
 import Control.Exception (SomeException, bracket, finally, fromException, mask, toException, try)
-import Control.Monad (void)
+import Control.Monad (unless, void)
 import Data.Bits ((.|.))
 import Data.ByteString (ByteString)
 import Data.Foldable (for_)
@@ -19,13 +21,14 @@ import Foreign (Ptr, Storable, alloca, fromBool, nullPtr, peek)
 import Foreign.C.Types (CBool (..), CInt, CSize)
 import Hegel.Assertion (originOf)
 import Hegel.Database (Database (..))
+import Hegel.Gen.Internal (Gen, draw)
 import Hegel.HealthCheck (HealthCheck)
 import Hegel.Internal.Control (ControlSignal (..), FinalizerFailed (..), MalformedTest, NoBacktrace (..), catchControl, isControlSignal)
 import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
 import Hegel.Internal.TestCase (Handle (..), Status (..), TestCase, markComplete, mkTestCase)
 import Hegel.Internal.Tick qualified as Tick
-import Hegel.Phase (Phase)
+import Hegel.Phase (Phase (Generate))
 import Hegel.Property.Internal
   ( Finalizers,
     OpenForks,
@@ -42,7 +45,7 @@ import Hegel.Property.Internal
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
 import Hegel.Settings (Settings (..))
 import UnliftIO.Exception (catch, catchAny, throwIO)
-import UnliftIO.IORef (newIORef, readIORef, writeIORef)
+import UnliftIO.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Witch qualified
 
 -- | Run a 'Property' through @libhegel@.
@@ -75,7 +78,7 @@ check settings prop =
   where
     go = withContext \ctx ->
       withSettings ctx \s -> do
-        applySettings ctx settings s
+        applySettings HEGEL_MODE_TEST_RUN ctx settings s
         -- Read and copy everything out of the run handle before withRun frees
         -- it on bracket exit (see 'readRunOutcome').
         (nValid, nInvalid, outcome) <- withRun ctx s \run -> do
@@ -106,12 +109,121 @@ check settings prop =
                 _ -> settings.databaseKey
             }
 
+-- * Sampling
+
+-- | Draw a single value from @gen@ outside a property run.
+--
+-- An unsatisfied 'Hegel.Property.assume', an exhausted 'Hegel.Gen.filtered'
+-- retry budget, and an exhausted choice budget all throw an 'IOError'.
+--
+-- Every draw comes from the same distribution an ordinary property test
+-- case draws from, which tends to be biased toward edge cases and boundary
+-- conditions. As such, this function should be used to iterate on generators
+-- or probe fixtures in a REPL, not to generate realistic-looking data.
+--
+-- __Do not call this from inside a 'Property' body!__
+--
+-- It starts its own engine run, so the value it draws never enters the
+-- enclosing run's choice sequence.
+--
+-- A shrink probe or the final reconstruction replay then draws a
+-- different value than the live case did; the enclosing run detects this as
+-- nondeterminism, but only once it replays that case's prefix, so the
+-- failure may not appear on the first affected case.
+sample :: Settings -> Gen a -> IO a
+sample settings gen =
+  withAsyncBound go wait
+  where
+    go = withContext \ctx ->
+      withSettings ctx \s -> do
+        applySettings HEGEL_MODE_SINGLE_TEST_CASE ctx settings s
+        withRun ctx s (drawOneCase ctx gen)
+
+-- | Pull the one test case a single-test-case run offers, draw @gen@
+-- against it, and report the outcome.
+drawOneCase :: Ptr HegelContext -> Gen a -> Ptr HegelRun -> IO a
+drawOneCase ctx gen run = do
+  tcPtr <- alloca \out -> do
+    throwOnError ctx =<< hegel_next_test_case ctx run out
+    peek out
+  if tcPtr == nullPtr
+    then throwIO (userError "sample: the engine produced no test case")
+    else runCase tcPtr `finally` void (hegel_test_case_free ctx tcPtr)
+  where
+    runCase tcPtr = do
+      tc <- mkTestCase Tick.Silent Handle {ctx, ptr = tcPtr}
+      (Right <$> draw tc gen)
+        `catchControl` (pure . Left)
+        >>= \case
+          Right a -> markComplete tc Valid $> a
+          Left Assume -> markComplete tc Invalid *> throwIO (userError "sample: the generator discarded its only case")
+          Left Stop -> markComplete tc Overrun *> throwIO (userError "sample: the engine's choice budget was exhausted")
+
+-- | Draw up to @n@ values from @gen@, with no shrinking and no persistence.
+--
+-- Values are more varied than @n@ independent 'sample' calls would give, as
+-- they are drawn from the same underlying choice stream.
+--
+-- A generator that discards yields fewer than @n@ values, possibly none, and
+-- one whose valid rate stays low throws an 'IOError' from
+-- 'Hegel.HealthCheck.FilterTooMuch'.
+--
+-- __Do not call this from inside a 'Property' body!__
+-- 
+-- See the 'sample' documentation for additional details.
+samples :: Settings -> Int -> Gen a -> IO [a]
+samples settings n gen =
+  withAsyncBound go wait
+  where
+    go = withContext \ctx ->
+      withSettings ctx \s -> do
+        applySettings HEGEL_MODE_TEST_RUN ctx settings {testCases = n, phases = [Generate]} s
+        acc <- newIORef []
+        outcome <- withRun ctx s \run -> do
+          collectCases ctx gen acc run
+          readRunOutcome ctx run
+        case outcome.status of
+          RunErrored -> throwIO (userError (T.unpack (fromMaybe "the run failed" outcome.runError)))
+          -- 'samples' runs no property body, so nothing can mark a case
+          -- 'Interesting', and 'RunFailed' should not arise here.
+          --
+          -- This arm covers it anyway, returning whatever was collected rather
+          -- than trying to interpret an outcome that should not occur.
+          _ -> reverse <$> readIORef acc
+
+-- | Pull every test case the engine offers, drawing @gen@ against each and
+-- consing successes onto @acc@.
+collectCases :: Ptr HegelContext -> Gen a -> IORef [a] -> Ptr HegelRun -> IO ()
+collectCases ctx gen acc run = loop
+  where
+    loop = do
+      tcPtr <- alloca \out -> do
+        throwOnError ctx =<< hegel_next_test_case ctx run out
+        peek out
+      unless (tcPtr == nullPtr) do
+        runCase tcPtr `finally` void (hegel_test_case_free ctx tcPtr)
+        loop
+    runCase tcPtr = do
+      tc <- mkTestCase Tick.Silent Handle {ctx, ptr = tcPtr}
+      (draw tc gen >>= \a -> modifyIORef' acc (a :) *> markComplete tc Valid)
+        `catchControl` \case
+          Assume -> markComplete tc Invalid
+          Stop -> markComplete tc Overrun
+
 -- * Settings
 
--- | Map a 'Settings' value onto the corresponding @libhegel@ settings setters.
-applySettings :: Ptr HegelContext -> Settings -> Ptr HegelSettings -> IO ()
-applySettings ctx s ptr = do
-  chk $ hegel_settings_set_mode ctx ptr HEGEL_MODE_TEST_RUN
+-- | Map a 'Settings' value onto the corresponding @libhegel@ settings
+-- setters, under the given @hegel_mode_t@ wire value.
+--
+-- The mode is not part of 'Settings'.
+--
+-- 'check' always drives the full generate\/shrink\/replay loop ('HEGEL_MODE_TEST_RUN').
+--
+-- 'sample' and 'samples' are the only callers that ask for
+-- 'HEGEL_MODE_SINGLE_TEST_CASE' or a generation-only phase set.
+applySettings :: Word32 -> Ptr HegelContext -> Settings -> Ptr HegelSettings -> IO ()
+applySettings mode ctx s ptr = do
+  chk $ hegel_settings_set_mode ctx ptr mode
   chk $ hegel_settings_set_backend ctx ptr (Witch.into @Word32 s.backend)
   chk $ hegel_settings_set_test_cases ctx ptr (fromIntegral s.testCases)
   chk $ hegel_settings_set_verbosity ctx ptr (Witch.into @Word32 s.verbosity)

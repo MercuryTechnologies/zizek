@@ -234,6 +234,7 @@ test-suite unit
     PropertyChecks
     ReportRendering
     Resources
+    Sampling
     SourceRendering
     StandardGenerators
     Stateful
