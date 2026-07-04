@@ -1,5 +1,6 @@
 module Main (main) where
 
+import Alphabet qualified
 import BasicProperties qualified
 import BranchProperties qualified
 import ControlSignals qualified
@@ -24,6 +25,7 @@ import TraceModel qualified
 
 main :: IO ()
 main = do
+  alphabet <- testSpec "Hegel.Alphabet" Alphabet.spec
   controlSignals <- testSpec "control signals" ControlSignals.spec
   rendering <- testSpec "report rendering" ReportRendering.spec
   sourceRendering <- testSpec "source rendering" SourceRendering.spec
@@ -46,7 +48,8 @@ main = do
   defaultMain
     ( testGroup
         "zizek:unit"
-        [ controlSignals,
+        [ alphabet,
+          controlSignals,
           rendering,
           sourceRendering,
           integrations,

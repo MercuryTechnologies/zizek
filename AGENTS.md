@@ -44,7 +44,7 @@ Minimum supported GHC version is 9.10 (enforced in CI and `zizek.cabal`). If you
 - `library/Hegel/Collection.hs` — `libhegel`-managed variable-length collection handle, used by the list/set/map generators
 - `library/Hegel/Internal/Tick.hs` — the recording substrate: a monotonic per-case sequence stamp (`Tick`) plus the `Silent`/`Active` toggle and the generic gated `record`, shared by the note journal and the pool-event stream. Domain-agnostic (knows nothing of pools, notes, or state machines); records only in the final reconstruction replay
 - `library/Hegel/Internal/Event.hs` — the per-case pool-event stream (`Event`/`Operation`/`Var`), stamped via `Tick`
-- `library/Hegel/Internal/Foreign/*.hs(c)` — the `libhegel` interop: `Raw` (raw `foreign import ccall` bindings — all `hegel_*` C functions, opaque handle types, `HEGEL_*` pattern synonyms, bracket helpers) plus the marshalling that feeds it — `CBOR` (encoding helpers), `Schema` (CBOR schema types), `CString` (C-string marshalling)
+- `library/Hegel/Internal/Foreign/*.hs(c)` — the `libhegel` interop: `Raw` (raw `foreign import ccall` bindings — all `hegel_*` C functions, opaque handle types, `HEGEL_*` pattern synonyms, bracket helpers) and `CString` (C-string marshalling) feeding it
 - `library/Hegel/Internal/TestCase.hs` and `library/Hegel/Internal/DataSource.hs` — the per-test-case engine interaction: `TestCase` (the handle — context + `hegel_test_case_t*` pointer — carrying the recording toggle, plus `markComplete`/`Status`) and `DataSource` (the generator-facing channel: `generate`, spans (`startSpan`/`stopSpan`, `Label`), collections, pools, state machines)
 - `library/Hegel/Internal/Control.hs` — control signals (`AssumeRejected`/`TestStopped`) and the exception-discipline helpers (`catchControl`/`onFailure`/`isFailure`/`tryProperty`)
 - `library/Hegel/Internal/DatabaseKey.hs` — database-key derivation
@@ -119,18 +119,18 @@ Genuine invariants and warnings stay: why `finally` must guard a buffer free, wh
 
 ### How It Works
 
-`zizek` drives the Hypothesis engine in-process via FFI to `libhegel`. The engine owns sampling, choice-sequence bookkeeping, and integrated shrinking; `zizek` describes what to generate using CBOR schemas and interprets the engine's replies.
+`zizek` drives the Hypothesis engine in-process via FFI to `libhegel`. The engine owns sampling, choice-sequence bookkeeping, and integrated shrinking; `zizek` calls a dedicated FFI entry point per generator kind and interprets the result directly, with no intermediate schema or encoding step.
 
 There are two property-writing surfaces, both yielding a `Report`: the simple `prop settings gen body` API (sugar over `forEach`), and `check settings property`, where a `Property` interleaves `forAll` draws, effects, and assertions (see `Hegel.Property`). Stateful testing is not a third surface: `Stateful.run machine` is an ordinary `PropertyT` action run via `check`.
 
 ### Protocol
 
-CBOR is the wire vocabulary between `zizek` and `libhegel`. For each test case:
-1. `generate` sends a CBOR schema to the engine and receives back a CBOR value
+Each generator kind has its own FFI entry point, with parameters marshalled directly rather than through an intermediate wire encoding. For each test case:
+1. a draw asks the engine for a value: a scalar draw (`drawBool`, `drawInteger`, `drawFloat`, `drawBytes`, `drawUuid`, `drawDate`, `drawTime`, `drawDatetime`) returns it directly, while a string draw first builds a native string-generator handle (`buildTextGen`, `buildRegexGen`, `buildEmailGen`, `buildUrlGen`, `buildDomainGen`) that the engine samples and shrinks against internally
 2. `startSpan`/`stopSpan` bracket groups of related draws so the engine can shrink them as a unit
 3. `markComplete` reports the outcome (VALID, INVALID, or INTERESTING) at the end of each test case
 
-All three are FFI calls into `libhegel` via `Hegel.Internal.Foreign.Raw`, wrapped by `Hegel.Internal.DataSource`/`Hegel.Internal.TestCase`.
+All of these are FFI calls into `libhegel` via `Hegel.Internal.Foreign.Raw`, wrapped by `Hegel.Internal.DataSource`/`Hegel.Internal.TestCase`.
 
 ### `Gen` GADT
 
