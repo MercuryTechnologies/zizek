@@ -3,17 +3,22 @@
 --
 -- 'concurrently' and its list-shaped siblings run N property bodies at once
 -- against a shared system under test, joining before the combinator returns.
--- Every branch's generated values replay and shrink deterministically; the
--- real-time interleaving of a branch's effects against a shared system does
--- not, the caveat every concurrent-property tool carries.
+-- Every branch's generated values replay and shrink deterministically.
+--
+-- Every concurrent-property tool carries the same caveat: the real-time
+-- interleaving of a branch's effects against a shared system does not replay
+-- deterministically.
 --
 -- A branch failure surfaces as an ordinary shrinkable counterexample rather
--- than an aborted run: when more than one branch fails, the lowest-indexed
--- one is reported, after every branch has run to completion. Each branch's
--- journaled notes are folded into the report one level deeper, under a
--- @Branch N@ header; a citation crossing a branch boundary, a value born in
--- one branch and consumed in another, does not resolve the way a same-branch
--- citation does.
+-- than an aborted run. The engine shrinks toward the lowest-indexed failing
+-- branch's exception after every branch has run to completion, and every
+-- failing branch renders its own message, location, and diff in the report,
+-- not only the one that wins the shrink target.
+--
+-- Each branch's journaled notes are folded into the report one level deeper,
+-- under a @Branch N@ header. A citation crossing a branch boundary, a value
+-- born in one branch and consumed in another, does not resolve the way a
+-- same-branch citation does.
 module Hegel.Property.Concurrent
   ( concurrently,
     concurrently_,
@@ -35,6 +40,7 @@ import Data.Foldable (for_, toList)
 import Data.Sequence ((|>))
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
+import Hegel.Internal.Control (isFailure)
 import Hegel.Internal.TestCase (TestCase)
 import Hegel.Internal.TestCase qualified as TestCase
 import Hegel.Internal.Tick qualified as Tick
@@ -44,11 +50,12 @@ import Hegel.Property.Internal
     PropertyT,
     askEnv,
     drainFinalizers,
+    failureDetails,
     newFinalizers,
     runPropertyT,
     tryProperty,
   )
-import Hegel.Report.Note (Note (..), NoteKind (Annotation))
+import Hegel.Report.Note (Note (..), NoteKind (BranchFailure, BranchHeader))
 import UnliftIO (MonadUnliftIO, withRunInIO)
 import UnliftIO.Async qualified as Async
 import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
@@ -137,12 +144,19 @@ withClones n0 tc k = go n0 []
 -- | Run one branch of a concurrent combinator against its own clone, in a
 -- fresh 'Env' nested one level deeper than the parent's.
 --
--- Never rethrows an ordinary property outcome, a control signal or an
--- 'Hegel.Assertion.AssertionFailure' alike: both come back as 'Left' so every
--- branch runs to completion regardless of a sibling's fate, and the caller
--- decides deterministically which failure, if any, to report. A finalizer
--- registered inside the branch is drained at the branch's own exit; a
--- teardown failure there does propagate immediately, the same severity a
+-- Neither a control signal nor an 'Hegel.Assertion.AssertionFailure' escapes
+-- as an exception: each comes back as 'Left' so every branch runs to
+-- completion regardless of a sibling's fate, and the caller decides
+-- deterministically which failure, if any, to report as the case's shrink
+-- target.
+--
+-- A real failure additionally gets journaled in-band as a 'BranchFailure', so
+-- a branch that does not win the shrink target still shows its own message,
+-- location, and diff in the report. A discard or budget stop does not,
+-- since neither is a failure to explain.
+--
+-- A finalizer registered inside the branch is drained at the branch's own
+-- exit. A teardown failure there propagates immediately, the same severity a
 -- top-level 'Hegel.Property.registerFinalizer' failure carries.
 runBranch ::
   (forall x. m x -> IO x) ->
@@ -169,7 +183,13 @@ runBranch runBase parentEnv tc body = do
     [] -> pure ()
     e : _ -> E.throwIO e
   notes <- toList <$> readIORef notesRef
-  pure (eRes, notes)
+  failureNotes <- case (branchJournal, eRes) of
+    (Recording _, Left e) | isFailure e -> do
+      clock <- Tick.next tc.recording
+      let (msg, mloc, diff) = failureDetails e
+      pure [Note {kind = BranchFailure diff, text = msg, loc = mloc, depth = branchEnv.noteDepth, clock}]
+    _ -> pure []
+  pure (eRes, notes <> failureNotes)
 
 -- | Run every branch of a homogeneous fan-out, given the concurrency strategy
 -- ('UnliftIO.Async.mapConcurrently' for unbounded fan-out, or a pooled
@@ -191,7 +211,7 @@ runBranches runMany actions = do
         ([], results) -> pure results
 
 -- | Fold each branch's journaled notes into the parent journal, one level
--- deeper than the parent's ambient depth, under a @Branch N@ header. A no-op
+-- deeper than the parent's ambient depth, under a @BranchHeader@. A no-op
 -- under a 'Silent' journal, matching every other journaling primitive's cost
 -- discipline.
 foldBranchNotes :: Env -> [[Note]] -> IO ()
@@ -202,7 +222,7 @@ foldBranchNotes env branchNotes = case env.journal of
       clock <- Tick.next env.testCase.recording
       sink
         Note
-          { kind = Annotation,
+          { kind = BranchHeader i,
             text = "Branch " <> T.pack (show i),
             loc = Nothing,
             depth = env.noteDepth,

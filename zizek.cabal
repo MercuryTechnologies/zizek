@@ -132,6 +132,7 @@ library
     Hegel.Property.Internal
     Hegel.Report
     Hegel.Report.Ann
+    Hegel.Report.Concurrent
     Hegel.Report.Discovery
     Hegel.Report.Encoding
     Hegel.Report.Journal

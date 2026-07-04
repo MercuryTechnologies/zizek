@@ -6,29 +6,24 @@
 module Hegel.Report.Stateful
   ( failingGroupDoc,
     noteFiles,
-    isStepJournal,
+    JournalShape (..),
+    classifyJournal,
   )
 where
 
-import Data.List (partition)
 import Data.Maybe (isJust)
 import Data.Text qualified as T
-import Data.Tree (Tree (..), flatten)
 import GHC.Stack (SrcLoc (..))
 import Hegel.Report.Ann (Ann (..))
 import Hegel.Report.Discovery (Declarations)
-import Hegel.Report.Journal (groupByDepth, noteLineAtDepth, numberDraws)
-import Hegel.Report.Note (Note (..), NoteKind (..), hasInBandFailure, isFailureNote)
+import Hegel.Report.Journal (Group (..), noteLineAtDepth, toGroups)
+import Hegel.Report.Note (Note (..), NoteKind (..), isBranchFailure, isBranchHeader, isFailureNote)
 import Hegel.Report.Source
   ( Annotation,
     Declaration,
-    applyContext,
-    defaultContext,
-    mergeDeclarations,
-    mergeFileDeclarations,
-    ppDeclaration,
     ppFailureLocation,
     ppInlinedValue,
+    renderListings,
   )
 import Hegel.Report.Span (spanFromSrcLoc)
 import Prettyprinter (Doc, (<+>))
@@ -39,12 +34,36 @@ import Prettyprinter qualified as PP
 noteFiles :: [Note] -> [FilePath]
 noteFiles notes = [l.srcLocFile | n <- notes, Just l <- [n.loc]]
 
--- | Is this journal step-structured (a stateful report)? True when it
--- carries an in-band 'Failure' or any nested note — 'hasInBandFailure' alone
--- misses a 'Failure'-less stateful counterexample, and @depth > 0@ alone
--- misses a failure in @machine.initial@ (journaled at depth 0).
-isStepJournal :: [Note] -> Bool
-isStepJournal notes = hasInBandFailure notes || any (\n -> n.depth > 0) notes
+-- | Which failure-report layout a journal's shape calls for.
+data JournalShape
+  = -- | Ordinary draws\/annotations at the top level: 'Hegel.Report.plainRichDoc'.
+    PlainShape
+  | -- | A 'Hegel.Stateful.Machine' run: the composed event-log report.
+    StatefulShape
+  | -- | A 'Hegel.Property.Concurrent' combinator's branches: the per-branch
+    -- source splice.
+    ConcurrentShape
+  deriving stock (Show, Eq)
+
+-- | Classify a journal by the structural markers its producer left, not by
+-- 'Note.depth'. A depth-0 'StepHeader' or an in-band 'Failure' marks a
+-- stateful run; a 'BranchHeader' or 'BranchFailure' marks a concurrent
+-- combinator's.
+--
+-- Stateful takes precedence, so a concurrent combinator run from inside a
+-- stateful rule still composes as a stateful report, with its branches
+-- rendered as nested detail inside the failing step.
+classifyJournal :: [Note] -> JournalShape
+classifyJournal notes
+  | any isFailureNote notes || any isStepHeaderAtDepth0 notes = StatefulShape
+  | any isBranchFailure notes || any isBranchHeader notes = ConcurrentShape
+  | otherwise = PlainShape
+  where
+    -- Depth alone can't tell which nested user produced a journal, since
+    -- every one of them stamps depth the same way; the depth-0 guard here
+    -- excludes a stateful run nested inside a concurrent branch, whose
+    -- depth-0 note is a 'BranchHeader' instead.
+    isStepHeaderAtDepth0 n = n.depth == 0 && case n.kind of StepHeader {} -> True; _ -> False
 
 -- | The failing step alone, spliced — the composed event-log report's source
 -- splice (the log carries every other step's story).
@@ -58,20 +77,6 @@ failingGroupDoc decls notes =
 -- | Does this group's subtree carry the in-band 'Failure'?
 groupHasFailure :: Group -> Bool
 groupHasFailure g = any (isFailureNote . snd) (g.root : g.body)
-
--- | One depth-0 subtree of the journal: a step header (or bare top-level
--- note) plus its flattened body, draw numbers pre-assigned journal-wide so
--- fallback lines agree with the plain renderer.
-data Group = Group
-  { root :: (Maybe Int, Note),
-    body :: [(Maybe Int, Note)]
-  }
-
-toGroups :: [Note] -> ([Group], [Note])
-toGroups notes = (toGroup <$> numberDraws (groupByDepth inline), footers)
-  where
-    (footers, inline) = partition (\n -> n.kind == Footnote) notes
-    toGroup (Node r children) = Group {root = r, body = concatMap flatten children}
 
 -- | Render one group of the journal: structured lines for the header and any
 -- unspliced notes (in journal order), then the group's merged source listings.
@@ -98,10 +103,7 @@ groupDoc decls g = PP.vsep (anchored <> listings)
         d : ds <- structured =
           (d <+> PP.annotate FailureMark "✗") : ds
       | otherwise = structured
-    listings =
-      [ PP.indent 4 (ppDeclaration (applyContext defaultContext d))
-      | d <- mergeFileDeclarations (mergeDeclarations fragments)
-      ]
+    listings = renderListings fragments
 
 -- | Splice one note into its enclosing source declaration: 'Failure' notes
 -- get the arrows\/message\/diff treatment, draws and annotations get their

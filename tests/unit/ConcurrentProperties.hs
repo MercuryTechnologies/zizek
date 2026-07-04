@@ -22,7 +22,7 @@ import Hegel.Property
     replicateConcurrently,
     replicateConcurrentlyBounded,
   )
-import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..))
+import Hegel.Report (Note (..), Report (..), Result (..), isBranchFailure, isBranchHeader, renderReport, renderReportRich)
 import Hegel.Settings (Settings (..), defaultSettings)
 import Test.Hspec
 import UnliftIO.IORef (atomicModifyIORef', newIORef, readIORef)
@@ -79,9 +79,60 @@ spec = describe "concurrent combinators" do
         assert False "force a counterexample so the journal renders"
       case report.result of
         Counterexample {notes} -> do
-          let headers = [n.text | n <- notes, n.kind == Annotation, "Branch " `T.isPrefixOf` n.text]
+          let headers = [n.text | n <- notes, isBranchHeader n]
           headers `shouldBe` ["Branch 1", "Branch 2"]
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
+
+    it "journals every failing branch's own message in-band, not only the shrink-target branch's" do
+      -- Both branches fail independently with distinct messages; the losing
+      -- branch's failure must still be visible in the journal, not silently
+      -- dropped in favor of the winning ("left") branch's headline.
+      report <- check defaultSettings do
+        _ <- concurrently (assert False "left branch always fails") (assert False "right branch always fails")
+        pure ()
+      case report.result of
+        Counterexample {message, notes} -> do
+          message `shouldBe` "left branch always fails"
+          let branchFailures = [n.text | n <- notes, isBranchFailure n]
+          branchFailures `shouldBe` ["left branch always fails", "right branch always fails"]
+        other -> expectationFailure ("expected Counterexample, got: " <> show other)
+
+    it "suppresses the redundant top-level headline once a branch fails in-band" do
+      -- 'renderReport' drops the top headline/loc block when the journal
+      -- already carries an in-band failure; both branches' messages must
+      -- still show up somewhere in the rendered body.
+      report <- check defaultSettings do
+        _ <- concurrently (assert False "left branch always fails") (assert False "right branch always fails")
+        pure ()
+      let rendered = renderReport report
+      ("left branch always fails" `T.isInfixOf` rendered) `shouldBe` True
+      ("right branch always fails" `T.isInfixOf` rendered) `shouldBe` True
+
+    it "keeps the top-level headline when no branch failed in-band" do
+      -- A later, unrelated top-level assertion after both branches succeed
+      -- has no in-band failure to anchor the reason, so the headline must
+      -- survive.
+      report <- check defaultSettings do
+        _ <- concurrently (annotateShow (1 :: Int)) (annotateShow (2 :: Int))
+        assert False "unrelated top-level assertion"
+      case report.result of
+        Counterexample {notes} -> [n.text | n <- notes, isBranchFailure n] `shouldBe` []
+        other -> expectationFailure ("expected Counterexample, got: " <> show other)
+      ("unrelated top-level assertion" `T.isInfixOf` renderReport report) `shouldBe` True
+
+    it "splices every branch's source into the rich report" do
+      -- End-to-end through 'renderReportRich' (requires cwd = repo root, as
+      -- under `just test`): this is the regression test for the render-path
+      -- misclassification bug — a concurrently failure must route to the
+      -- concurrent splice, not silently degrade or misrender as a stateful
+      -- composed report.
+      report <- check defaultSettings do
+        _ <- concurrently (assert False "left branch always fails") (assert False "right branch always fails")
+        pure ()
+      rich <- renderReportRich report
+      ("┏━━ tests/unit/ConcurrentProperties.hs" `T.isInfixOf` rich) `shouldBe` True
+      ("left branch always fails" `T.isInfixOf` rich) `shouldBe` True
+      ("right branch always fails" `T.isInfixOf` rich) `shouldBe` True
 
     it "shares a Pool across branches with no duplicate or lost value" do
       report <- check defaultSettings do
@@ -93,6 +144,57 @@ spec = describe "concurrent combinators" do
         annotateShow (sort [x, y], remaining)
         assert (sort [x, y] == [1, 2] && remaining == 0) "each value consumed exactly once"
       report.result `shouldSatisfy` isOk
+
+  describe "branch splice threshold and merge" do
+    it "merges branches sharing an enclosing declaration into one labeled block" do
+      report <- check defaultSettings do
+        _ <- concurrently (assert False "left branch always fails") (assert False "right branch always fails")
+        pure ()
+      rich <- renderReportRich report
+      T.count "┏━━" rich `shouldBe` 1
+      ("Branch 1:" `T.isInfixOf` rich) `shouldBe` True
+      ("Branch 2:" `T.isInfixOf` rich) `shouldBe` True
+
+    it "does not show a redundant bare header once a branch's content is fully spliced" do
+      -- Regression test: an earlier version of this renderer always emitted
+      -- a "Branch N" header line even when that branch's content already
+      -- merged into the labeled listing below, which read as if the listing
+      -- belonged only to whichever header happened to sit closest to it.
+      report <- check defaultSettings do
+        _ <- concurrently (assert False "left branch always fails") (assert False "right branch always fails")
+        pure ()
+      rich <- renderReportRich report
+      T.count "\n  Branch " ("\n" <> rich) `shouldBe` 0
+
+    it "collapses passing branches into a summary once past the splice threshold" do
+      report <- check defaultSettings do
+        _ <- mapConcurrently (\i -> assert (i /= (7 :: Int)) "branch seven fails") [1 .. 10]
+        pure ()
+      rich <- renderReportRich report
+      ("9 branches passed" `T.isInfixOf` rich) `shouldBe` True
+      -- Only branch 7's label appears; no other branch number shows up
+      -- anywhere in the report.
+      let branch7Labels = T.count "Branch 7:" rich
+      branch7Labels `shouldBe` 1
+      T.count "Branch " rich `shouldBe` branch7Labels
+
+    it "shows a summary with no branch dump when every branch passed" do
+      report <- check defaultSettings do
+        _ <- replicateConcurrently 10 (pure ())
+        assert False "unrelated top-level assertion"
+      rich <- renderReportRich report
+      ("10 branches passed" `T.isInfixOf` rich) `shouldBe` True
+      ("unrelated top-level assertion" `T.isInfixOf` rich) `shouldBe` True
+      T.count "Branch " rich `shouldBe` 0
+
+    it "still shows every branch's data below the splice threshold" do
+      report <- check defaultSettings do
+        rs <- replicateConcurrently 3 (forAll (intR (0, 1000)))
+        assert (all (< 42) rs) "every branch stays small"
+      rich <- renderReportRich report
+      ("Branch 1:" `T.isInfixOf` rich) `shouldBe` True
+      ("Branch 2:" `T.isInfixOf` rich) `shouldBe` True
+      ("Branch 3:" `T.isInfixOf` rich) `shouldBe` True
 
   describe "concurrently_" do
     it "runs both branches, discarding results" do

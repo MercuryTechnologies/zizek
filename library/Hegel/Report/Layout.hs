@@ -119,11 +119,10 @@ layoutRows opts trace = preludeRows <> go Nothing kept
 
     nameOf = displayName opts.glyphs trace
 
--- | A step reference for the log. Real steps read @\@N@. The machine-setup
--- pseudo-step, index 0, reads @setup@ since it names no navigable rule.
+-- | A step reference for the log, matching the source splice's @Step N:@
+-- header vocabulary.
 stepToken :: Int -> Text
-stepToken 0 = "setup"
-stepToken n = "@" <> T.pack (show n)
+stepToken n = "Step " <> T.pack (show n) <> ":"
 
 -- | The rendered call, plus the free draws that did NOT inline (→ detail
 -- rows). Free (non-pool) draws fold into the call in journal order
@@ -199,7 +198,7 @@ logDoc opts trace = PP.vsep (fmap rowDoc rows)
           [ (gutterTxt, gutterDoc),
             (" ", " "),
             (stepTxt, PP.annotate StepNoAnn (PP.pretty stepTxt)),
-            ("  ", "  "),
+            (" ", " "),
             (r.call, callDoc)
           ]
         gutterTxt = table.cell r.gutter

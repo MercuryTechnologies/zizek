@@ -13,6 +13,8 @@ module Hegel.Report
     NoteKind (..),
     isDrawn,
     isFailureNote,
+    isBranchHeader,
+    isBranchFailure,
 
     -- * Events (re-exported from "Hegel.Internal.Event")
     Event (..),
@@ -52,10 +54,11 @@ import Hegel.Diff (Diff)
 import Hegel.Internal.Event (Event (..), Operation (..), Var (..))
 import Hegel.Internal.Tick (Tick (..))
 import Hegel.Report.Ann (Ann (..), docToAnsi, docToText)
+import Hegel.Report.Concurrent (concurrentGroupsDoc)
 import Hegel.Report.Discovery (Declarations, loadDeclarations)
 import Hegel.Report.Journal (footnoteDocs, headlineBlock, journalDocs)
 import Hegel.Report.Layout qualified as Layout
-import Hegel.Report.Note (Note (..), NoteKind (..), hasInBandFailure, isDrawn, isFailureNote, renderValue)
+import Hegel.Report.Note (Note (..), NoteKind (..), hasInBandFailure, isBranchFailure, isBranchHeader, isDrawn, isFailureNote, renderValue)
 import Hegel.Report.Source
   ( applyContext,
     defaultContext,
@@ -66,8 +69,8 @@ import Hegel.Report.Source
     ppFailureLocation,
   )
 import Hegel.Report.Span (Span (..), spanFromSrcLoc)
-import Hegel.Report.Stateful (failingGroupDoc, isStepJournal, noteFiles)
-import Hegel.Report.Style (Style (..), defaultStyle)
+import Hegel.Report.Stateful (JournalShape (..), classifyJournal, failingGroupDoc, noteFiles)
+import Hegel.Report.Style (PhraseTable, Style (..), defaultStyle)
 import Hegel.Report.Style qualified as Style
 import Hegel.Report.Trace (Trace)
 import Hegel.Report.Trace qualified as Trace
@@ -222,32 +225,32 @@ renderRichImpl style plain toText report = do
     Nothing -> plain report
     Just body -> toText (PP.vsep ["failed after" <+> statsDoc report.stats, body])
 
--- | Attempt to build the rich failure doc, falling back to 'Nothing' when
--- the result is not a counterexample or no declaration could be read for
--- any location. Every step-structured failure composes the same way,
--- whether or not it touched a pool: 'composed' renders it.
+-- | Attempt to build the rich failure doc, falling back to 'Nothing' when the
+-- result is not a counterexample or no declaration could be read for any
+-- location. 'classifyJournal' picks the layout. A step-structured, stateful
+-- failure composes the same way whether or not it touched a pool. A
+-- concurrent-combinator failure splices its branches, see 'composedConcurrent'.
+-- Anything else is a plain top-level property.
 richDoc :: Style -> Report -> IO (Maybe (Doc Ann))
 richDoc style report = case report.result of
-  Counterexample {message, notes, events, loc, diff}
-    | isStepJournal notes -> do
-        decls <- loadDeclarations (noteFiles notes)
-        let trace = Trace.build notes events
-        pure (Just (composed style decls trace notes message loc diff report.databaseKey))
-    | otherwise -> plainRichDoc message notes loc diff
+  Counterexample {message, notes, events, loc, diff} -> case classifyJournal notes of
+    StatefulShape -> do
+      decls <- loadDeclarations (noteFiles notes)
+      let trace = Trace.build notes events
+      pure (Just (composed style decls trace notes message loc diff report.databaseKey))
+    ConcurrentShape -> do
+      decls <- loadDeclarations (noteFiles notes)
+      pure (composedConcurrent style.phrases decls notes message loc diff)
+    PlainShape -> plainRichDoc message notes loc diff
   _ -> pure Nothing
 
 -- | Assemble a step-structured (stateful) failure report from its sections,
 -- rendered in order and separated by blank lines: an optional
--- headline\/diff\/location prelude, the event log, the failing step's source
--- splice, footnotes, and the reproduction footer.
+-- headline\/diff\/location prelude, see 'preludeDoc', the event log, the
+-- failing step's source splice, footnotes, and the reproduction footer.
 --
 -- The splice carries the diff, so the event log holds only the record of
 -- events and never repeats it.
---
--- The prelude leads only when the journal has no in-band failure to anchor the
--- reason, as when an exception escapes mid-loop or @machine.initial@ fails at
--- depth 0. An in-band failure carries its own headline at the failing step, so
--- the prelude is dropped.
 composed ::
   Style ->
   Declarations ->
@@ -262,15 +265,36 @@ composed style decls trace notes message loc diff databaseKey =
   PP.vsep (PP.punctuate PP.line (catMaybes sections))
   where
     sections =
-      [ prelude,
+      [ preludeDoc notes message loc diff,
         Just $ Layout.logDoc style trace,
         failingGroupDoc decls notes,
         footnotesDoc notes,
         footerDoc style.phrases databaseKey
       ]
-    prelude
-      | hasInBandFailure notes = Nothing
-      | otherwise = Just $ PP.vsep $ headlineBlock message diff loc
+
+-- | Assemble a concurrent-combinator failure report: an optional headline
+-- prelude, the branch splice, every branch below the splice threshold, only
+-- failing branches plus a summary above it, then footnotes.
+--
+-- 'Nothing' when 'concurrentGroupsDoc' found nothing to splice, degrading to
+-- the plain renderer the same way 'plainRichDoc' does.
+composedConcurrent :: PhraseTable -> Declarations -> [Note] -> Text -> Maybe SrcLoc -> Maybe Diff -> Maybe (Doc Ann)
+composedConcurrent phrases decls notes message loc diff = do
+  body <- concurrentGroupsDoc phrases decls notes
+  pure (PP.vsep (PP.punctuate PP.line (catMaybes [preludeDoc notes message loc diff, Just body, footnotesDoc notes])))
+
+-- | The optional headline\/diff\/location block leading a composed report.
+-- Dropped when the journal already carries its own in-band failure, a
+-- stateful step's 'Failure' or a concurrent branch's 'BranchFailure', since
+-- that note's own headline would otherwise be repeated.
+--
+-- Kept when no note anchors the reason, as when an exception escapes
+-- mid-loop, every branch of a concurrent combinator succeeds and a later
+-- assertion fails the case, or @machine.initial@ fails at depth 0.
+preludeDoc :: [Note] -> Text -> Maybe SrcLoc -> Maybe Diff -> Maybe (Doc Ann)
+preludeDoc notes message loc diff
+  | hasInBandFailure notes = Nothing
+  | otherwise = Just $ PP.vsep $ headlineBlock message diff loc
 
 -- | Footnote notes, rendered after the report body (their documented
 -- position, regardless of form).

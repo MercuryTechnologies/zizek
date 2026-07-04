@@ -8,6 +8,8 @@ module Hegel.Report.Journal
   ( -- * Regrouping
     groupByDepth,
     numberDraws,
+    Group (..),
+    toGroups,
 
     -- * Structured rendering
     journalDocs,
@@ -19,6 +21,7 @@ module Hegel.Report.Journal
   )
 where
 
+import Data.List (partition)
 import Data.Text (Text)
 import Data.Traversable (mapAccumL)
 import Data.Tree (Forest, Tree (..), flatten)
@@ -51,6 +54,25 @@ groupByDepth = fst . go 0
             let (children, rest') = go (n.depth + 1) rest
                 (siblings, rest'') = go level rest'
              in (Node n children : siblings, rest'')
+
+-- | One depth-0 subtree of a journal: a header note (or bare top-level note)
+-- plus its flattened body, draw numbers pre-assigned journal-wide so
+-- fallback lines agree with the plain renderer.
+--
+-- Shared by any renderer that splits a journal on its depth-0 notes —
+-- 'Hegel.Report.Stateful' (one 'Hegel.Report.Note.StepHeader' per group) and
+-- 'Hegel.Report.Concurrent' (one 'Hegel.Report.Note.BranchHeader' per group).
+data Group = Group
+  { root :: (Maybe Int, Note),
+    body :: [(Maybe Int, Note)]
+  }
+
+-- | Split a journal into its depth-0 subtrees, footnotes set aside.
+toGroups :: [Note] -> ([Group], [Note])
+toGroups notes = (toGroup <$> numberDraws (groupByDepth inline), footers)
+  where
+    (footers, inline) = partition (\n -> n.kind == Footnote) notes
+    toGroup (Node r children) = Group {root = r, body = concatMap flatten children}
 
 -- | Number the 'Drawn' notes of a forest, 1-based, __scoped to their
 -- siblings__: the counter restarts for each node's children, so a draw's
@@ -104,14 +126,17 @@ noteLineDoc (mIx, n) = case mIx of
   Just i -> PP.annotate DrawnAnn ("Draw" <+> PP.pretty i <> ":" <+> PP.align (PP.pretty n.text))
   Nothing -> case n.kind of
     Failure diff -> failureNoteDoc diff n
-    -- 'Annotation'; 'Footnote' and unnumbered 'Drawn' are unreachable
-    -- (footnotes are hoisted before grouping, draws always numbered).
+    BranchFailure diff -> failureNoteDoc diff n
+    -- 'Annotation' and 'BranchHeader' render as a plain label line;
+    -- 'Footnote' and unnumbered 'Drawn' are unreachable (footnotes are
+    -- hoisted before grouping, draws always numbered).
     _ -> PP.annotate NoteAnn (PP.pretty n.text)
 
--- | Render an in-band 'Failure' note: a marked headline, the structured diff
--- (if any) indented under it, then the source location. Rendered at the
--- note's tree position, so the offsets are relative: @+4@ for the diff (one
--- nesting level plus two to clear the @✗ @ marker), @+2@ for the location.
+-- | Render an in-band 'Failure' or 'BranchFailure' note: a marked headline,
+-- the structured diff (if any) indented under it, then the source location.
+-- Rendered at the note's tree position, so the offsets are relative: @+4@ for
+-- the diff (one nesting level plus two to clear the @✗ @ marker), @+2@ for the
+-- location.
 failureNoteDoc :: Maybe Diff -> Note -> Doc Ann
 failureNoteDoc diff n =
   PP.vsep $

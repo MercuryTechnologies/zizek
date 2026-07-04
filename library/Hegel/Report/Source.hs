@@ -28,6 +28,7 @@ module Hegel.Report.Source
 
     -- * Rendering
     ppDeclaration,
+    renderListings,
 
     -- * Utilities
     mergeDeclarations,
@@ -291,6 +292,18 @@ ppDeclaration decl
       line <- Map.elems decl.declarationSource
       let (style, xs) = line.lineAnnotation
       ppSourceLine style line.lineNumber line.lineSource : fmap ppAnnot xs
+
+-- | Merge value fragments into listings, one per touched file, indented for
+-- splicing beneath a caller's own header or event log.
+--
+-- Shared by every renderer that collects a batch of spliced fragments and
+-- then merges them by file: "Hegel.Report.Stateful" for a stateful step's
+-- notes, "Hegel.Report.Concurrent" for a concurrent branch's.
+renderListings :: [Declaration Annotation] -> [Doc Ann]
+renderListings fragments =
+  [ PP.indent 4 (ppDeclaration (applyContext defaultContext d))
+  | d <- mergeFileDeclarations (mergeDeclarations fragments)
+  ]
 
 -- * Merge
 

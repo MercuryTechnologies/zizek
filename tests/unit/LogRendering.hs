@@ -50,22 +50,22 @@ spec = do
   describe "logDoc" do
     it "renders the chronological unicode event log (transfer/handoff shape)" do
       renderWith (defaultStyle Style.unicode)
-        `shouldRenderAs` [ "  @1  open v₁",
-                           "      2 steps elided",
-                           "  @4  write v₁ → ok",
-                           "  @5  close v₁",
-                           "      2 steps elided",
-                           "✗ @8  read v₁"
+        `shouldRenderAs` [ "  Step 1: open v₁",
+                           "          2 steps elided",
+                           "  Step 4: write v₁ → ok",
+                           "  Step 5: close v₁",
+                           "          2 steps elided",
+                           "✗ Step 8: read v₁"
                          ]
 
     it "renders the chronological ascii event log" do
       renderWith (defaultStyle Style.ascii)
-        `shouldRenderAs` [ "  @1  open v1",
-                           "      2 steps elided",
-                           "  @4  write v1 -> ok",
-                           "  @5  close v1",
-                           "      2 steps elided",
-                           "x @8  read v1"
+        `shouldRenderAs` [ "  Step 1: open v1",
+                           "          2 steps elided",
+                           "  Step 4: write v1 -> ok",
+                           "  Step 5: close v1",
+                           "          2 steps elided",
+                           "x Step 8: read v1"
                          ]
 
     it "renders setup-step notes as a detail line (no de-numbered origin row)" do
@@ -89,9 +89,9 @@ spec = do
             ]
           t = Trace.build notes events
       docToText (Layout.logDoc (defaultStyle Style.unicode) t)
-        `shouldRenderAs` [ "      setup",
-                           "  @1  poke v₁",
-                           "✗ @2  poke v₁"
+        `shouldRenderAs` [ "          setup",
+                           "  Step 1: poke v₁",
+                           "✗ Step 2: poke v₁"
                          ]
 
     it "clips the call column at the width budget" do
@@ -184,21 +184,21 @@ spec = do
   describe "flat log" do
     it "renders a pool-free journal: all steps, blank gutters, ✗ on failure" do
       docToText (Layout.logDoc (defaultStyle Style.unicode) noPoolTrace)
-        `shouldRenderAs` [ "  @1  push 0",
-                           "  @2  push 1",
-                           "      sum is now 1",
-                           "✗ @3  pop"
+        `shouldRenderAs` [ "  Step 1: push 0",
+                           "  Step 2: push 1",
+                           "          sum is now 1",
+                           "✗ Step 3: pop"
                          ]
 
     it "renders a two-root ledger: every step kept, nothing elided" do
       -- The failing audit touches both accounts, so both are relevant roots —
       -- every step touches one of them, so nothing is left to elide.
       docToText (Layout.logDoc (defaultStyle Style.unicode) ledgerTrace)
-        `shouldRenderAs` [ "  @1  open v₁",
-                           "  @2  open v₂",
-                           "  @3  deposit v₁ 5",
-                           "      balance a₁ = 5",
-                           "✗ @4  audit v₁ v₂"
+        `shouldRenderAs` [ "  Step 1: open v₁",
+                           "  Step 2: open v₂",
+                           "  Step 3: deposit v₁ 5",
+                           "          balance a₁ = 5",
+                           "✗ Step 4: audit v₁ v₂"
                          ]
 
   describe "glyph tables" do
@@ -210,20 +210,20 @@ spec = do
     it "spliced timeline: a pool-free stateful failure renders without a reproduction footer" do
       let report = reportOf [] (fst handoffFixture)
       out <- renderReportRich report
-      out `shouldNotSatisfy` T.isInfixOf "stored:"
+      out `shouldNotSatisfy` T.isInfixOf "stored under"
 
     it "composed trace: pool context composes event log, splice, and footer" do
       let (notes, events) = handoffFixture
           report = (reportOf events notes) {databaseKey = Just "some-key"}
       out <- renderReportRich report
       -- The handoff (close) renders as an ordinary kept row (no lifecycle glyph).
-      out `shouldSatisfy` T.isInfixOf "  @5  close v₁"
+      out `shouldSatisfy` T.isInfixOf "  Step 5: close v₁"
       out `shouldNotSatisfy` T.isInfixOf "cites"
       -- The failing step's splice (fixture notes carry no locs, so its lines
       -- are the structured fallbacks); the reason lives here, not in a headline.
       out `shouldSatisfy` T.isInfixOf "  Step 8: read"
       out `shouldSatisfy` T.isInfixOf "✗ read returned stale bytes"
-      out `shouldSatisfy` T.isInfixOf "stored: some-key — replays automatically next run"
+      out `shouldSatisfy` T.isInfixOf "stored under some-key and replays automatically next run"
 
     it "footnotes keep their after-the-body position on the composed form" do
       let (notes, events) = handoffFixture
@@ -232,11 +232,11 @@ spec = do
       out `shouldSatisfy` T.isInfixOf "handle table dump: {}"
       -- After the splice, before the reproduction line.
       T.breakOn "handle table dump" out `shouldSatisfy` \(pre, rest) ->
-        "Step 8: read" `T.isInfixOf` pre && "stored: k" `T.isInfixOf` rest
+        "Step 8: read" `T.isInfixOf` pre && "stored under k" `T.isInfixOf` rest
 
     it "the footer only renders when a database key exists" do
       out <- renderReportRich (uncurry (flip reportOf) handoffFixture)
-      out `shouldNotSatisfy` T.isInfixOf "stored:"
+      out `shouldNotSatisfy` T.isInfixOf "stored under"
 
     it "a multi-root failure renders every step, with nothing elided" do
       -- The failing settle touches two lineage roots, so both are relevant —
@@ -248,7 +248,7 @@ spec = do
 
     it "a flat single-value pool failure renders as a flat log" do
       out <- renderReportRich (uncurry (flip reportOf) flatFixture)
-      out `shouldSatisfy` T.isInfixOf "  @1  open v₁"
+      out `shouldSatisfy` T.isInfixOf "  Step 1: open v₁"
       out `shouldNotSatisfy` T.isInfixOf "cites"
       -- The failing step's reason is spliced (structured fallback here).
       out `shouldSatisfy` T.isInfixOf "Step 3: use"
