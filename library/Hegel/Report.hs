@@ -326,7 +326,14 @@ plainRichDoc message notes loc diff = do
       allDecls = mergeFileDeclarations (mergeDeclarations (maybeToList mFailureDecl <> idecls))
       declDocs = fmap (ppDeclaration . applyContext defaultContext) allDecls
       footerDocs = [PP.annotate NoteAnn (PP.pretty n.text) | n <- footers]
-      sections = [PP.vsep ds | ds <- [args, declDocs, footerDocs], not (null ds)]
+      -- 'declDocs' is punctuated on its own: two listings from different
+      -- files get a blank line between their boxes, matching the gap
+      -- 'composed' puts between sections. 'args' and 'footerDocs' stay
+      -- tightly stacked, one line per entry.
+      sections =
+        [PP.vsep ds | ds <- [args], not (null ds)]
+          <> [PP.vsep (PP.punctuate PP.line declDocs) | not (null declDocs)]
+          <> [PP.vsep ds | ds <- [footerDocs], not (null ds)]
   -- Degrade to the plain renderer unless at least one declaration rendered;
   -- the @Draw N:@ fallback docs in 'args' only supplement a source
   -- listing, they don't constitute one.

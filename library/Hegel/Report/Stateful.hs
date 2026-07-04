@@ -103,7 +103,9 @@ groupDoc decls g = PP.vsep (anchored <> listings)
         d : ds <- structured =
           (d <+> PP.annotate FailureMark "✗") : ds
       | otherwise = structured
-    listings = renderListings fragments
+    -- Punctuated so two listings from different files get a blank line
+    -- between their boxes, matching the gap 'composed' puts between sections.
+    listings = PP.punctuate PP.line (renderListings fragments)
 
 -- | Splice one note into its enclosing source declaration: 'Failure' notes
 -- get the arrows\/message\/diff treatment, draws and annotations get their

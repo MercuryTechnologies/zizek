@@ -14,6 +14,7 @@ import Hegel.Report.Source
     mergeDeclarations,
     mergeFileDeclarations,
     ppDeclaration,
+    renderListings,
   )
 import Hegel.Report.Span (LineNo (..))
 import Prettyprinter (Doc)
@@ -201,6 +202,23 @@ spec = do
       let d1 = mkDecl "f.hs" 1 "foo" [(1, "foo = 1")]
           d2 = mkDecl "g.hs" 1 "bar" [(1, "bar = 2")]
       length (mergeFileDeclarations (mergeDeclarations [d1, d2])) `shouldBe` 2
+
+  describe "renderListings" $ do
+    it "puts a blank line between two listings from different files" $ do
+      -- Every splice-composing call site ('groupDoc', 'concurrentGroupsDoc',
+      -- 'plainRichDoc') joins 'renderListings' output with
+      -- @PP.punctuate PP.line@; this is that composition, exercised directly.
+      let d1 = mkDecl "f.hs" 1 "foo" [(1, "foo = 1")]
+          d2 = mkDecl "g.hs" 1 "bar" [(1, "bar = 2")]
+          out = T.pack (render (PP.vsep (PP.punctuate PP.line (renderListings [d1, d2]))))
+          ls = T.lines out
+          headerLines = [i | (i, l) <- zip [0 :: Int ..] ls, "┏━━" `T.isInfixOf` l]
+      T.count "┏━━" out `shouldBe` 2
+      case headerLines of
+        [_, second] -> do
+          second > 0 `shouldBe` True
+          T.strip (ls !! (second - 1)) `shouldBe` ""
+        _ -> expectationFailure ("expected exactly two header lines, got: " <> show headerLines)
 
   describe "ppDeclaration" $ do
     it "includes the ┏━━ header line" $ do

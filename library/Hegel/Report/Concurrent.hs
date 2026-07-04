@@ -68,7 +68,9 @@ concurrentGroupsDoc phrases decls notes
     -- One merge across every shown branch's value fragments: branches
     -- sharing source (file, line) collapse into one listing with their
     -- labeled lines stacked; branches with distinct source stay separate.
-    listings = renderListings fragments
+    -- Punctuated so two listings from different files get a blank line
+    -- between their boxes, matching the gap 'composed' puts between sections.
+    listings = PP.punctuate PP.line (renderListings fragments)
 
     summary
       | not belowThreshold,
