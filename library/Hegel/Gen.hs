@@ -73,6 +73,10 @@ module Hegel.Gen
     list,
     unique,
 
+    -- * NonEmpty
+    NonEmptyBuilder,
+    nonEmpty,
+
     -- * Set
     SetBuilder,
     set,
@@ -252,6 +256,7 @@ import Hegel.Gen.Internal
   )
 import Hegel.Gen.List (ListBuilder, list, unique)
 import Hegel.Gen.Map (MapBuilder, map)
+import Hegel.Gen.NonEmpty (NonEmptyBuilder, nonEmpty)
 import Hegel.Gen.Regex (RegexBuilder, fullMatch, regex)
 import Hegel.Gen.Set (SetBuilder, set)
 import Hegel.Gen.Text (TextBuilder, text)

@@ -90,6 +90,19 @@ spec = do
         prop (Gen.list (Gen.bool & Gen.build) & Gen.minSize 10 & Gen.maxSize 5 & Gen.build) (\_ -> pure ())
           `shouldThrow` messageContains "Hegel.Gen.List"
 
+    describe "Gen.nonEmpty" $ do
+      it "rejects a minSize of 0" $ do
+        prop (Gen.nonEmpty (Gen.bool & Gen.build) & Gen.minSize 0 & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.NonEmpty"
+
+      it "rejects a negative minSize" $ do
+        prop (Gen.nonEmpty (Gen.bool & Gen.build) & Gen.minSize (-1) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.NonEmpty"
+
+      it "rejects an inverted minSize/maxSize" $ do
+        prop (Gen.nonEmpty (Gen.bool & Gen.build) & Gen.minSize 10 & Gen.maxSize 5 & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.NonEmpty"
+
     describe "Gen.map" $ do
       it "rejects a negative minSize" $ do
         prop

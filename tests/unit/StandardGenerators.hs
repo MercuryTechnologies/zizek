@@ -87,6 +87,19 @@ spec = do
       prop (Gen.element "abcd") $ \c ->
         c `shouldSatisfy` (`elem` ("abcd" :: String))
 
+  describe "Gen.nonEmpty" $ do
+    it "always draws at least one element" $ do
+      prop (Gen.nonEmpty (Gen.bool & Gen.build) & Gen.maxSize 5 & Gen.build) $ \xs ->
+        length xs `shouldSatisfy` (>= 1)
+
+    it "respects an explicit minSize above 1" $ do
+      prop (Gen.nonEmpty (Gen.bool & Gen.build) & Gen.minSize 3 & Gen.maxSize 10 & Gen.build) $ \xs ->
+        length xs `shouldSatisfy` (>= 3)
+
+    it "respects maxSize" $ do
+      prop (Gen.nonEmpty (Gen.bool & Gen.build) & Gen.maxSize 4 & Gen.build) $ \xs ->
+        length xs `shouldSatisfy` (<= 4)
+
   describe "Gen.frequency" $ do
     it "covers all branches across many draws" $ do
       seen <- newIORef ([] :: [Int])

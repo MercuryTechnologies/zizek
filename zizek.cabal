@@ -116,6 +116,7 @@ library
     Hegel.Gen.Internal.String
     Hegel.Gen.List
     Hegel.Gen.Map
+    Hegel.Gen.NonEmpty
     Hegel.Gen.Regex
     Hegel.Gen.Set
     Hegel.Gen.Text
