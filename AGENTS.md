@@ -30,9 +30,9 @@ Minimum supported GHC version is 9.10 (enforced in CI and `zizek.cabal`). If you
 - `library/Hegel.hs` — Public API: `prop`/`forEach`/`forEachWith`; re-exports `Gen`, settings, database, reports, phases, and assertions
 - `library/Hegel/Property.hs` — Property monad public API: `PropertyT`/`Property`, `forAll`/`forAllWith`/`forAllSilent`, `annotate`/`footnote`, `assume`/`discard`, `check`/`check_`, `assert`/`failure`, `(===)`/`(/==)`. Internals in `library/Hegel/Property/Internal.hs`
 - `library/Hegel/Stateful.hs` — stateful (model-based) testing: `Machine`/`Rule`/`Invariant` and `run`, layered on `PropertyT` (see Stateful Testing below)
-- `library/Hegel/Pool.hs` — engine-managed pools of values for stateful rules to draw from; an empty-pool draw discards the case
-- `library/Hegel/Report.hs` — `Report`/`Result`/`Stats` plus the plain/ANSI renderers: what a property run produces
-- `library/Hegel/Report/*.hs` — the rich source-splicing renderer: `Ann` (annotations/styles), `Discovery` (declaration lookup), `Source` (splicing/layout), `Span`, `Note` (journal entries), `Journal` (depth regrouping + structured journal rendering), `Stateful` (splices the failing step's journal into source; eyeball via `cabal run stateful-report-gallery`)
+- `library/Hegel/Pool.hs` — engine-managed pools of values for stateful rules to draw from; an empty-pool draw discards the case. `named` labels a pool's values for the report; `transfer` moves a value between pools with the identity link declared (one lifeline across pools)
+- `library/Hegel/Report.hs` — `Report`/`Result`/`Stats` plus the plain/ANSI renderers: what a property run produces; for pool-bearing stateful failures the rich path composes the trace report (verdict + ledger + splice + footer) via a pinned form selection
+- `library/Hegel/Report/*.hs` and `library/Hegel/Report/Trace/*.hs` — the rich renderers: `Ann` (annotations/styles), `Discovery` (declaration lookup), `Source` (splicing/layout), `Span`, `Note` (journal entries; also `renderValue`), `Journal` (depth regrouping + structured rendering), `Stateful` (the failing step's source splice), `Style` (the one style record — glyphs, phrases, layout knobs — every composed-report section consumes), `Glyph`/`Phrase` (glyph and phrase tables — cells/words applied last; `HEGEL_GLYPHS` + encoding detection pick ascii); and the trace-render pipeline — `Trace` (the versioned IR zipping journal + pool events on their shared `Tick`), with its projections grouped under `Report.Trace.*`: `Blame` (the citation tree both renderers project), `Ledger` (the citation-ledger layout), `Verdict` (the prose proof), `Trajectory` (the degraded lead). Eyeball via `just gallery` (a fixed scenario set spanning the spectrum: plain splice → stateful splice → trajectory lead → composed trace report); design record in `notes/decisions/stateful-trace-rendering.md`
 - `library/Hegel/Diff.hs` — structural and line-level diffs backing `(===)` failures
 - `library/Hegel/Assertion.hs` — `assert`/`failure` (`MonadIO`-polymorphic, call-stack-aware), failure-origin formatting
 - `library/Hegel/Hspec.hs`, `library/Hegel/Tasty.hs` — framework integrations with automatic database keying (see Framework Integrations below)
@@ -43,11 +43,12 @@ Minimum supported GHC version is 9.10 (enforced in CI and `zizek.cabal`). If you
 - `library/Hegel/Gen/Builder.hs` — `Build`, `HasMin`, `HasMax`, `HasSize` typeclasses
 - `library/Hegel/Gen/*.hs` — per-category builders (bool, integer, float, binary, char, text, regex, uri, uuid, list, set, map, …)
 - `library/Hegel/Collection.hs` — `libhegel`-managed variable-length collection handle, used by the list/set/map generators
-- `library/Hegel/Internal/FFI.hsc` — raw `foreign import ccall` bindings to `libhegel`: all `hegel_*` C functions, opaque handle types, `HEGEL_*` pattern synonyms, and bracket helpers
-- `library/Hegel/Internal/TestCase.hs` — the `TestCase` handle (context + `hegel_test_case_t*` pointer) plus `markComplete`/`Status`
-- `library/Hegel/Internal/DataSource.hs` — the generator-facing engine channel: `generate`, spans (`startSpan`/`stopSpan`, `Label`), collections, pools, state machines
+- `library/Hegel/Internal/Tick.hs` — the recording substrate: a monotonic per-case sequence stamp (`Tick`) plus the `Silent`/`Active` toggle and the generic gated `record`, shared by the note journal and the pool-event stream. Domain-agnostic (knows nothing of pools, notes, or state machines); records only in the final reconstruction replay
+- `library/Hegel/Internal/Event.hs` — the per-case pool-event stream (`Event`/`Operation`/`Var`), stamped via `Tick`
+- `library/Hegel/Internal/Foreign/*.hs(c)` — the `libhegel` interop: `Raw` (raw `foreign import ccall` bindings — all `hegel_*` C functions, opaque handle types, `HEGEL_*` pattern synonyms, bracket helpers) plus the marshalling that feeds it — `CBOR` (encoding helpers), `Schema` (CBOR schema types), `CString` (C-string marshalling)
+- `library/Hegel/Internal/Session/*.hs` — the per-test-case engine interaction: `TestCase` (the handle — context + `hegel_test_case_t*` pointer — carrying the recording toggle, plus `markComplete`/`Status`) and `DataSource` (the generator-facing channel: `generate`, spans (`startSpan`/`stopSpan`, `Label`), collections, pools, state machines)
 - `library/Hegel/Internal/Control.hs` — control signals (`AssumeRejected`/`TestStopped`) and the exception-discipline helpers (`catchControl`/`onFailure`/`isFailure`/`tryProperty`)
-- `library/Hegel/Internal/{Schema,CBOR,CString,DatabaseKey}.hs` — CBOR schema types, encoding helpers, C-string marshalling, database-key derivation
+- `library/Hegel/Internal/DatabaseKey.hs` — database-key derivation
 
 ## Module Style
 
@@ -96,7 +97,7 @@ CBOR is the wire vocabulary between `zizek` and `libhegel`. For each test case:
 2. `startSpan`/`stopSpan` bracket groups of related draws so the engine can shrink them as a unit
 3. `markComplete` reports the outcome (VALID, INVALID, or INTERESTING) at the end of each test case
 
-All three are FFI calls into `libhegel` via `Hegel.Internal.FFI`, wrapped by `Hegel.Internal.DataSource`/`Hegel.Internal.TestCase`.
+All three are FFI calls into `libhegel` via `Hegel.Internal.Foreign.Raw`, wrapped by `Hegel.Internal.Session.DataSource`/`Hegel.Internal.Session.TestCase`.
 
 ### `Gen` GADT and `BasicGenerator`
 
@@ -110,7 +111,7 @@ When `toBasic` returns `Just`, generation uses a single request with the schema.
 
 ### Span System
 
-Spans (`start_span`/`stop_span`) group related generation calls so the engine can shrink them as a unit. The `Label` type in `Hegel.Internal.DataSource` identifies span types (LIST, TUPLE, ONE_OF, FILTER, etc.).
+Spans (`start_span`/`stop_span`) group related generation calls so the engine can shrink them as a unit. The `Label` type in `Hegel.Internal.Session.DataSource` identifies span types (LIST, TUPLE, ONE_OF, FILTER, etc.).
 
 ### Collections
 
@@ -126,7 +127,7 @@ Spans (`start_span`/`stop_span`) group related generation calls so the engine ca
 
 ### Test Suites
 
-- `tests/unit/` — the `unit` cabal suite (tasty wrapping hspec specs): generators, schemas, property checks, report/source rendering, control signals, stateful, database replay, framework integrations
+- `tests/unit/` — the `unit` cabal suite (tasty wrapping hspec specs): generators, schemas, property checks, report/source rendering, control signals, stateful, pool events, trace/blame IR, ledger/verdict rendering, database replay, framework integrations
 - `tests/ffi/` — the `ffi` cabal suite: wire-level checks, plus a closed-world guard (`cbits/wire_enum_guard.c`, compiled with `-Werror=switch-enum`) that fails the build if `libhegel` adds an enum variant
 - `tests/conformance/` — Haskell binaries (one per generator category, plus `stateful` and `origin-deduplication`) invoked by the Python runner in `tests/conformance/pytest/test_conformance.py`, which validates generators produce values matching their declared constraints. Built binaries are symlinked into `tests/conformance/pytest/bin/`
 - `tests/profile/` — the `profile-hegel` executable: deterministic named workloads for profiling the Haskell-side hot paths, driven by the `just profile-*` recipes. Not a test suite — a completed run always exits 0. Scenario table and interpretation guide: `notes/decisions/profiling-harness.md`
@@ -136,5 +137,5 @@ Spans (`start_span`/`stop_span`) group related generation calls so the engine ca
 - Use jujutsu (`jj`) for version control.
 - **Prototype loose, land tight**: while a workflow's design is still moving, driving `cabal` (or other tools) by hand is fine. Once it solidifies, fold the surviving invocations into `scripts/` + `justfile` recipes — the justfile is the discoverable surface, and one-off invocations in a transcript force the next session (human or agent) to rediscover them.
 - **Exception discipline**: Hegel's control signals (`AssumeRejected`, `TestStopped`) are async exceptions precisely so user catch-alls pass them through. Never hand-roll a `catch @SomeException` (or a base `try @SomeException`) around code that draws or asserts — it would swallow the discard/stop signals and corrupt the run. Use `Hegel.Internal.Control` (`catchControl`, `onFailure`, `tryProperty`) instead.
-- Design work is planned in `notes/` (e.g. `notes/01-stateful-test-reporting.md`). Read the relevant note before starting work it covers, and keep it current as decisions change.
+- Design work lives in `notes/`: `notes/decisions/` holds decision records for shipped work (rationale not to be re-litigated); `notes/roadmap/` holds upcoming work in priority order (`00-arcs.md` is the map that fixes project structure and the Arc 1/2/3 boundary; `01-…` is next up); `notes/design/` holds first-principles exploration informing future roadmap items (not yet committed work). Read the relevant note before starting work it covers, and keep it current as decisions change — including moving a roadmap note to `decisions/` when its work ships.
 - `references/hegel-rust/` vendors the Rust/C engine reference (`hegel-c/include/hegel.h`, `src/stateful.rs`, …). It is the ground truth for engine semantics when Haskell-side documentation and behavior disagree.
