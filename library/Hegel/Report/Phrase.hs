@@ -15,15 +15,21 @@ import Hegel.Report.Trace.Blame (Fact (..))
 
 -- | Fact-clause fields take the /resolved display name/ of the fact's value.
 data PhraseTable = PhraseTable
-  { -- | A fact as an earlier observation: @\"h₁ was consumed\"@.
+  { -- | A fact as an earlier observation: @\"h₁ consumed\"@ (bare participle,
+    -- matching 'origin', so it stays terse and pluralizes).
     observed :: Fact -> Text -> Text,
+    -- | The origin line for a value born in machine setup:
+    -- @\"v₁ initialized\"@ (a bare participle, so it pluralizes:
+    -- @\"v₁, v₂ initialized\"@).
+    origin :: Text -> Text,
     -- | The trajectory lead's body: @\"v₁: open \@1 · use \@2\"@.
     trajectory :: Text -> [(Text, Text)] -> Text,
     -- | An elision row's label: @\"2 steps, none touch h₁\"@.
     elidedSteps :: Int -> Maybe Text -> Text,
     -- | The elided-lifelines footer: @\"1 lifeline elided (h₂ · 1 step)\"@.
     elidedLifelines :: Int -> [Text] -> Maybe Int -> Text,
-    -- | The numeric citation fallback: @\"cites 5, 4, 1\"@.
+    -- | The citation list, given pre-formatted step tokens:
+    -- @\"cites setup, \@1, \@4\"@.
     cites :: [Text] -> Text,
     -- | The reproduction footer, given the database key:
     -- @\"stored: k — replays automatically next run\"@.
@@ -35,10 +41,11 @@ english :: PhraseTable
 english =
   PhraseTable
     { observed = \fact name -> case fact of
-        BornAt _ -> name <> " was created"
-        TouchedAt _ -> name <> " was accessed"
-        ConsumedAt _ -> name <> " was consumed"
-        TransferredAt _ -> name <> " was transferred",
+        BornAt _ -> name <> " created"
+        TouchedAt _ -> name <> " accessed"
+        ConsumedAt _ -> name <> " consumed"
+        TransferredAt _ -> name <> " transferred",
+      origin = \name -> name <> " initialized",
       trajectory = \name steps -> name <> ": " <> T.intercalate " · " [rule <> " @" <> n | (rule, n) <- steps],
       elidedSteps = \n mSubject ->
         counted n "step" <> maybe "" (", none touch " <>) mSubject,

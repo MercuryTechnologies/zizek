@@ -9,6 +9,7 @@ module Hegel.Property.Internal
     -- * Draws
     forAll,
     forAllWith,
+    forAllWithLabel,
     forAllSilent,
 
     -- * Notes
@@ -177,6 +178,16 @@ forAllWith render gen = do
   note (Drawn provenance) (callSite callStack) (render a)
   pure a
 {-# INLINEABLE forAllWith #-}
+
+-- | 'forAll' with a display label, for rule draws whose bare value reads as
+-- noise in the report. @qty <- forAllWithLabel \"qty\" g@ journals @qty=5@, so
+-- the event log renders @restock item=\"apple\" qty=5@ rather than
+-- @restock \"apple\" 5@. A specialisation of 'forAllWith' whose renderer
+-- prefixes the label; the label lives in the journal text, not the source (no
+-- source parsing).
+forAllWithLabel :: (HasCallStack, MonadIO m, Show a) => Text -> Gen a -> PropertyT m a
+forAllWithLabel label = withFrozenCallStack (forAllWith (\v -> label <> "=" <> renderValue v))
+{-# INLINEABLE forAllWithLabel #-}
 
 -- | Draw a value without journaling it.
 --

@@ -4,13 +4,15 @@
 module LogRendering (spec) where
 
 import Control.Monad.IO.Class (liftIO)
+import Data.Function ((&))
 import Data.List (nub)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Golden (shouldRenderAs)
+import Hegel.Gen qualified as Gen
 import Hegel.Pool qualified as Pool
-import Hegel.Property (assert, forAll)
+import Hegel.Property (assert, forAll, forAllWithLabel)
 import Hegel.Property.Internal (Env (..), askEnv)
 import Hegel.Report
   ( Event (..),
@@ -54,27 +56,54 @@ spec = do
   describe "logDoc" do
     it "renders the chronological unicode spine (transfer/handoff shape)" do
       renderWith (defaultStyle Glyph.unicode)
-        `shouldRenderAs` [ "● 1  open v₁                    v₁ was created",
-                           "┆    ⋯ 2 steps, none touch v₁",
-                           "○ 4  write v₁ → ok              v₁ was accessed",
-                           "○ 5  close v₁                   v₁ was transferred",
-                           "┆    ⋯ 2 steps, none touch v₁",
-                           "✗ 8  read v₁                    ← cites 1, 4, 5"
+        `shouldRenderAs` [ "● @1  open v₁                    v₁ created",
+                           "┆     ⋯ 2 steps, none touch v₁",
+                           "○ @4  write v₁ → ok              v₁ accessed",
+                           "○ @5  close v₁                   v₁ transferred",
+                           "┆     ⋯ 2 steps, none touch v₁",
+                           "✗ @8  read v₁                    ← cites @1, @4, @5"
                          ]
 
     it "renders the chronological ascii spine" do
       renderWith (defaultStyle Glyph.ascii)
-        `shouldRenderAs` [ "* 1  open v1                      v1 was created",
-                           ":    ... 2 steps, none touch v1",
-                           "o 4  write v1 -> ok               v1 was accessed",
-                           "o 5  close v1                     v1 was transferred",
-                           ":    ... 2 steps, none touch v1",
-                           "x 8  read v1                      <- cites 1, 4, 5"
+        `shouldRenderAs` [ "* @1  open v1                      v1 created",
+                           ":     ... 2 steps, none touch v1",
+                           "o @4  write v1 -> ok               v1 accessed",
+                           "o @5  close v1                     v1 transferred",
+                           ":     ... 2 steps, none touch v1",
+                           "x @8  read v1                      <- cites @1, @4, @5"
+                         ]
+
+    it "renders a setup-born value as a de-numbered origin line, cited as setup" do
+      -- The subject is born in machine.initial (before the first step header),
+      -- so its birth is step 0: a de-numbered @●  v₁ initialized@ origin line,
+      -- cited as @setup@ rather than @\@0@.
+      let notes =
+            [ -- A depth-0 prelude note establishes the setup segment (step 0),
+              -- where machine.initial births the value.
+              noteAt (Tick 1) 0 Annotation "setup",
+              header (Tick 3) 1 "poke",
+              noteAt (Tick 5) 1 (Drawn [h1]) "h",
+              header (Tick 6) 2 "poke",
+              noteAt (Tick 8) 1 (Drawn [h1]) "h",
+              noteAt (Tick 9) 1 (Failure Nothing) "boom"
+            ]
+          events =
+            [ eventAt (Tick 2) h1 (Born Nothing),
+              eventAt (Tick 4) h1 Reused,
+              eventAt (Tick 7) h1 Reused
+            ]
+          t = Trace.build notes events
+          b = fromJust (Blame.analyze t)
+      docToText (Log.logDoc (defaultStyle Glyph.unicode) t (Log.Focused b))
+        `shouldRenderAs` [ "●     v₁ initialized",
+                           "○ @1  poke v₁          v₁ accessed",
+                           "✗ @2  poke v₁          ← cites setup, @1"
                          ]
 
     it "renders the numeric citation list, cited steps ascending" do
       let out = renderWith (defaultStyle Glyph.unicode)
-      out `shouldSatisfy` T.isInfixOf "← cites 1, 4, 5"
+      out `shouldSatisfy` T.isInfixOf "← cites @1, @4, @5"
 
     it "clips the call column at the width budget" do
       let out = renderWith (defaultStyle Glyph.unicode) {callWidth = 8}
@@ -171,19 +200,19 @@ spec = do
   describe "unfocused log" do
     it "renders a pool-free journal: all steps, blank gutters, ✗ on failure, no margins" do
       docToText (Log.logDoc (defaultStyle Glyph.unicode) noPoolTrace (Log.Unfocused Nothing))
-        `shouldRenderAs` [ "  1  push 0",
-                           "  2  push 1",
-                           "     sum is now 1",
-                           "✗ 3  pop"
+        `shouldRenderAs` [ "  @1  push 0",
+                           "  @2  push 1",
+                           "      sum is now 1",
+                           "✗ @3  pop"
                          ]
 
     it "renders a two-root ledger: all steps, per-step glyphs, kept margins" do
       docToText (Log.logDoc (defaultStyle Glyph.unicode) ledgerTrace (Log.Unfocused (Just ledgerBlame)))
-        `shouldRenderAs` [ "● 1  open v₁          v₁ was created",
-                           "● 2  open v₂",
-                           "○ 3  deposit v₁ 5     v₁ was accessed",
-                           "     balance a₁ = 5",
-                           "✗ 4  audit v₁ v₂      ← cites 1, 3"
+        `shouldRenderAs` [ "● @1  open v₁          v₁ created",
+                           "● @2  open v₂",
+                           "○ @3  deposit v₁ 5     v₁ accessed",
+                           "      balance a₁ = 5",
+                           "✗ @4  audit v₁ v₂      ← cites @1, @3"
                          ]
 
   describe "review fixes" do
@@ -238,10 +267,10 @@ spec = do
           report = (reportOf events notes) {databaseKey = Just "some-key"}
       out <- renderReportRich report
       -- The birth and handoff facts live in the spine margin.
-      out `shouldSatisfy` T.isInfixOf "v₁ was created"
-      out `shouldSatisfy` T.isInfixOf "v₁ was transferred"
+      out `shouldSatisfy` T.isInfixOf "v₁ created"
+      out `shouldSatisfy` T.isInfixOf "v₁ transferred"
       -- Numeric citations, cited steps ascending (reading order).
-      out `shouldSatisfy` T.isInfixOf "← cites 1, 4, 5"
+      out `shouldSatisfy` T.isInfixOf "← cites @1, @4, @5"
       -- The failing step's splice (fixture notes carry no locs, so its lines
       -- are the structured fallbacks); the reason lives here, not in a headline.
       out `shouldSatisfy` T.isInfixOf "  Step 8: read"
@@ -269,15 +298,15 @@ spec = do
       out <- renderReportRich (uncurry (flip reportOf) ledgerFixture)
       out `shouldSatisfy` T.isInfixOf "open v₁"
       out `shouldSatisfy` T.isInfixOf "open v₂"
-      out `shouldSatisfy` T.isInfixOf "v₁ was created"
+      out `shouldSatisfy` T.isInfixOf "v₁ created"
       out `shouldNotSatisfy` T.isInfixOf "none touch"
 
     it "a flat single-value pool failure renders as a focused log (no lead)" do
       out <- renderReportRich (uncurry (flip reportOf) flatFixture)
       -- A single-value failure is the focused log: birth margin and cites,
       -- even with no death/handoff in the history.
-      out `shouldSatisfy` T.isInfixOf "v₁ was created"
-      out `shouldSatisfy` T.isInfixOf "← cites 1, 2"
+      out `shouldSatisfy` T.isInfixOf "v₁ created"
+      out `shouldSatisfy` T.isInfixOf "← cites @1, @2"
       -- The failing step's reason is spliced (structured fallback here).
       out `shouldSatisfy` T.isInfixOf "Step 3: use"
       -- No retired lead one-liner, no spine link arrows, no headline contrast.
@@ -315,6 +344,16 @@ spec = do
       -- The focused-log chrome and phrase typography must transliterate too.
       out <- renderReportRich (uncurry (flip reportOf) flatFixture)
       Glyph.sevenBitClean out `shouldNotSatisfy` T.isInfixOf "\\x"
+
+  describe "forAllWithLabel" do
+    it "journals the label with the drawn value (name=value)" do
+      report <-
+        check defaultSettings do
+          n <- forAllWithLabel "qty" (Gen.int & Gen.min 5 & Gen.max 5 & Gen.build)
+          assert (n /= (5 :: Int)) "boom"
+      case report.result of
+        Counterexample {notes} -> fmap (.text) notes `shouldSatisfy` elem "qty=5"
+        _ -> expectationFailure "expected a counterexample"
 
   describe "end to end (engine)" do
     it "transfer reconnects the chain on a real machine (citations reach pre-transfer steps)" do

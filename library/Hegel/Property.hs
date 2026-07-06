@@ -37,6 +37,7 @@ module Hegel.Property
     forEachWith,
     forAll,
     forAllWith,
+    forAllWithLabel,
     forAllSilent,
 
     -- * Notes
@@ -71,6 +72,7 @@ import Hegel.Property.Internal
     forAll,
     forAllSilent,
     forAllWith,
+    forAllWithLabel,
     hoist,
   )
 import Hegel.Report (throwOnFailure)

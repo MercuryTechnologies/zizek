@@ -14,7 +14,8 @@
 --   3. warehouse — the realistic no-pool report: four rules over three
 --      coupled structures, cross-structure invariants, a minimal
 --      counterexample that interleaves three distinct rules — an unfocused log
---      with inlined draws and annotation detail rows
+--      with annotation detail rows and 'forAllWithLabel'-labelled draws
+--      (@restock item="apple" qty=5@)
 --   4. file handles — the flagship focused log: a use-after-close bug whose
 --      /minimal/ counterexample needs an unrelated open between the write and
 --      the close, so the focused log shows the full vocabulary — lifecycle
@@ -45,7 +46,7 @@ import Hegel.Assertion (assert)
 import Hegel.Gen qualified as Gen
 import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
-import Hegel.Property (Property, annotate, assume, forAll, (===))
+import Hegel.Property (Property, annotate, assume, forAll, forAllWithLabel, (===))
 import Hegel.Report (Report (..), renderReportRichAnsi, renderReportRichAnsiWith, renderValue)
 import Hegel.Report.Glyph qualified as Glyph
 import Hegel.Report.Style (defaultStyle)
@@ -165,16 +166,16 @@ tally sku dq = Map.filter (> 0) . Map.insertWith (+) sku dq
 restock :: Stateful.Rule Warehouse IO
 restock =
   Stateful.Rule "restock" \w -> do
-    sku <- forAll (Gen.element skus)
-    qty <- forAll (Gen.int & Gen.min 5 & Gen.max 10 & Gen.build)
+    sku <- forAllWithLabel "item" (Gen.element skus)
+    qty <- forAllWithLabel "qty" (Gen.int & Gen.min 5 & Gen.max 10 & Gen.build)
     pure w {stock = tally sku qty w.stock}
 
 -- | Reserve stock for a new order; only as much as is unreserved.
 placeOrder :: Stateful.Rule Warehouse IO
 placeOrder =
   Stateful.Rule "place_order" \w -> do
-    sku <- forAll (Gen.element skus)
-    qty <- forAll (Gen.int & Gen.min 1 & Gen.max 3 & Gen.build)
+    sku <- forAllWithLabel "item" (Gen.element skus)
+    qty <- forAllWithLabel "qty" (Gen.int & Gen.min 1 & Gen.max 3 & Gen.build)
     let available =
           Map.findWithDefault 0 sku w.stock - Map.findWithDefault 0 sku w.reserved
     assume (qty <= available)
@@ -191,7 +192,7 @@ fulfillOrder :: Stateful.Rule Warehouse IO
 fulfillOrder =
   Stateful.Rule "fulfill_order" \w -> do
     assume (not (Map.null w.pending))
-    oid <- forAll (Gen.element (Map.keys w.pending))
+    oid <- forAllWithLabel "order" (Gen.element (Map.keys w.pending))
     let (sku, qty) = w.pending Map.! oid
     annotate ("fulfilling order #" <> renderValue oid <> ": " <> pluralize qty sku)
     pure
@@ -205,7 +206,7 @@ cancelOrder :: Stateful.Rule Warehouse IO
 cancelOrder =
   Stateful.Rule "cancel_order" \w -> do
     assume (not (Map.null w.pending))
-    oid <- forAll (Gen.element (Map.keys w.pending))
+    oid <- forAllWithLabel "order" (Gen.element (Map.keys w.pending))
     annotate ("cancelling order #" <> renderValue oid)
     -- BUG: releases the reservation held by the *newest* pending order
     -- instead of the cancelled one — harmless exactly when they coincide.
@@ -376,7 +377,7 @@ overflowMachine =
 -- about both. Two lineage roots at the failing step keep the log 'Unfocused' —
 -- every step shown with per-step lifecycle glyphs, so both accounts' activity
 -- is visible. Blame still surfaces a single subject, so the right-margin facts
--- (@… was created@ / @accessed@) and the @← cites@ list follow that one value;
+-- (@… created@ / @accessed@) and the @← cites@ list follow that one value;
 -- the other account's rows show their glyphs but no margin. A standing fixture
 -- for multi-value failures.
 --

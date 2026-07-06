@@ -109,6 +109,10 @@ focusedRows opts trace blame = terminator <> go Nothing shownAsc
         <> go (Just s.index) rest
     stepBlock s
       | Just s.index == failingIx = [failingRow s]
+      -- The subject's birth in machine setup (step 0) is not a navigable rule:
+      -- render it as a de-numbered origin line (@●  v₁ initialized@) rather than
+      -- a @<initial>@ pseudo-step with a redundant @… created@ margin.
+      | s.index == 0 = [originRow]
       | otherwise = citedRow s : drawnRows s
 
     -- @~@ at the top when real steps (not the machine-setup prelude, step 0)
@@ -128,9 +132,19 @@ focusedRows opts trace blame = terminator <> go Nothing shownAsc
           call = callText s,
           margin = if null cited then "" else numericCites
         }
-    -- Cited-step numbers, ascending to match the top → bottom reading order.
+    -- Cited-step references, ascending to match the top → bottom reading order.
     numericCites =
-      table.cell NumericCite <> " " <> opts.phrases.cites (fmap (T.pack . show) (sort (nub [o.step | o <- cited])))
+      table.cell NumericCite <> " " <> opts.phrases.cites (fmap citeToken (sort (nub [o.step | o <- cited])))
+
+    -- The de-numbered origin line for a value born in machine setup.
+    originRow =
+      Row
+        { kind = NodeRow,
+          gutter = NodeBorn,
+          stepNo = Nothing,
+          call = opts.phrases.origin subjectName,
+          margin = ""
+        }
 
     citedRow s =
       Row
@@ -243,8 +257,15 @@ unfocusedRows opts trace mBlame = concatMap stepRows (sortOn (.index) trace.step
       | Just fact <- listToMaybe [o.fact | o <- cited, o.step == s.index] = factText fact
       | otherwise = ""
     numericCites =
-      table.cell NumericCite <> " " <> opts.phrases.cites (fmap (T.pack . show) (sort (nub [o.step | o <- cited])))
+      table.cell NumericCite <> " " <> opts.phrases.cites (fmap citeToken (sort (nub [o.step | o <- cited])))
     factText fact = opts.phrases.observed fact (nameOf (Blame.factVar fact))
+
+-- | A step reference for the log: real steps read @\@N@; the machine-setup
+-- pseudo-step (0) reads @setup@ (it is not a navigable rule). Shared by the
+-- step-number column and the citation margins so every step reference agrees.
+citeToken :: Int -> Text
+citeToken 0 = "setup"
+citeToken n = "@" <> T.pack (show n)
 
 -- The rendered call plus the free draws that did NOT inline (→ detail rows).
 -- Free (non-pool) draws fold into the call in journal order — @write h₁ "0"@ —
@@ -346,7 +367,7 @@ logDoc opts trace view = PP.vsep (fmap rowDoc rows)
     rows = layoutRows opts trace view
     table = opts.glyphs
 
-    stepW = maximum (1 : [length (show i) | Row {stepNo = Just i} <- rows])
+    stepW = maximum (1 : [T.length (citeToken i) | Row {stepNo = Just i} <- rows])
     callW = maximum (0 : [T.length r.call | r <- rows])
 
     rowDoc r = foldMap snd (dropTrailing segments)
@@ -362,7 +383,7 @@ logDoc opts trace view = PP.vsep (fmap rowDoc rows)
           ]
         gutterTxt = table.cell r.gutter
         gutterDoc = PP.annotate (if r.gutter == NodeFail then FailureMark else StrandAnn 0) (PP.pretty gutterTxt)
-        stepTxt = T.justifyRight stepW ' ' (maybe "" (T.pack . show) r.stepNo)
+        stepTxt = T.justifyRight stepW ' ' (maybe "" citeToken r.stepNo)
         -- Pad the call to the column width only when a margin follows it;
         -- otherwise the padding is dead trailing whitespace (dropTrailing can't
         -- strip it — the segment isn't all-whitespace).

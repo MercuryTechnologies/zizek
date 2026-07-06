@@ -28,7 +28,7 @@ Minimum supported GHC version is 9.10 (enforced in CI and `zizek.cabal`). If you
 ## Package Structure
 
 - `library/Hegel.hs` — Public API: `prop`/`forEach`/`forEachWith`; re-exports `Gen`, settings, database, reports, phases, and assertions
-- `library/Hegel/Property.hs` — Property monad public API: `PropertyT`/`Property`, `forAll`/`forAllWith`/`forAllSilent`, `annotate`/`footnote`, `assume`/`discard`, `check`/`check_`, `assert`/`failure`, `(===)`/`(/==)`. Internals in `library/Hegel/Property/Internal.hs`
+- `library/Hegel/Property.hs` — Property monad public API: `PropertyT`/`Property`, `forAll`/`forAllWith`/`forAllWithLabel`/`forAllSilent`, `annotate`/`footnote`, `assume`/`discard`, `check`/`check_`, `assert`/`failure`, `(===)`/`(/==)`. Internals in `library/Hegel/Property/Internal.hs`. `forAllWithLabel "qty" g` labels a draw so the report reads `restock item="apple" qty=5` instead of a bare positional value — the fix for cryptic rule rows (no source parsing).
 - `library/Hegel/Stateful.hs` — stateful (model-based) testing: `Machine`/`Rule`/`Invariant` and `run`, layered on `PropertyT` (see Stateful Testing below)
 - `library/Hegel/Pool.hs` — engine-managed pools of values for stateful rules to draw from; an empty-pool draw discards the case
 - `library/Hegel/Report.hs` — `Report`/`Result`/`Stats` plus the plain/ANSI renderers: what a property run produces
