@@ -135,8 +135,7 @@ library
     Hegel.Report.Trace
     Hegel.Report.Trace.Blame
     Hegel.Report.Trace.Compose
-    Hegel.Report.Trace.Lead
-    Hegel.Report.Trace.Spine
+    Hegel.Report.Trace.Log
     Hegel.Runner
     Hegel.Settings
     Hegel.Stateful
@@ -359,11 +358,11 @@ test-suite unit
     Golden
     Integrations
     KeyedProperties
+    LogRendering
     PoolEvents
     PropertyChecks
     ReportRendering
     SourceRendering
-    SpineRendering
     StandardGenerators
     Stateful
     TraceFixtures

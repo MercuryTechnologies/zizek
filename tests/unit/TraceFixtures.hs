@@ -1,5 +1,5 @@
 -- | Shared fixtures for the trace-rendering suites ("PoolEvents",
--- "TraceModel", "SpineRendering"): the synthetic-stream helpers, the
+-- "TraceModel", "LogRendering"): the synthetic-stream helpers, the
 -- transfer/handoff fixture (a composed-report shape), and the eventful engine
 -- machine.
 module TraceFixtures
@@ -16,8 +16,15 @@ module TraceFixtures
 
     -- * A flat born+touch fixture (no death or handoff)
     flatFixture,
-    flatTrace,
-    flatBlame,
+
+    -- * A pool-free journal (unfocused, no blame)
+    noPoolFixture,
+    noPoolTrace,
+
+    -- * A two-root ledger (unfocused, blame present)
+    ledgerFixture,
+    ledgerTrace,
+    ledgerBlame,
 
     -- * The eventful engine machine
     Model (..),
@@ -106,8 +113,9 @@ handoffBlame = fromJust (Blame.analyze handoffTrace)
 
 -- | open(1) births the value, use(2) reuses it, use(3) reuses it and fails an
 -- assertion. The value is never consumed or transferred, so its story is flat
--- (born, then touched): 'Blame.hasLifecycleEvent' is 'False' and the composed
--- report degrades to the step timeline with a trajectory lead.
+-- (born, then touched): a single lineage root, so the report renders as the
+-- focused event log (birth and access rows, cites) with no lifecycle glyphs
+-- beyond born\/access.
 flatFixture :: ([Note], [Event])
 flatFixture =
   ( [ header (Tick 1) 1 "open",
@@ -122,11 +130,69 @@ flatFixture =
     ]
   )
 
-flatTrace :: Trace
-flatTrace = uncurry Trace.build flatFixture
+-- * A pool-free journal
 
-flatBlame :: Blame
-flatBlame = fromJust (Blame.analyze flatTrace)
+-- | A stateful failure with no pool values at all: three @push@/@pop@ steps
+-- with free (non-pool) draws and an annotation, the last failing. 'Blame.analyze'
+-- returns 'Nothing' (no pool events), so this is the @Unfocused Nothing@ shape —
+-- every step shown, blank gutters, the failing step marked @✗@, no margins.
+noPoolFixture :: ([Note], [Event])
+noPoolFixture =
+  ( [ header (Tick 1) 1 "push",
+      noteAt (Tick 2) 1 (Drawn []) "0",
+      header (Tick 3) 2 "push",
+      noteAt (Tick 4) 1 (Drawn []) "1",
+      noteAt (Tick 5) 1 Annotation "sum is now 1",
+      header (Tick 6) 3 "pop",
+      noteAt (Tick 7) 1 (Failure Nothing) "stack underflow"
+    ],
+    []
+  )
+
+noPoolTrace :: Trace
+noPoolTrace = uncurry Trace.build noPoolFixture
+
+-- * A two-root ledger
+
+a1 :: Var
+a1 = Var {pool = 0, id = 1}
+
+a2 :: Var
+a2 = Var {pool = 0, id = 2}
+
+-- | Two independent accounts (distinct lineage roots, no transfer): each opened
+-- and touched, the final @audit@ step touching both and failing. 'Blame.analyze'
+-- returns 'Just' (there are pool events) but the failing step spans two roots,
+-- so this is the @Unfocused (Just blame)@ shape — every step shown with per-step
+-- lifecycle glyphs and kept margins.
+ledgerFixture :: ([Note], [Event])
+ledgerFixture =
+  ( [ header (Tick 1) 1 "open",
+      noteAt (Tick 3) 1 (Drawn [a1]) "acct",
+      header (Tick 4) 2 "open",
+      noteAt (Tick 6) 1 (Drawn [a2]) "acct",
+      header (Tick 7) 3 "deposit",
+      noteAt (Tick 9) 1 (Drawn [a1]) "acct",
+      noteAt (Tick 10) 1 (Drawn []) "5",
+      noteAt (Tick 11) 1 Annotation "balance a₁ = 5",
+      header (Tick 12) 4 "audit",
+      noteAt (Tick 15) 1 (Drawn [a1]) "acct",
+      noteAt (Tick 16) 1 (Drawn [a2]) "acct",
+      noteAt (Tick 17) 1 (Failure Nothing) "balances disagree"
+    ],
+    [ eventAt (Tick 2) a1 (Born Nothing),
+      eventAt (Tick 5) a2 (Born Nothing),
+      eventAt (Tick 8) a1 Reused,
+      eventAt (Tick 13) a1 Reused,
+      eventAt (Tick 14) a2 Reused
+    ]
+  )
+
+ledgerTrace :: Trace
+ledgerTrace = uncurry Trace.build ledgerFixture
+
+ledgerBlame :: Blame
+ledgerBlame = fromJust (Blame.analyze ledgerTrace)
 
 -- * The eventful engine machine
 

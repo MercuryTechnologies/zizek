@@ -47,9 +47,6 @@ data Cell
   | Ellipsis
   | NumericCite
   | ResponseArrow
-  | -- | The trajectory lead: the prefix on a degraded report's value-history
-    -- breadcrumb (@↳ p₁: open \@1 · …@).
-    TrajectoryLead
   | Blank
   deriving stock (Show, Eq, Ord, Enum, Bounded)
 
@@ -76,7 +73,6 @@ unicode =
         Ellipsis -> "⋯"
         NumericCite -> "←"
         ResponseArrow -> "→"
-        TrajectoryLead -> "↳"
         Blank -> " ",
       valueName = \label poolOrd valOrd ->
         maybe (poolLetter poolOrd) id label <> subscript valOrd
@@ -99,7 +95,6 @@ ascii =
         Ellipsis -> "..."
         NumericCite -> "<-"
         ResponseArrow -> "->"
-        TrajectoryLead -> "\\->"
         Blank -> " ",
       valueName = \label poolOrd valOrd ->
         maybe (poolLetter poolOrd) id label <> T.pack (show valOrd)

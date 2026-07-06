@@ -6,11 +6,11 @@ import DatabaseReplay qualified
 import GeneratorSchemas qualified
 import Integrations qualified
 import KeyedProperties qualified
+import LogRendering qualified
 import PoolEvents qualified
 import PropertyChecks qualified
 import ReportRendering qualified
 import SourceRendering qualified
-import SpineRendering qualified
 import StandardGenerators qualified
 import Stateful qualified
 import Test.Tasty (defaultMain, testGroup)
@@ -32,7 +32,7 @@ main = do
   stateful <- testSpec "stateful testing" Stateful.spec
   poolEvents <- testSpec "pool events" PoolEvents.spec
   traceModel <- testSpec "trace model" TraceModel.spec
-  ledger <- testSpec "spine rendering" SpineRendering.spec
+  ledger <- testSpec "event-log rendering" LogRendering.spec
   defaultMain
     ( testGroup
         "zizek:unit"

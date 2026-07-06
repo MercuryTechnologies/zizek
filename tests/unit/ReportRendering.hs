@@ -334,11 +334,12 @@ spec = do
       -- file, so the source listing should include the marked line.
       "splice-marker" `T.isInfixOf` rich `shouldBe` True
 
-    it "falls back to the plain structured layout when nothing splices" $ do
-      -- The stateful rich path falls back per-note; with every location
-      -- unreadable (aLoc names a file that doesn't exist) the output must
-      -- equal the plain layout byte-for-byte — the old degrade guarantee
-      -- surviving as the degenerate case.
+    it "degrades the failing step to structured lines when nothing splices" $ do
+      -- The rich event-log path splices per-note; with every location
+      -- unreadable (aLoc names a file that doesn't exist) the failing step
+      -- falls back to its structured journal lines (header, ✗ message, loc),
+      -- appended after the compact log — no source-splice chrome, but the
+      -- reason still reads (the rich log is no longer byte-equal to plain).
       let result =
             Counterexample
               { events = [],
@@ -352,7 +353,11 @@ spec = do
               }
           report = Report {result, stats = Stats {valid = 4, invalid = 0}, databaseKey = Nothing}
       rich <- renderReportRich report
-      rich `shouldBe` renderReport report
+      rich `shouldSatisfy` T.isInfixOf "Step 1: increment"
+      rich `shouldSatisfy` T.isInfixOf "✗ counter stays small"
+      rich `shouldSatisfy` T.isInfixOf "at tests/Spec.hs:42"
+      -- Nothing spliced, so no source-listing chrome.
+      T.count "┏━━" rich `shouldBe` 0
 
     it "splices the failing step's notes into their source" $ do
       let drawLoc = hereLoc -- stateful-splice-marker-draw
@@ -398,6 +403,31 @@ spec = do
       -- The failure splices; the unreadable draw keeps its structured line.
       ("stateful-mix-marker" `T.isInfixOf` rich) `shouldBe` True
       ("Draw 1: 7" `T.isInfixOf` rich) `shouldBe` True
+
+    it "keeps the top-level headline for a Failure-less step journal" $ do
+      -- An exception mid-loop (or a failure in machine.initial) leaves a step
+      -- journal with no in-band Failure note: the log has no ✗ row and nothing
+      -- splices, so the top-level message/location must lead — else nothing
+      -- states why the run failed.
+      let result =
+            Counterexample
+              { events = [],
+                message = "boom: exception in rule",
+                notes =
+                  [ step "Step 1: rule_a",
+                    Note {kind = Drawn [], text = "42", loc = Nothing, depth = 1, clock = Tick 0}
+                  ],
+                loc = Just aLoc,
+                diff = Nothing
+              }
+          report = Report {result, stats = Stats {valid = 2, invalid = 0}, databaseKey = Nothing}
+      rich <- renderReportRich report
+      -- The headline and location are kept (no in-band ✗ carries the reason)…
+      rich `shouldSatisfy` T.isInfixOf "boom: exception in rule"
+      rich `shouldSatisfy` T.isInfixOf "at tests/Spec.hs:42"
+      -- …the step still shows in the log, but there is no failure mark.
+      rich `shouldSatisfy` T.isInfixOf "rule_a"
+      rich `shouldNotSatisfy` T.isInfixOf "✗"
 
     it "degrades to plain renderReport when the source file is missing" $ do
       let loc' =

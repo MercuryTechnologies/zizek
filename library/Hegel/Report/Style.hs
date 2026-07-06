@@ -1,8 +1,8 @@
 -- | The composed report's style record; applies to glyphs, words, and the
--- trace layout.
+-- event-log layout.
 --
--- The spine and the timeline both read chronologically (oldest first, the
--- failing step last).
+-- The event log reads chronologically (oldest first, the failing step last),
+-- in both its focused (single-value) and unfocused (all-steps) views.
 module Hegel.Report.Style
   ( Style (..),
     defaultStyle,

@@ -1,6 +1,7 @@
--- | Pure pins for the citation spine ("Hegel.Report.Trace.Spine") and the glyph
--- tables ("Hegel.Report.Glyph"), plus one engine run through the full path.
-module SpineRendering (spec) where
+-- | Pure pins for the chronological event log ("Hegel.Report.Trace.Log") and
+-- the glyph tables ("Hegel.Report.Glyph"), plus one engine run through the full
+-- path.
+module LogRendering (spec) where
 
 import Control.Monad.IO.Class (liftIO)
 import Data.List (nub)
@@ -30,28 +31,27 @@ import Hegel.Report.Style (Style (..), defaultStyle)
 import Hegel.Report.Trace qualified as Trace
 import Hegel.Report.Trace.Blame (Citation (..), Fact (..))
 import Hegel.Report.Trace.Blame qualified as Blame
-import Hegel.Report.Trace.Lead qualified as Lead
-import Hegel.Report.Trace.Spine qualified as Spine
+import Hegel.Report.Trace.Log qualified as Log
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import System.Environment (setEnv, unsetEnv)
 import System.IO (stdout)
 import Test.Hspec
-import TraceFixtures (eventAt, eventfulMachine, flatBlame, flatFixture, flatTrace, h1, handoffBlame, handoffFixture, handoffTrace, header, noteAt)
+import TraceFixtures (eventAt, eventfulMachine, flatFixture, h1, handoffBlame, handoffFixture, handoffTrace, header, ledgerBlame, ledgerFixture, ledgerTrace, noPoolTrace, noteAt)
 
 -- ---------------------------------------------------------------------------
 -- Fixture: the transfer/handoff shape (with filler steps so elision rows render)
 
 renderWith :: Style -> Text
-renderWith style = docToText (Spine.spineDoc style handoffTrace handoffBlame)
+renderWith style = docToText (Log.logDoc style handoffTrace (Log.Focused handoffBlame))
 
 -- ---------------------------------------------------------------------------
 -- Spec
 
 spec :: Spec
 spec = do
-  describe "spineDoc" do
+  describe "logDoc" do
     it "renders the chronological unicode spine (transfer/handoff shape)" do
       renderWith (defaultStyle Glyph.unicode)
         `shouldRenderAs` [ "● 1  open v₁                    v₁ was created",
@@ -90,15 +90,15 @@ spec = do
     it "puts the failing row last (chronological)" do
       -- Chronological: the oldest step leads, the failing step is the last row.
       -- (The spine carries no diff — the composed report's splice does.)
-      let rows = Spine.layoutRows (defaultStyle Glyph.unicode) handoffTrace handoffBlame
+      let rows = Log.layoutRows (defaultStyle Glyph.unicode) handoffTrace (Log.Focused handoffBlame)
       fmap (\r -> (r.kind, r.stepNo)) (take 1 (reverse rows))
-        `shouldBe` [(Spine.NodeRow, Just 8)]
+        `shouldBe` [(Log.NodeRow, Just 8)]
 
-    it "renders a non-pool draw as a free-draw detail row; pool references stay symbolic" do
-      -- A cited history step (write) that draws a pool handle and a plain payload
-      -- ("payload"): the pool reference keeps its symbolic name (no inline value),
-      -- while the payload, bound to no touch, drops to a free-draw detail row.
-      -- (The later read reuses the handle and fails.)
+    it "inlines a short non-pool draw into the call; pool references stay symbolic" do
+      -- A cited step (write) draws a pool handle and a plain payload ("payload").
+      -- The pool reference keeps its symbolic name (the "handle" draw text is not
+      -- shown); the short payload folds into the call. (Later read reuses the
+      -- handle and fails.)
       let notes =
             [ header (Tick 1) 1 "write",
               noteAt (Tick 4) 1 (Drawn [h1]) "handle",
@@ -114,14 +114,36 @@ spec = do
             ]
           t = Trace.build notes events
           b = fromJust (Blame.analyze t)
-          rows = Spine.layoutRows (defaultStyle Glyph.unicode) t b
-      -- The pool draw is not shown inline (no "=handle") and not a free draw.
-      [r.call | r <- rows, r.kind == Spine.NodeRow] `shouldSatisfy` all (not . T.isInfixOf "handle")
-      [r.call | r <- rows, r.kind == Spine.DetailRow] `shouldSatisfy` elem "payload"
+          rows = Log.layoutRows (defaultStyle Glyph.unicode) t (Log.Focused b)
+      -- The payload inlines into the write NodeRow's call…
+      [r.call | r <- rows, r.kind == Log.NodeRow] `shouldSatisfy` any (T.isInfixOf "payload")
+      -- …and the pool draw's value text ("handle") is never rendered (symbolic).
+      [r.call | r <- rows] `shouldSatisfy` all (not . T.isInfixOf "handle")
+
+    it "drops a multi-line free draw to a detail row rather than inlining it" do
+      let notes =
+            [ header (Tick 1) 1 "write",
+              noteAt (Tick 4) 1 (Drawn [h1]) "handle",
+              noteAt (Tick 5) 1 (Drawn []) "big\nvalue",
+              header (Tick 6) 2 "read",
+              noteAt (Tick 9) 1 (Drawn [h1]) "handle",
+              noteAt (Tick 10) 1 (Failure Nothing) "boom"
+            ]
+          events =
+            [ eventAt (Tick 2) h1 (Born Nothing),
+              eventAt (Tick 3) h1 Reused,
+              eventAt (Tick 8) h1 Reused
+            ]
+          t = Trace.build notes events
+          b = fromJust (Blame.analyze t)
+          rows = Log.layoutRows (defaultStyle Glyph.unicode) t (Log.Focused b)
+      -- The multi-line value can't inline; it becomes dim detail rows, one per line.
+      [r.call | r <- rows, r.kind == Log.DetailRow] `shouldBe` ["big", "value"]
+      [r.call | r <- rows, r.kind == Log.NodeRow] `shouldSatisfy` all (not . T.isInfixOf "big")
 
     it "elides unshown steps explicitly, with counts" do
-      let rows = Spine.layoutRows (defaultStyle Glyph.unicode) handoffTrace handoffBlame
-      [r.call | r <- rows, r.kind == Spine.ElisionRow]
+      let rows = Log.layoutRows (defaultStyle Glyph.unicode) handoffTrace (Log.Focused handoffBlame)
+      [r.call | r <- rows, r.kind == Log.ElisionRow]
         `shouldBe` ["⋯ 2 steps, none touch v₁", "⋯ 2 steps, none touch v₁"]
 
     it "gives each elided lifeline its own trajectory (off-spine section)" do
@@ -143,29 +165,26 @@ spec = do
             ]
           t = Trace.build notes events
           b = fromJust (Blame.analyze t)
-      fmap docToText (Spine.elidedLifelinesDoc (defaultStyle Glyph.unicode) t b)
+      fmap docToText (Log.elidedLifelinesDoc (defaultStyle Glyph.unicode) t b)
         `shouldSatisfy` maybe False (T.isInfixOf "spawn @2")
 
-  describe "leadDoc" do
-    it "words the failing value's history in rule names, chronological, sans failing step" do
-      fmap (unwrap . docToText) (Lead.leadDoc (defaultStyle Glyph.unicode) flatTrace flatBlame)
-        `shouldBe` Just "↳ v₁: open @1 · use @2"
+  describe "unfocused log" do
+    it "renders a pool-free journal: all steps, blank gutters, ✗ on failure, no margins" do
+      docToText (Log.logDoc (defaultStyle Glyph.unicode) noPoolTrace (Log.Unfocused Nothing))
+        `shouldRenderAs` [ "  1  push 0",
+                           "  2  push 1",
+                           "     sum is now 1",
+                           "✗ 3  pop"
+                         ]
 
-    it "uses the ascii lead glyph and the plain value name under the ascii table" do
-      fmap docToText (Lead.leadDoc (defaultStyle Glyph.ascii) flatTrace flatBlame)
-        `shouldSatisfy` maybe False (T.isInfixOf "\\-> v1: open @1")
-
-    it "is Nothing when the value passed through no earlier step" do
-      let t =
-            Trace.build
-              [ header (Tick 1) 1 "boom",
-                noteAt (Tick 3) 1 (Failure Nothing) "boom"
-              ]
-              [eventAt (Tick 2) h1 (Born Nothing)]
-          b = fromJust (Blame.analyze t)
-      Lead.leadDoc (defaultStyle Glyph.unicode) t b `shouldSatisfy` \case
-        Nothing -> True
-        Just _ -> False
+    it "renders a two-root ledger: all steps, per-step glyphs, kept margins" do
+      docToText (Log.logDoc (defaultStyle Glyph.unicode) ledgerTrace (Log.Unfocused (Just ledgerBlame)))
+        `shouldRenderAs` [ "● 1  open v₁          v₁ was created",
+                           "● 2  open v₂",
+                           "○ 3  deposit v₁ 5     v₁ was accessed",
+                           "     balance a₁ = 5",
+                           "✗ 4  audit v₁ v₂      ← cites 1, 3"
+                         ]
 
   describe "review fixes" do
     it "a lineage cycle terminates root and chain (malformed stream)" do
@@ -242,13 +261,27 @@ spec = do
       out <- renderReportRich (uncurry (flip reportOf) handoffFixture)
       out `shouldNotSatisfy` T.isInfixOf "stored:"
 
-    it "a flat pool failure degrades to the timeline plus a lead" do
+    it "a multi-root failure renders unfocused (all steps, no elision)" do
+      -- The failing settle touches two lineage roots, so chooseView picks
+      -- Unfocused: every step is shown (no focus subject to elide around) and
+      -- the focused-only \"none touch\" elision device never appears, while the
+      -- blame still supplies per-step margins.
+      out <- renderReportRich (uncurry (flip reportOf) ledgerFixture)
+      out `shouldSatisfy` T.isInfixOf "open v₁"
+      out `shouldSatisfy` T.isInfixOf "open v₂"
+      out `shouldSatisfy` T.isInfixOf "v₁ was created"
+      out `shouldNotSatisfy` T.isInfixOf "none touch"
+
+    it "a flat single-value pool failure renders as a focused log (no lead)" do
       out <- renderReportRich (uncurry (flip reportOf) flatFixture)
-      -- The lead names the failing value's history in rule names,
-      out `shouldSatisfy` T.isInfixOf "↳ v₁: open @1 · use @2"
-      -- the step timeline is still there,
+      -- A single-value failure is the focused log: birth margin and cites,
+      -- even with no death/handoff in the history.
+      out `shouldSatisfy` T.isInfixOf "v₁ was created"
+      out `shouldSatisfy` T.isInfixOf "← cites 1, 2"
+      -- The failing step's reason is spliced (structured fallback here).
       out `shouldSatisfy` T.isInfixOf "Step 3: use"
-      -- and there is no spine (no link arrows) or headline contrast.
+      -- No retired lead one-liner, no spine link arrows, no headline contrast.
+      out `shouldNotSatisfy` T.isInfixOf "↳"
       out `shouldNotSatisfy` T.isInfixOf "◀"
       out `shouldNotSatisfy` T.isInfixOf " — but "
 
@@ -278,8 +311,8 @@ spec = do
       out <- renderReportRich (report {databaseKey = Just "k"} :: Report)
       Glyph.sevenBitClean out `shouldNotSatisfy` T.isInfixOf "\\x"
 
-    it "a degraded report's lead survives sevenBitClean" do
-      -- The lead glyph (↳) and separator (·) must transliterate too.
+    it "a flat single-value report survives sevenBitClean" do
+      -- The focused-log chrome and phrase typography must transliterate too.
       out <- renderReportRich (uncurry (flip reportOf) flatFixture)
       Glyph.sevenBitClean out `shouldNotSatisfy` T.isInfixOf "\\x"
 
@@ -308,7 +341,7 @@ spec = do
           case Blame.analyze trace of
             Nothing -> expectationFailure "expected blame"
             Just blame -> do
-              let out = docToText (Spine.spineDoc (defaultStyle Glyph.unicode) trace blame)
+              let out = docToText (Log.logDoc (defaultStyle Glyph.unicode) trace (Log.Focused blame))
               out `shouldSatisfy` T.isInfixOf "✗"
               out `shouldSatisfy` T.isInfixOf "●"
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
@@ -328,10 +361,6 @@ reportOf events notes =
       stats = Stats {valid = 1, invalid = 0},
       databaseKey = Nothing
     }
-
--- | Undo paragraph reflow for comparison.
-unwrap :: Text -> Text
-unwrap = T.unwords . T.words
 
 -- | No two distinct cells in a family may render to the same glyph.
 distinctUnder :: GlyphTable -> [Cell] -> Bool

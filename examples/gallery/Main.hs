@@ -1,36 +1,36 @@
 -- | A gallery of deliberately-failing properties: the permanent eyeball
--- harness for the failure renderers. Five scenarios span the whole spectrum
--- of report forms, each earning its place:
+-- harness for the failure renderers. Six scenarios span the spectrum of report
+-- shapes, each earning its place. Every stateful failure renders as the one
+-- chronological event log (oldest step to the failing step, then that step's
+-- source splice); the log has two views — 'Focused' on a single pool value
+-- (others elided) and 'Unfocused' with every step shown:
 --
 --   1. plain property — the non-stateful base case: drawn values splice into
 --      their source and a '(===)' failure carries a structural diff, with no
---      step timeline, spine, or footer
+--      event log or footer
 --   2. stack palindrome — the smallest /stateful/ spliced report: a multi-rule
---      '(===)' failure with a structural diff in-band
---   3. warehouse — the realistic spliced report: four rules over three
+--      '(===)' failure with a structural diff in-band, no pool values, so an
+--      unfocused log (compact call rows) leads the splice
+--   3. warehouse — the realistic no-pool report: four rules over three
 --      coupled structures, cross-structure invariants, a minimal
---      counterexample that interleaves three distinct rules (the decisive
---      scenario of the Timeline-layout evaluation)
---   4. file handles — the flagship citation spine: a use-after-close bug
---      whose /minimal/ counterexample needs an unrelated open between the
---      write and the close, so the spine shows the full vocabulary — a
---      three-edge link, an elision row, a lineage-linked lifeline across
---      two pools ('Pool.transfer'), named values, and an elided-lifeline
---      footer. Printed in unicode and ascii, beside the unicode report.
---   5. poked value — a flat story (born, then poked): no death or handoff,
---      so it degrades to the step timeline with a compact lead
---   6. ledger — a /multi-subject/ failure: the settling step consumes two
---      distinct funded accounts, so the failure is caused by two pool values
---      at once. Blame surfaces one value; the chronological timeline shows both
---      accounts' activity. A standing fixture for multi-value failures.
+--      counterexample that interleaves three distinct rules — an unfocused log
+--      with inlined draws and annotation detail rows
+--   4. file handles — the flagship focused log: a use-after-close bug whose
+--      /minimal/ counterexample needs an unrelated open between the write and
+--      the close, so the focused log shows the full vocabulary — lifecycle
+--      gutters, an elision row, a lineage-linked lifeline across two pools
+--      ('Pool.transfer'), named values, and an elided-lifeline footer. Printed
+--      in unicode and ascii, beside the unicode report.
+--   5. poked value — a flat single-value story (born, then poked): no death or
+--      handoff, one lineage root, so it renders as the focused log
+--   6. ledger — a /multi-value/ failure: the settling step consumes two
+--      distinct funded accounts, so the failing step touches two lineage roots
+--      and the log stays unfocused — every step shown with per-step lifecycle
+--      glyphs and the blame's margins.
 --
--- Run with @just gallery@ from the repo root (source
--- splicing resolves @srcLocFile@ relative to the working directory).
--- Every scenario renders through 'renderReportRichAnsi', the same path real
--- failures take: scenario 4's handoff earns the composed trace report — the
--- chronological citation spine (oldest step to the failing step), then that
--- step's source splice, then the off-spine lifelines; scenario 5's flat story
--- degrades to the step timeline with a lead.
+-- Run with @just gallery@ from the repo root (source splicing resolves
+-- @srcLocFile@ relative to the working directory). Every scenario renders
+-- through 'renderReportRichAnsi', the same path real failures take.
 --
 -- Always exits 0; this is an eyeballing harness, not an assertion.
 module Main (main) where
@@ -60,9 +60,9 @@ main = do
   runScenario "1: plain property — drawn values spliced, === diff" plainProperty
   runScenario "2: stack palindrome — === diff, spliced" (Stateful.run palindromeMachine)
   runScenario "3: warehouse — realistic interleaving, spliced" (Stateful.run warehouseMachine)
-  runTraceScenario True "4: file handles — use-after-close, citation spine" (Stateful.run fileHandleMachine)
-  runTraceScenario False "5: poked value — flat story, degrades to lead" (Stateful.run overflowMachine)
-  runTraceScenario False "6: ledger — two accounts settled (multi-subject candidate)" (Stateful.run ledgerMachine)
+  runTraceScenario True "4: file handles — use-after-close, focused log" (Stateful.run fileHandleMachine)
+  runTraceScenario False "5: poked value — flat single-value story, focused log" (Stateful.run overflowMachine)
+  runTraceScenario False "6: ledger — two accounts settled, unfocused log" (Stateful.run ledgerMachine)
 
 runScenario :: Text -> Property () -> IO ()
 runScenario title prop = showReport title =<< check defaultSettings prop
@@ -74,7 +74,7 @@ showReport title report = do
   T.putStrLn =<< renderReportRichAnsi report
 
 -- | The trace scenarios through the /wired/ path — 'renderReportRichAnsi'
--- composes the citation spine, the failing step's splice, and the footer
+-- composes the event log, the failing step's splice, and the footer
 -- itself — plus the ascii table via the options variant.
 runTraceScenario :: Bool -> Text -> Property () -> IO ()
 runTraceScenario withAscii title prop = do
@@ -97,7 +97,7 @@ pluralize n noun = renderValue n <> " " <> noun <> "s"
 
 -- | The non-stateful base case: two draws and a false claim (subtraction does
 -- not commute), so the report is just the spliced draws and the '(===)' diff —
--- no step timeline, spine, or footer.
+-- no event log or footer.
 plainProperty :: Property ()
 plainProperty = do
   a <- forAll (Gen.int & Gen.min 0 & Gen.max 9 & Gen.build)
@@ -252,7 +252,7 @@ warehouseMachine =
       invariants = [reservationsMatchOrders, stockCoversReservations, stockNonNegative]
     }
 
--- * Scenario 4: file handles (citation spine, flagship)
+-- * Scenario 4: file handles (focused log, flagship)
 
 -- | Handles live in the @handle@ pool while open and 'Pool.transfer' into the
 -- @closed@ pool on close, so the report keeps one lifeline across both.
@@ -369,14 +369,16 @@ overflowMachine =
         ]
     }
 
--- * Scenario 6: ledger (multi-subject blame candidate)
+-- * Scenario 6: ledger (multi-value, unfocused log)
 
 -- | The failing step touches /two/ distinct pool values, each with its own
 -- deposit history: @settle@ consumes two funded accounts and trips a claim
--- about both. Today blame keeps one account for the spine and relegates the
--- other to a footer lead; once multi-subject blame lands, both operands' stories
--- should weave into one report. A permanent before/after fixture for that work
--- (see @notes/roadmap.md@).
+-- about both. Two lineage roots at the failing step keep the log 'Unfocused' —
+-- every step shown with per-step lifecycle glyphs, so both accounts' activity
+-- is visible. Blame still surfaces a single subject, so the right-margin facts
+-- (@… was created@ / @accessed@) and the @← cites@ list follow that one value;
+-- the other account's rows show their glyphs but no margin. A standing fixture
+-- for multi-value failures.
 --
 -- The claim is deliberately false — nothing in the model stops two accounts from
 -- holding funds at once — in the spirit of scenario 2's palindrome.

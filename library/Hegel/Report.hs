@@ -43,7 +43,7 @@ where
 
 import Control.Exception (Exception (displayException), SomeException, throwIO)
 import Data.Either (partitionEithers)
-import Data.List (partition)
+import Data.List (nub, partition)
 import Data.Maybe (catMaybes, maybeToList)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -66,14 +66,13 @@ import Hegel.Report.Source
     ppFailureLocation,
   )
 import Hegel.Report.Span (Span (..), spanFromSrcLoc)
-import Hegel.Report.Stateful (failingGroupDoc, isStepJournal, noteFiles, statefulDoc)
+import Hegel.Report.Stateful (isStepJournal, noteFiles)
 import Hegel.Report.Style (Style (..), defaultStyle)
 import Hegel.Report.Trace qualified as Trace
 import Hegel.Report.Trace.Blame (Blame)
 import Hegel.Report.Trace.Blame qualified as Blame
 import Hegel.Report.Trace.Compose (composedDoc)
-import Hegel.Report.Trace.Compose qualified as Compose
-import Hegel.Report.Trace.Lead qualified as Lead
+import Hegel.Report.Trace.Log qualified as Log
 import Prettyprinter (Doc, (<+>))
 import Prettyprinter qualified as PP
 
@@ -225,51 +224,36 @@ renderRichImpl style plain toText report = do
     Nothing -> plain report
     Just body -> toText (PP.vsep ["failed after" <+> statsDoc report.stats, body])
 
--- | Which rich failure form a counterexample renders as. The constructor
--- order is the degradation order.
-data Form
-  = -- | No pool events: the spliced timeline, byte-for-byte (no footer, even
-    -- under a database key).
-    NoEventTimeline
-  | -- | Events, but nothing to cite: the timeline plus the footer.
-    PlainTimeline
-  | -- | A blame tree with no death\/handoff in its cited history: the timeline
-    -- with a compact 'Lead' for the failing value, plus the footer.
-    LeadTimeline !Blame
-  | -- | A blame tree whose cited history holds a death or handoff, so the
-    -- spine's geometry earns its place: the full composed report.
-    Composed !Blame
-  deriving stock (Show)
+-- | Pick the event-log view for a counterexample: 'Log.Focused' on a single
+-- failing pool value when blame resolves and the failing step touches exactly
+-- one lineage root; otherwise 'Log.Unfocused' (no pool value, or several at
+-- once), carrying the blame when present for gutter glyphs and margins.
+chooseView :: Maybe Blame -> Trace.Trace -> Log.View
+chooseView mBlame trace = case mBlame of
+  Just blame | failingRootCount trace == 1 -> Log.Focused blame
+  _ -> Log.Unfocused mBlame
 
--- | Pick the rich failure form for a counterexample: the single home of the
--- degradation ladder. Reads only model\/analysis facts (does the run have
--- events; does the blame tree cite a lifecycle event) — the rendering it
--- names lives in 'richDoc'.
-chooseForm :: Bool -> Maybe Blame -> Form
-chooseForm hasEvents mBlame
-  | not hasEvents = NoEventTimeline
-  | otherwise = case mBlame of
-      Nothing -> PlainTimeline
-      Just blame
-        | Blame.hasLifecycleEvent blame -> Composed blame
-        | otherwise -> LeadTimeline blame
+-- | How many distinct lineage roots the failing step touches (0 when nothing
+-- failed in-band). One root focuses the log on that value; several keep it
+-- unfocused with per-step glyphs.
+failingRootCount :: Trace.Trace -> Int
+failingRootCount trace = case trace.failure of
+  Nothing -> 0
+  Just f ->
+    length . nub $
+      [Trace.root trace t.var | s <- trace.steps, s.index == f.step, t <- s.touches]
 
 -- | Attempt to build the rich failure doc, falling back to 'Nothing' when
 -- the result is not a counterexample or no declaration could be read for
--- any location. 'chooseForm' selects the form; 'richDoc' renders it.
+-- any location. 'chooseView' picks focused vs unfocused; 'composedDoc' renders.
 richDoc :: Style -> Report -> IO (Maybe (Doc Ann))
 richDoc style report = case report.result of
   Counterexample {message, notes, events, loc, diff}
     | isStepJournal notes -> do
         decls <- loadDeclarations (noteFiles notes)
         let trace = Trace.build notes events
-            timelineWith lead = statefulDoc decls message notes loc diff lead
-            withFooter d = PP.vsep (d : maybeToList (Compose.footerDoc style.phrases report.databaseKey))
-        pure . Just $ case chooseForm (not (null events)) (Blame.analyze trace) of
-          NoEventTimeline -> timelineWith Nothing
-          PlainTimeline -> withFooter (timelineWith Nothing)
-          LeadTimeline blame -> withFooter (timelineWith (Lead.leadDoc style trace blame))
-          Composed blame -> composedDoc style decls trace blame notes report.databaseKey
+            view = chooseView (Blame.analyze trace) trace
+        pure (Just (composedDoc style decls trace view notes message loc diff report.databaseKey))
     | otherwise -> plainRichDoc message notes loc diff
   _ -> pure Nothing
 
