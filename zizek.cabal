@@ -356,6 +356,7 @@ test-suite unit
     ControlSignals
     DatabaseReplay
     GeneratorSchemas
+    Golden
     Integrations
     KeyedProperties
     PoolEvents

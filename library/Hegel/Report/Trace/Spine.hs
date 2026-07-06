@@ -1,13 +1,4 @@
--- | The spine: a failing value's story rendered as an aligned vertical
--- backbone with a mid-line citation link, from 'Hegel.Report.Trace' &
--- 'Hegel.Report.Trace.Blame'.
---
--- Renders one value's strand on a single spine; it is not a one-lane braid —
--- parallel lanes are reserved for concurrent timelines (see
--- notes/decisions/report-visual-grammar.md).
---
--- Layout emits abstract 'Cell's; glyphs are applied last via the
--- 'Glyph.GlyphTable'.
+-- | A failing value's history rendered as an aligned vertical reference.
 --
 -- Intended to be imported with qualification:
 --
@@ -82,11 +73,6 @@ layoutRows opts trace blame = orient <> footerRows
     closure = Blame.citationClosure blame
     cited = blame.observed.since
     k = length cited
-    -- Connectors are reserved for citations that cross concurrent timelines
-    -- (threads). No trace has more than one thread yet — a citation to another
-    -- value in a sequential test is not a crossing (values are strands on one
-    -- spine, not lanes), so the default is 'Numeric'. Enriching 'Blame' to cite
-    -- across values must not silently re-activate the connectors.
     linkWanted = case opts.linkMode of
       Links -> True
       Numeric -> False
@@ -141,6 +127,7 @@ layoutRows opts trace blame = orient <> footerRows
         go prev (s : rest) =
           elisionRowsBetween prev s.index
             <> [citedRow s]
+            <> drawnRows s
             <> go (Just s.index) rest
     terminator =
       [ Row {kind = TerminatorRow, gutter = HistoryEnd, stepNo = Nothing, call = "", link = [], annot = "", detailAnn = Nothing}
@@ -158,6 +145,20 @@ layoutRows opts trace blame = orient <> footerRows
           annot = maybe "" factText (listToMaybe [o.fact | (_, o) <- indexedCites, o.step == s.index]),
           detailAnn = Nothing
         }
+    drawnRows s =
+      [ Row
+          { kind = DetailRow,
+            gutter = EdgeAlive,
+            stepNo = Nothing,
+            call = l,
+            link = if drawLink then verticalsWith LinkVertical [c | (c, o) <- indexedCites, o.step < s.index] else [],
+            annot = "",
+            detailAnn = Nothing
+          }
+      | d <- s.freeDraws,
+        l <- T.lines d
+      ]
+
     gutterFor s
       | (rootLife >>= (.bornAt)) == Just s.index = NodeBorn
       -- Death glyphs mean death: a consumption continued by a transfer

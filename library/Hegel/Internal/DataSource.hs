@@ -52,7 +52,7 @@ import Hegel.Internal.Event qualified as Event
 import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw hiding (generate)
 import Hegel.Internal.Foreign.Raw qualified as FFI (generate)
-import Hegel.Internal.TestCase (Handle (..), TestCase (..))
+import Hegel.Internal.TestCase (Handle (..), TestCase (..), recordDraw)
 import Hegel.Internal.Tick qualified as Tick
 import UnliftIO.Exception (catch)
 import Witch qualified
@@ -197,12 +197,16 @@ poolGenerate tc pid consume = do
     hegel_pool_generate tc.handle.ctx tc.handle.ptr (fromIntegral pid) (CBool (if consume then 1 else 0)) outId
       >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
+  let var = Event.Var {pool = pid, id = vid}
   Tick.record tc.recording tc.events \c ->
     Event.Event
       { clock = c,
-        var = Event.Var {pool = pid, id = vid},
+        var,
         kind = if consume then Event.Consumed else Event.Reused
       }
+  -- Tag this draw so the enclosing 'forAll' can bind its rendered value to
+  -- this pool 'Var' (see Note [Draw provenance].
+  recordDraw tc var
   pure vid
 
 -- * State machines

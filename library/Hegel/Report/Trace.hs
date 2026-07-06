@@ -35,7 +35,7 @@ import GHC.Stack (SrcLoc)
 import Hegel.Diff (Diff)
 import Hegel.Internal.Event (Event (..), Operation (..), Var (..))
 import Hegel.Internal.Tick (Tick (..))
-import Hegel.Report.Note (Note (..), NoteKind (Response, StepHeader))
+import Hegel.Report.Note (Note (..), NoteKind (Drawn, Response, StepHeader))
 import Hegel.Report.Note qualified as Note
 
 -- * Trace
@@ -67,6 +67,8 @@ data Step = Step
     response :: !(Maybe Text),
     -- | Pool activity within the step's window, in clock-order.
     touches :: [Touch],
+    -- | Rendered values of this step's draws that are /not/ bound to a 'Touch'.
+    freeDraws :: ![Text],
     -- | Does this step's subtree carry the in-band 'Failure'?
     failed :: !Bool
   }
@@ -123,21 +125,26 @@ build notes events =
     segments = segment notes
     toStep seg end =
       let body = seg.body
+          inWindow e = windowStart seg <= e.clock && e.clock < end
+          stepEvents = [e | e <- events, inWindow e, isTouch e.kind]
+          -- Note [Draw provenance]
+          -- ~~~~~~~~~~~~~~~~~~~~~~~
+          -- A value drawn from a pool journals its 'Drawn' note tagged with the
+          -- 'Var'(s) it resolved ('Hegel.Property.Internal.forAllWith'). A note
+          -- tagged with exactly one 'Var' is a pool draw already represented by
+          -- that var's 'Touch'; anything else — a plain non-pool draw (tagged
+          -- @[]@) or a composite multi-pool draw — is a free draw, surfaced as a
+          -- detail line. The tag is what tells the two apart.
+          touchVars = fmap (.var) stepEvents
+          boundToTouch = \case [v] -> v `elem` touchVars; _ -> False
        in Step
             { index = segmentIndex seg,
               rule = segmentLabel seg,
               window = (windowStart seg, end),
               notes = body,
               response = listToMaybe [n.text | n <- reverse body, n.kind == Response],
-              touches =
-                [ Touch
-                    { var = e.var,
-                      kind = e.kind
-                    }
-                | e <- events,
-                  windowStart seg <= e.clock && e.clock < end,
-                  isTouch e.kind
-                ],
+              touches = [Touch {var = e.var, kind = e.kind} | e <- stepEvents],
+              freeDraws = [n.text | n <- body, Drawn prov <- [n.kind], not (boundToTouch prov)],
               failed = any isFailure body
             }
     isFailure :: Note -> Bool

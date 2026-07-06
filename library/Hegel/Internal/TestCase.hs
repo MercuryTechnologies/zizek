@@ -17,6 +17,10 @@ module Hegel.Internal.TestCase
     Handle (..),
     TestCase (..),
 
+    -- * Draw provenance
+    recordDraw,
+    takeDraws,
+
     -- * Completion
     Status (..),
     markComplete,
@@ -28,11 +32,11 @@ import Data.Sequence qualified as Seq
 import Data.Text (Text)
 import Foreign (Ptr, nullPtr)
 import Foreign.C.Types (CInt)
-import Hegel.Internal.Event (Event)
+import Hegel.Internal.Event (Event, Var)
 import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
 import Hegel.Internal.Tick qualified as Tick
-import UnliftIO.IORef (IORef, newIORef)
+import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef)
 import Witch qualified
 
 -- * Construction
@@ -56,7 +60,8 @@ mkTestCase :: Tick.Recording -> Handle -> IO TestCase
 mkTestCase recording handle = do
   slot <- newSlot
   events <- newIORef Seq.empty
-  pure TestCase {handle, slot, recording, events}
+  draws <- newIORef []
+  pure TestCase {handle, slot, recording, events, draws}
 
 -- * Test case
 
@@ -84,8 +89,26 @@ data TestCase = TestCase
     -- | This case's pool-event buffer; appended to (via
     -- 'Hegel.Internal.Tick.record') only while 'recording' is
     -- 'Hegel.Internal.Tick.Active'. See "Hegel.Internal.Event".
-    events :: !(IORef (Seq Event))
+    events :: !(IORef (Seq Event)),
+    -- | Pool 'Var's drawn since the last 'forAll' boundary, newest-first.
+    draws :: !(IORef [Var])
   }
+
+-- * Draw provenance
+
+-- | Record that a pool draw resolved 'Var' @v@, for provenance attribution.
+recordDraw :: TestCase -> Var -> IO ()
+recordDraw tc v = case tc.recording of
+  Tick.Silent -> pure ()
+  Tick.Active _ -> modifyIORef' tc.draws (v :)
+{-# INLINE recordDraw #-}
+
+-- | Take and clear the pending draw provenance, oldest-first.
+takeDraws :: TestCase -> IO [Var]
+takeDraws tc = case tc.recording of
+  Tick.Silent -> pure []
+  Tick.Active _ -> atomicModifyIORef' tc.draws \vs -> ([], reverse vs)
+{-# INLINE takeDraws #-}
 
 -- * Completion
 

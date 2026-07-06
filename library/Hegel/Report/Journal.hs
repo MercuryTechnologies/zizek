@@ -62,7 +62,7 @@ numberDraws = snd . mapAccumL numberTree 1
     numberTree :: Int -> Tree Note -> (Int, Tree (Maybe Int, Note))
     numberTree i (Node n children) =
       let (i', x) = case n.kind of
-            Drawn -> (i + 1, (Just i, n))
+            Drawn _ -> (i + 1, (Just i, n))
             _ -> (i, (Nothing, n))
           -- Children number among themselves, from a fresh counter.
           children' = snd (mapAccumL numberTree 1 children)

@@ -7,6 +7,7 @@ import Data.List (nub)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Golden (shouldRenderAs)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, forAll)
 import Hegel.Property.Internal (Env (..), askEnv)
@@ -54,29 +55,25 @@ spec = do
   describe "spineDoc" do
     it "renders the failure-first unicode spine (transfer/handoff shape)" do
       renderWith (defaultStyle Glyph.unicode) {linkMode = Links}
-        `shouldBe` T.intercalate
-          "\n"
-          [ "✗ 8  read v₁                    ●─┬─┬─╮",
-            "│    read returned stale bytes    │ │ │",
-            "┆    ⋯ 2 steps, none touch v₁     ┆ ┆ ┆",
-            "○ 5  close v₁                   ◀─╯ │ │   v₁ was transferred",
-            "○ 4  write v₁ → ok              ◀───╯ │   v₁ was accessed",
-            "┆    ⋯ 2 steps, none touch v₁         ┆",
-            "● 1  open v₁                    ◀─────╯   v₁ was created"
-          ]
+        `shouldRenderAs` [ "✗ 8  read v₁                    ●─┬─┬─╮",
+                           "│    read returned stale bytes    │ │ │",
+                           "┆    ⋯ 2 steps, none touch v₁     ┆ ┆ ┆",
+                           "○ 5  close v₁                   ◀─╯ │ │   v₁ was transferred",
+                           "○ 4  write v₁ → ok              ◀───╯ │   v₁ was accessed",
+                           "┆    ⋯ 2 steps, none touch v₁         ┆",
+                           "● 1  open v₁                    ◀─────╯   v₁ was created"
+                         ]
 
     it "renders the failure-first ascii spine" do
       renderWith (defaultStyle Glyph.ascii) {linkMode = Links}
-        `shouldBe` T.intercalate
-          "\n"
-          [ "x 8  read v1                     *-+-+-.",
-            "|    read returned stale bytes     | | |",
-            ":    ... 2 steps, none touch v1    : : :",
-            "o 5  close v1                    <-' | |   v1 was transferred",
-            "o 4  write v1 -> ok              <---' |   v1 was accessed",
-            ":    ... 2 steps, none touch v1        :",
-            "* 1  open v1                     <-----'   v1 was created"
-          ]
+        `shouldRenderAs` [ "x 8  read v1                     *-+-+-.",
+                           "|    read returned stale bytes     | | |",
+                           ":    ... 2 steps, none touch v1    : : :",
+                           "o 5  close v1                    <-' | |   v1 was transferred",
+                           "o 4  write v1 -> ok              <---' |   v1 was accessed",
+                           ":    ... 2 steps, none touch v1        :",
+                           "* 1  open v1                     <-----'   v1 was created"
+                         ]
 
     it "falls back to numeric citations past the link budget (even in Links mode)" do
       let out = renderWith (defaultStyle Glyph.unicode) {linkMode = Links, linkBudget = 2}
@@ -119,6 +116,31 @@ spec = do
           rows = Spine.layoutRows (defaultStyle Glyph.unicode) t b
       [r.call | r <- rows, r.kind == Spine.DetailRow]
         `shouldBe` ["expected open", "got closed"]
+
+    it "renders a non-pool draw as a free-draw detail row; pool references stay symbolic" do
+      -- A cited history step (write) that draws a pool handle and a plain payload
+      -- ("payload"): the pool reference keeps its symbolic name (no inline value),
+      -- while the payload, bound to no touch, drops to a free-draw detail row.
+      -- (The later read reuses the handle and fails.)
+      let notes =
+            [ header (Tick 1) 1 "write",
+              noteAt (Tick 4) 1 (Drawn [h1]) "handle",
+              noteAt (Tick 5) 1 (Drawn []) "payload",
+              header (Tick 6) 2 "read",
+              noteAt (Tick 9) 1 (Drawn [h1]) "handle",
+              noteAt (Tick 10) 1 (Failure Nothing) "boom"
+            ]
+          events =
+            [ eventAt (Tick 2) h1 (Born Nothing),
+              eventAt (Tick 3) h1 Reused,
+              eventAt (Tick 8) h1 Reused
+            ]
+          t = Trace.build notes events
+          b = fromJust (Blame.analyze t)
+          rows = Spine.layoutRows (defaultStyle Glyph.unicode) t b
+      -- The pool draw is not shown inline (no "=handle") and not a free draw.
+      [r.call | r <- rows, r.kind == Spine.NodeRow] `shouldSatisfy` all (not . T.isInfixOf "handle")
+      [r.call | r <- rows, r.kind == Spine.DetailRow] `shouldSatisfy` elem "payload"
 
     it "elides unshown steps explicitly, with counts" do
       let rows = Spine.layoutRows (defaultStyle Glyph.unicode) handoffTrace handoffBlame

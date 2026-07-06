@@ -5,6 +5,7 @@ module Hegel.Report.Note
   ( Note (..),
     NoteKind (..),
     hasInBandFailure,
+    isDrawn,
     isFailureNote,
     renderValue,
   )
@@ -14,13 +15,16 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Stack (SrcLoc)
 import Hegel.Diff (Diff)
+import Hegel.Internal.Event (Var)
 import Hegel.Internal.Tick (Tick)
 import Text.Show.Pretty qualified as Pretty
 
 -- | The kind of a journaled 'Note'.
 data NoteKind
-  = -- | A value drawn during the test (a @forAll@-style draw).
-    Drawn
+  = -- | A value drawn during the test (a @forAll@-style draw), tagged with the
+    -- pool 'Var's the draw resolved; this list is empty for values drawn
+    -- outside of a pool.
+    Drawn ![Var]
   | -- | Context attached mid-test (an @annotate@-style call).
     Annotation
   | -- | A rule's declared result (a 'Hegel.Stateful.respond' call): the
@@ -64,6 +68,12 @@ renderValue :: (Show a) => a -> Text
 renderValue a = T.pack (maybe s Pretty.valToStr (Pretty.parseValue s))
   where
     s = show a
+
+-- | Is this a 'Drawn' note, regardless of its draw provenance?
+isDrawn :: NoteKind -> Bool
+isDrawn = \case
+  Drawn _ -> True
+  _ -> False
 
 -- | Is this note an in-band 'Failure'?
 isFailureNote :: Note -> Bool

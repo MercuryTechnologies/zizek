@@ -5,7 +5,7 @@ import Hegel (Gen, prop)
 import Hegel.Gen qualified as Gen
 import Hegel.Phase (Phase (..))
 import Hegel.Property (check_, forEach)
-import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..))
+import Hegel.Report (Note (..), Report (..), Result (..), isDrawn)
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..), defaultSettings)
 import Test.Hspec
@@ -24,7 +24,7 @@ spec = do
       n `shouldSatisfy` (< 42)
     case report.result of
       Counterexample {notes} ->
-        fmap (.text) (filter (\n -> n.kind == Drawn) notes) `shouldBe` ["42"]
+        fmap (.text) (filter (\n -> isDrawn n.kind) notes) `shouldBe` ["42"]
       other -> expectationFailure ("expected a counterexample, got: " <> show other)
 
   it "honours phases = [Generate]" $ do

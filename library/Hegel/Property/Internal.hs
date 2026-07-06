@@ -51,6 +51,7 @@ import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
 import Hegel.Internal.Control (isControlSignal, isFailure)
 import Hegel.Internal.Event qualified as Event
 import Hegel.Internal.TestCase (TestCase (..))
+import Hegel.Internal.TestCase qualified as TestCase
 import Hegel.Internal.Tick qualified as Tick
 import Hegel.Report.Note (Note (..), NoteKind (..), renderValue)
 import UnliftIO (MonadUnliftIO)
@@ -165,8 +166,15 @@ forAll = withFrozenCallStack (forAllWith renderValue)
 -- instance (or with an unhelpful one).
 forAllWith :: (HasCallStack, MonadIO m) => (a -> Text) -> Gen a -> PropertyT m a
 forAllWith render gen = do
-  a <- forAllSilent gen
-  note Drawn (callSite callStack) (render a)
+  a <- drawGen gen
+  -- Bind the pool 'Var's this draw resolved to its 'Drawn' note, so the trace
+  -- can render @h₁=value@.
+  -- 
+  -- Empty for generators not associated with a pool.
+  --
+  -- See Note [Draw provenance] in "Hegel.Report.Trace".
+  provenance <- takeDraws
+  note (Drawn provenance) (callSite callStack) (render a)
   pure a
 {-# INLINEABLE forAllWith #-}
 
@@ -174,10 +182,28 @@ forAllWith render gen = do
 --
 -- For bookkeeping draws that would only add noise to the report.
 forAllSilent :: (MonadIO m) => Gen a -> PropertyT m a
-forAllSilent gen = PropertyT do
+forAllSilent gen = do
+  a <- drawGen gen
+  -- Discard any pool provenance this draw accumulated: a silent draw journals
+  -- no note, so its 'Var's must not leak forward onto the next draw's note.
+  _ <- takeDraws
+  pure a
+{-# INLINEABLE forAllSilent #-}
+
+-- | The raw draw: sample the generator, leaving any pool 'Var's it resolved in
+-- the test case's draw-provenance scratch for the caller to 'takeDraws'.
+drawGen :: (MonadIO m) => Gen a -> PropertyT m a
+drawGen gen = PropertyT do
   env <- ask
   liftIO (draw env.testCase gen)
-{-# INLINEABLE forAllSilent #-}
+{-# INLINE drawGen #-}
+
+-- | Take and clear the pending pool-draw provenance for the current case.
+takeDraws :: (MonadIO m) => PropertyT m [Event.Var]
+takeDraws = PropertyT do
+  env <- ask
+  liftIO (TestCase.takeDraws env.testCase)
+{-# INLINE takeDraws #-}
 
 -- | Attach context to the failure report, rendered at the point it was
 -- recorded.

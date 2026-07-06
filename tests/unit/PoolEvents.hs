@@ -8,11 +8,11 @@ import Hegel.Property (assert)
 import Hegel.Report
   ( Event (..),
     Note (..),
-    NoteKind (..),
     Operation (..),
     Report (..),
     Result (..),
     Tick (..),
+    isDrawn,
   )
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
@@ -66,7 +66,7 @@ spec = describe "pool-event stream" do
 
   it "every pool draw's event immediately precedes its Drawn note (clock adjacency)" do
     withEventfulCounterexample \notes events -> do
-      let drawnClocks = [n.clock | n <- notes, n.kind == Drawn]
+      let drawnClocks = [n.clock | n <- notes, isDrawn n.kind]
       sequence_
         [ succ e.clock `shouldSatisfy` (`elem` drawnClocks)
         | e <- events,

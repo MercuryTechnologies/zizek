@@ -1,5 +1,5 @@
 -- | Shared fixtures for the trace-rendering suites ("PoolEvents",
--- "TraceModel", "LedgerRendering"): the synthetic-stream helpers, the
+-- "TraceModel", "SpineRendering"): the synthetic-stream helpers, the
 -- transfer/handoff fixture (a composed-report shape), and the eventful engine
 -- machine.
 module TraceFixtures
@@ -76,14 +76,16 @@ handoffFixture =
       header (Tick 3) 2 "noop",
       header (Tick 4) 3 "noop",
       header (Tick 5) 4 "write",
-      noteAt (Tick 7) 1 Drawn "h",
+      noteAt (Tick 7) 1 (Drawn [h1]) "h",
       noteAt (Tick 8) 1 Response "ok",
       header (Tick 9) 5 "close",
-      noteAt (Tick 12) 1 Drawn "h",
+      -- A transfer's consuming draw is tagged with the source var (h1), the
+      -- value it resolved before the handoff births h2.
+      noteAt (Tick 12) 1 (Drawn [h1]) "h",
       header (Tick 13) 6 "noop",
       header (Tick 14) 7 "noop",
       header (Tick 15) 8 "read",
-      noteAt (Tick 17) 1 Drawn "h",
+      noteAt (Tick 17) 1 (Drawn [h2]) "h",
       noteAt (Tick 18) 1 (Failure Nothing) "read returned stale bytes"
     ],
     [ eventAt (Tick 2) h1 (Born Nothing),

@@ -11,6 +11,7 @@ module Hegel.Report
     -- * Notes (re-exported from "Hegel.Report.Note")
     Note (..),
     NoteKind (..),
+    isDrawn,
     isFailureNote,
 
     -- * Events (re-exported from "Hegel.Internal.Event")
@@ -54,7 +55,7 @@ import Hegel.Report.Ann (Ann (..), diffDocs, docToAnsi, docToText)
 import Hegel.Report.Discovery (loadDeclarations)
 import Hegel.Report.Glyph qualified as Glyph
 import Hegel.Report.Journal (journalDocs, locDoc)
-import Hegel.Report.Note (Note (..), NoteKind (..), hasInBandFailure, isFailureNote, renderValue)
+import Hegel.Report.Note (Note (..), NoteKind (..), hasInBandFailure, isDrawn, isFailureNote, renderValue)
 import Hegel.Report.Source
   ( applyContext,
     defaultContext,

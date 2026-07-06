@@ -21,7 +21,7 @@ import Hegel.Property
     hoist,
     (===),
   )
-import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), Stats (..), renderReport)
+import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), Stats (..), isDrawn, renderReport)
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Test.Hspec
@@ -52,7 +52,7 @@ spec = do
     case report.result of
       Counterexample {message, notes, loc} -> do
         message `shouldBe` "sum stays small"
-        length [n | n <- notes, n.kind == Drawn] `shouldBe` 2
+        length [n | n <- notes, isDrawn n.kind] `shouldBe` 2
         length [n | n <- notes, n.kind == Annotation] `shouldBe` 1
         loc `shouldSatisfy` isJust
       other -> expectationFailure ("expected a counterexample, got: " <> show other)
@@ -101,7 +101,7 @@ spec = do
         (x, y) <- readIORef capture
         (x + y) `shouldBe` 100
         y `shouldSatisfy` (<= x)
-        fmap (.text) (filter (\n -> n.kind == Drawn) notes)
+        fmap (.text) (filter (\n -> isDrawn n.kind) notes)
           `shouldBe` [T.pack (show x), T.pack (show y)]
       other -> expectationFailure ("expected a counterexample, got: " <> show other)
 
@@ -116,7 +116,7 @@ spec = do
         message `shouldBe` "always fails"
         case notes of
           [drawn, foot] -> do
-            drawn.kind `shouldBe` Drawn
+            drawn.kind `shouldSatisfy` isDrawn
             drawn.text `shouldSatisfy` T.isPrefixOf "custom:"
             foot.kind `shouldBe` Footnote
             foot.text `shouldBe` "from the footer"

@@ -28,7 +28,7 @@ aLoc =
     }
 
 drawn, annotation, footer :: Text -> Note
-drawn t = Note {kind = Drawn, text = t, loc = Nothing, depth = 0, clock = Tick 0}
+drawn t = Note {kind = Drawn [], text = t, loc = Nothing, depth = 0, clock = Tick 0}
 annotation t = Note {kind = Annotation, text = t, loc = Nothing, depth = 0, clock = Tick 0}
 footer t = Note {kind = Footnote, text = t, loc = Nothing, depth = 0, clock = Tick 0}
 
@@ -39,7 +39,7 @@ step t = Note {kind = Annotation, text = t, loc = Nothing, depth = 0, clock = Ti
 
 -- | A draw nested under a step (depth 1).
 nestedDrawn :: Text -> Note
-nestedDrawn t = Note {kind = Drawn, text = t, loc = Nothing, depth = 1, clock = Tick 0}
+nestedDrawn t = Note {kind = Drawn [], text = t, loc = Nothing, depth = 1, clock = Tick 0}
 
 -- | An in-band failure nested under a step (depth 1).
 failureAt :: Text -> Maybe Diff -> Maybe SrcLoc -> Note
@@ -179,7 +179,7 @@ spec = do
                 message = "boom",
                 notes =
                   [ step "Step 1: push",
-                    Note {kind = Drawn, text = "Stack\n[ 1 ]", loc = Nothing, depth = 1, clock = Tick 0}
+                    Note {kind = Drawn [], text = "Stack\n[ 1 ]", loc = Nothing, depth = 1, clock = Tick 0}
                   ],
                 loc = Nothing,
                 diff = Nothing
@@ -324,7 +324,7 @@ spec = do
             Counterexample
               { events = [],
                 message = "boom",
-                notes = [Note {kind = Drawn, text = "42", loc = Just loc', depth = 0, clock = Tick 0}],
+                notes = [Note {kind = Drawn [], text = "42", loc = Just loc', depth = 0, clock = Tick 0}],
                 loc = Nothing,
                 diff = Nothing
               }
@@ -363,7 +363,7 @@ spec = do
                 message = "boom",
                 notes =
                   [ step "Step 1: rule_a",
-                    Note {kind = Drawn, text = "42", loc = Just drawLoc, depth = 1, clock = Tick 0},
+                    Note {kind = Drawn [], text = "42", loc = Just drawLoc, depth = 1, clock = Tick 0},
                     Note {kind = Failure Nothing, text = "boom", loc = Just failLoc, depth = 1, clock = Tick 0}
                   ],
                 loc = Just failLoc,
@@ -387,7 +387,7 @@ spec = do
                 message = "boom",
                 notes =
                   [ step "Step 1: mixed",
-                    Note {kind = Drawn, text = "7", loc = Just badLoc, depth = 1, clock = Tick 0},
+                    Note {kind = Drawn [], text = "7", loc = Just badLoc, depth = 1, clock = Tick 0},
                     Note {kind = Failure Nothing, text = "boom", loc = Just goodLoc, depth = 1, clock = Tick 0}
                   ],
                 loc = Just goodLoc,
@@ -414,7 +414,7 @@ spec = do
             Counterexample
               { events = [],
                 message = "boom",
-                notes = [Note {kind = Drawn, text = "42", loc = Just loc', depth = 0, clock = Tick 0}],
+                notes = [Note {kind = Drawn [], text = "42", loc = Just loc', depth = 0, clock = Tick 0}],
                 loc = Nothing,
                 diff = Nothing
               }

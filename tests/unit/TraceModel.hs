@@ -42,12 +42,12 @@ reusedValue :: ([Note], [Event])
 reusedValue =
   ( [ header (Tick 1) 1 "open",
       header (Tick 4) 4 "write",
-      noteAt (Tick 6) 1 Drawn "h1",
+      noteAt (Tick 6) 1 (Drawn []) "h1",
       noteAt (Tick 7) 1 Response "ok",
       header (Tick 8) 5 "peek",
-      noteAt (Tick 10) 1 Drawn "h1",
+      noteAt (Tick 10) 1 (Drawn []) "h1",
       header (Tick 11) 8 "read",
-      noteAt (Tick 13) 1 Drawn "h1",
+      noteAt (Tick 13) 1 (Drawn []) "h1",
       noteAt (Tick 14) 1 (Failure Nothing) "read returned stale bytes"
     ],
     [ eventAt (Tick 2) h1 (Born Nothing),
@@ -112,7 +112,7 @@ spec = do
       fmap (.bornAt) t.lifelines `shouldBe` [Just 0]
 
     it "is total on a non-stateful (headerless) journal" do
-      let t = Trace.build [noteAt (Tick 1) 0 Drawn "42"] []
+      let t = Trace.build [noteAt (Tick 1) 0 (Drawn []) "42"] []
       [(s.index, s.rule) | s <- t.steps] `shouldBe` [(0, "<initial>")]
       t.lifelines `shouldSatisfy` null
 
@@ -128,6 +128,81 @@ spec = do
                 eventAt (Tick 4) vc (Born Nothing)
               ]
       [(l.var, l.ordinal) | l <- t.lifelines] `shouldBe` [(va, 1), (vb, 1), (vc, 2)]
+
+  describe "Trace.build (draw provenance)" do
+    -- A pool draw's 'Drawn' note is tagged with the 'Var'(s) it resolved. That
+    -- tag partitions a step's draws: a single-var tag matching a touch is a pool
+    -- draw (already represented by that 'Touch', so kept out of 'freeDraws');
+    -- anything else — a plain non-pool payload, or a composite multi-pool draw —
+    -- is a free draw, surfaced as a detail line. These pin that partition.
+    let h2 = Var {pool = 1, id = 9}
+        kindsOf t = [tch.kind | s <- t.steps, tch <- s.touches]
+        freeDrawsOf t = concatMap (.freeDraws) t.steps
+
+    it "keeps a pool draw out of the free draws (its touch represents it)" do
+      let t =
+            Trace.build
+              [ header (Tick 1) 1 "read",
+                noteAt (Tick 3) 1 (Drawn [h1]) "42",
+                noteAt (Tick 4) 1 (Failure Nothing) "boom"
+              ]
+              [eventAt (Tick 2) h1 Reused]
+      kindsOf t `shouldBe` [Reused]
+      freeDrawsOf t `shouldBe` []
+
+    it "keeps a plain (non-pool) draw as a free draw" do
+      let t =
+            Trace.build
+              [ header (Tick 1) 1 "write",
+                noteAt (Tick 3) 1 (Drawn [h1]) "handle",
+                noteAt (Tick 4) 1 (Drawn []) "payload",
+                noteAt (Tick 5) 1 (Failure Nothing) "boom"
+              ]
+              [eventAt (Tick 2) h1 Reused]
+      -- The pool draw ("handle") is bound to the touch; only the payload is free.
+      freeDrawsOf t `shouldBe` ["payload"]
+
+    it "partitions by provenance across an intervening annotation (no clock drift)" do
+      -- The retired clock-adjacency scheme misattributed when an @annotate@
+      -- landed between a draw's event and its 'Drawn' note. The tag binds
+      -- regardless of what sits between them.
+      let t =
+            Trace.build
+              [ header (Tick 1) 1 "read",
+                noteAt (Tick 3) 1 Annotation "about to read",
+                noteAt (Tick 4) 1 (Drawn [h1]) "42",
+                noteAt (Tick 5) 1 (Failure Nothing) "boom"
+              ]
+              [eventAt (Tick 2) h1 Reused]
+      freeDrawsOf t `shouldBe` []
+
+    it "binds a transfer's consuming draw to its source var; the birth draws nothing" do
+      let t =
+            Trace.build
+              [ header (Tick 1) 1 "close",
+                noteAt (Tick 4) 1 (Drawn [h1]) "42",
+                noteAt (Tick 5) 1 (Failure Nothing) "boom"
+              ]
+              [ eventAt (Tick 2) h1 Consumed,
+                eventAt (Tick 3) h2 (Born (Just h1))
+              ]
+      kindsOf t `shouldBe` [Consumed, Born (Just h1)]
+      freeDrawsOf t `shouldBe` []
+
+    it "leaves a composite multi-pool draw unbound (free), never misattributed" do
+      -- One @forAll@ drawing from two pools tags its note with both vars; too
+      -- ambiguous to attribute to either, so it stays a free draw.
+      let t =
+            Trace.build
+              [ header (Tick 1) 1 "copy",
+                noteAt (Tick 4) 1 (Drawn [h1, h2]) "(1,2)",
+                noteAt (Tick 5) 1 (Failure Nothing) "boom"
+              ]
+              [ eventAt (Tick 2) h1 Reused,
+                eventAt (Tick 3) h2 Reused
+              ]
+      kindsOf t `shouldBe` [Reused, Reused]
+      freeDrawsOf t `shouldBe` ["(1,2)"]
 
   describe "Blame.analyze" do
     it "blames the failing touch and cites the value's earlier story" do
