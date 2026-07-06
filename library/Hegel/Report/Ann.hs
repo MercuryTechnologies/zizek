@@ -13,8 +13,6 @@ module Hegel.Report.Ann
 
     -- * Shared layout helpers
     diffDocs,
-    lineDiffText,
-    lineDiffAnn,
   )
 where
 
@@ -85,14 +83,11 @@ data Ann
     -- where a lane is a concurrent thread; see
     -- notes/decisions/report-visual-grammar.md.)
     StrandAnn !Int
-  | -- | A citation-link cell, coloured from the shared palette as the strand of
-    -- the value the edge concerns.
-    LinkAnn !Int
-  | -- | A spine step number (dim).
+  | -- | A log step number (dim).
     StepNoAnn
-  | -- | A rule's @→ response@ segment on a spine row.
+  | -- | A rule's @→ response@ segment on a log row.
     ResponseAnn
-  | -- | Elision rows and other droppable spine detail (dim).
+  | -- | Elision rows and other droppable log detail (dim).
     ElidedAnn
   deriving stock (Show, Eq)
 
@@ -118,7 +113,7 @@ lineDiffDoc :: LineDiff -> Doc Ann
 lineDiffDoc d = PP.annotate (lineDiffAnn d) (PP.pretty (lineDiffText d))
 
 -- | A diff line as prefixed text — the one home of the @  @\/@- @\/@+ @
--- prefix vocabulary (the spine's detail rows render from this too).
+-- prefix vocabulary.
 lineDiffText :: LineDiff -> Text
 lineDiffText = \case
   LineSame t -> "  " <> t
@@ -163,7 +158,6 @@ annToAnsi = \case
   FailureGutter -> mempty
   FailureMessage -> mempty
   StrandAnn n -> paletteColor n
-  LinkAnn n -> paletteColor n
   -- No SGR-2 faint in prettyprinter-ansi-terminal; dull white is the
   -- established "dim" approximation (see 'LocAnn').
   StepNoAnn -> PP.Terminal.colorDull PP.Terminal.White
@@ -171,7 +165,7 @@ annToAnsi = \case
   ElidedAnn -> PP.Terminal.colorDull PP.Terminal.White
 
 -- | The shared five-hue identity palette: strand colours today (a value's
--- identity on the spine), the braid's lane colours later (a thread's identity)
+-- identity in the event log), the braid's lane colours later (a thread's identity)
 -- — same palette, both axes. Five theme-safe hues; never red (reserved for
 -- failure), never white\/black\/grey (theme-fragile). Ordering is
 -- colourblind-aware: the deutan confusion pair is deferred to the fifth hue.

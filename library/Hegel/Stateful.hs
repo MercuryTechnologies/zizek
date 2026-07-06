@@ -115,7 +115,7 @@ stepNote = note Annotation Nothing
 
 -- | Declare the current rule's result, for the failure report.
 --
--- The trace spine renders it as the right-hand side of the step's
+-- The event log renders it as the right-hand side of the step's
 -- @call → response@ line (@read h₁ → Right "a"@); the headline
 -- quotes it as the observed actual. A step's /last/ 'respond' wins. Rules
 -- that never call it simply render without a response segment.

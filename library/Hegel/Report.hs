@@ -43,7 +43,7 @@ where
 
 import Control.Exception (Exception (displayException), SomeException, throwIO)
 import Data.Either (partitionEithers)
-import Data.List (nub, partition)
+import Data.List (partition)
 import Data.Maybe (catMaybes, maybeToList)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -51,10 +51,10 @@ import GHC.Stack (SrcLoc (..))
 import Hegel.Diff (Diff)
 import Hegel.Internal.Event (Event (..), Operation (..), Var (..))
 import Hegel.Internal.Tick (Tick (..))
-import Hegel.Report.Ann (Ann (..), diffDocs, docToAnsi, docToText)
+import Hegel.Report.Ann (Ann (..), docToAnsi, docToText)
 import Hegel.Report.Discovery (loadDeclarations)
 import Hegel.Report.Glyph qualified as Glyph
-import Hegel.Report.Journal (journalDocs, locDoc)
+import Hegel.Report.Journal (headlineBlock, journalDocs)
 import Hegel.Report.Note (Note (..), NoteKind (..), hasInBandFailure, isDrawn, isFailureNote, renderValue)
 import Hegel.Report.Source
   ( applyContext,
@@ -183,7 +183,7 @@ renderFailure message notes loc diff = docToText body
 
 -- | Render a report as plain text, splicing drawn values and the failure
 -- message inline into a source listing — and, for stateful failures with
--- pool context, composing the chronological citation spine above the failing
+-- pool context, composing the chronological event log above the failing
 -- step's splice (see 'renderReportRichWith' for the form selection).
 -- Reads source files at render time; degrades to 'renderReport' when no
 -- source is readable.
@@ -306,18 +306,7 @@ headlineDoc = PP.annotate MessageAnn . PP.pretty
 failureDoc :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Doc Ann
 failureDoc message notes loc diff
   | hasInBandFailure notes = PP.vsep (journalDocs notes)
-  | otherwise =
-      PP.vsep (headlineDoc message : topBlock <> journalDocs notes)
-  where
-    topBlock :: [Doc Ann]
-    topBlock = fmap (PP.indent 2) (diffLines <> locLine)
-    diffLines :: [Doc Ann]
-    diffLines = maybe [] (\d -> [diffDoc d]) diff
-    locLine :: [Doc Ann]
-    locLine = maybe [] (\l -> [PP.annotate LocAnn ("at" <+> locDoc l)]) loc
-
-diffDoc :: Diff -> Doc Ann
-diffDoc = PP.vsep . diffDocs
+  | otherwise = PP.vsep (headlineBlock message diff loc <> journalDocs notes)
 
 statsDoc :: Stats -> Doc Ann
 statsDoc stats

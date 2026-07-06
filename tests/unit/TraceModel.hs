@@ -2,16 +2,9 @@
 -- ("Hegel.Report.Trace.Blame"), plus one end-to-end run through the engine.
 module TraceModel (spec) where
 
-import Control.Monad.IO.Class (liftIO)
-import Data.Function ((&))
 import Data.IntSet qualified as IntSet
 import Data.List.NonEmpty qualified as NE
 import Data.Maybe (isJust)
-import Hegel.Gen qualified as Gen
-import Hegel.Pool (Pool)
-import Hegel.Pool qualified as Pool
-import Hegel.Property (assert, forAll)
-import Hegel.Property.Internal (Env (..), askEnv)
 import Hegel.Report
   ( Event (..),
     Note (..),
@@ -30,7 +23,7 @@ import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
-import TraceFixtures (eventAt, h1, header, ledgerTrace, noteAt)
+import TraceFixtures (eventAt, eventfulMachine, h1, header, ledgerTrace, noteAt)
 
 -- ---------------------------------------------------------------------------
 -- Fixture helpers
@@ -116,6 +109,19 @@ spec = do
       let t = Trace.build [noteAt (Tick 1) 0 (Drawn []) "42"] []
       [(s.index, s.rule) | s <- t.steps] `shouldBe` [(0, "<initial>")]
       t.lifelines `shouldSatisfy` null
+
+    it "a lineage cycle terminates root and chain (malformed stream)" do
+      let a = Var {pool = 0, id = 1}
+          b = Var {pool = 0, id = 2}
+          t =
+            Trace.build
+              [header (Tick 1) 1 "loop"]
+              [ eventAt (Tick 2) a (Born (Just b)),
+                eventAt (Tick 3) b (Born (Just a))
+              ]
+      -- Totality is the assertion: these must return, whatever they return.
+      Trace.chain t a `shouldSatisfy` (not . null)
+      Trace.root t a `shouldSatisfy` \v -> v == a || v == b
 
     it "assigns per-pool ordinals in birth order" do
       let va = Var {pool = 0, id = 3}
@@ -228,6 +234,23 @@ spec = do
         Just b ->
           [(c.from, c.to) | c <- Blame.citations b] `shouldBe` [(8, 5), (8, 4), (8, 1)]
 
+    it "two same-step touches yield one citation" do
+      let t =
+            Trace.build
+              [ header (Tick 1) 1 "open",
+                header (Tick 3) 2 "double",
+                header (Tick 6) 3 "boom",
+                noteAt (Tick 8) 1 (Failure Nothing) "boom"
+              ]
+              [ eventAt (Tick 2) h1 (Born Nothing),
+                eventAt (Tick 4) h1 Reused,
+                eventAt (Tick 5) h1 Reused,
+                eventAt (Tick 7) h1 Reused
+              ]
+      case Blame.analyze t of
+        Nothing -> expectationFailure "expected blame"
+        Just b -> [c.to | c <- Blame.citations b] `shouldBe` [2, 1]
+
     it "blames every root a multi-touch step implicates (structural union)" do
       -- The failing @audit@ touches two independent accounts, so blame carries a
       -- claim for each — both cited, each with its own history.
@@ -332,40 +355,3 @@ spec = do
           [s.response | s <- t.steps, s.rule == "consume"] `shouldSatisfy` all (== Just "consumed ok")
           [s | s <- t.steps, s.rule == "consume"] `shouldSatisfy` (not . null)
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
-
--- ---------------------------------------------------------------------------
--- Engine fixture: the PoolEvents machine plus 'respond'
-
-data Model = Model
-  { pool :: Pool Int,
-    reused :: Bool,
-    consumed :: Bool
-  }
-
--- | Fails once a reusable draw /and/ a consuming draw have both happened, so
--- the minimal counterexample keeps a Born, a Reused, and a Consumed event.
-eventfulMachine :: Stateful.Machine Model IO
-eventfulMachine =
-  Stateful.Machine
-    { initial = do
-        env <- askEnv
-        p <- liftIO (Pool.new env.testCase)
-        pure Model {pool = p, reused = False, consumed = False},
-      rules =
-        [ Stateful.Rule "register" \m -> do
-            n <- forAll (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
-            liftIO (Pool.add m.pool n)
-            pure m,
-          Stateful.Rule "reuse" \m -> do
-            _ <- forAll (Pool.valuesReusable m.pool)
-            pure m {reused = True},
-          Stateful.Rule "consume" \m -> do
-            _ <- forAll (Pool.valuesConsumed m.pool)
-            Stateful.respond "consumed ok"
-            pure m {consumed = True}
-        ],
-      invariants =
-        [ Stateful.Invariant "never_reuse_and_consume" \m ->
-            assert (not (m.reused && m.consumed)) "reuse and consume never both happen (bug)"
-        ]
-    }

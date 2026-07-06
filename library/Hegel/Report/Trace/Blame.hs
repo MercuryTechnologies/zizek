@@ -14,6 +14,7 @@ module Hegel.Report.Trace.Blame
     -- * Analysis
     analyze,
     factVar,
+    factWeight,
 
     -- * Projections
     Citation (..),
@@ -85,11 +86,10 @@ data Claim = Claim
   }
   deriving stock (Show)
 
--- | One fact observed at one step, justified by observations beneath it.
+-- | One fact observed at one step — an entry in a 'Claim'\'s history.
 data Observation = Observation
   { step :: !Int,
-    fact :: !Fact,
-    since :: [Observation]
+    fact :: !Fact
   }
   deriving stock (Show, Eq)
 
@@ -175,7 +175,7 @@ factAt trace _ t = case t.kind of
 -- to say, a value which was transferred cites its pre-transfer history too.
 citationsFor :: Trace -> Int -> Var -> [Observation]
 citationsFor trace failingStep subject =
-  [ Observation {step = s, fact = e, since = []}
+  [ Observation {step = s, fact = e}
   | (s, e) <- Map.toDescList (Map.fromListWith strongest (mapMaybe id (birth : deaths <> touches)))
   ]
   where
@@ -222,14 +222,11 @@ citations b =
     o <- c.since
   ]
 
--- | Every step the blame reaches: the failing step plus the transitive closure
--- of every claim's observation history.
+-- | Every step the blame reaches: the failing step plus every claim's
+-- observation history.
 citationClosure :: Blame -> IntSet
 citationClosure b =
-  IntSet.insert b.step (IntSet.unions [go o | c <- NE.toList b.subjects, o <- c.since])
-  where
-    go :: Observation -> IntSet
-    go p = IntSet.insert p.step (IntSet.unions (fmap go p.since))
+  IntSet.fromList (b.step : [o.step | c <- NE.toList b.subjects, o <- c.since])
 
 -- | The trunk value: the highest-weight claim's value. Used where a single name
 -- is required (the focused view, K=1).

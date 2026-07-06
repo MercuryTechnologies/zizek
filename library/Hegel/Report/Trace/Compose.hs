@@ -1,5 +1,5 @@
--- | Assembles the composed trace report: the chronological citation spine, the
--- failing step's source splice, the off-spine lifelines, footnotes, and the
+-- | Assembles the composed trace report: the chronological event log, the
+-- failing step's source splice, the off-log lifelines, footnotes, and the
 -- reproduction footer. Every section is a projection of the same 'Trace' and
 -- 'Blame'.
 --
@@ -8,8 +8,6 @@
 -- > import Hegel.Report.Trace.Compose qualified as Compose
 module Hegel.Report.Trace.Compose
   ( composedDoc,
-    footnotesDoc,
-    footerDoc,
   )
 where
 
@@ -17,9 +15,9 @@ import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import GHC.Stack (SrcLoc)
 import Hegel.Diff (Diff)
-import Hegel.Report.Ann (Ann (..), diffDocs)
+import Hegel.Report.Ann (Ann (..))
 import Hegel.Report.Discovery (Declarations)
-import Hegel.Report.Journal (footnoteDocs, locDoc)
+import Hegel.Report.Journal (footnoteDocs, headlineBlock)
 import Hegel.Report.Note (Note, hasInBandFailure)
 import Hegel.Report.Phrase (PhraseTable (..))
 import Hegel.Report.Stateful (failingGroupDoc)
@@ -27,12 +25,12 @@ import Hegel.Report.Style (Style (..))
 import Hegel.Report.Trace (Trace)
 import Hegel.Report.Trace.Log (View (..))
 import Hegel.Report.Trace.Log qualified as Log
-import Prettyprinter (Doc, (<+>))
+import Prettyprinter (Doc)
 import Prettyprinter qualified as PP
 
 -- | The composed report (sans the @failed after …@ line, which the caller
 -- prepends): the chronological event log, the failing step's source splice,
--- (focused only) the off-spine lifelines, footnotes, and the reproduction
+-- (focused only) the off-log lifelines, footnotes, and the reproduction
 -- footer. Sections separate with one blank line.
 --
 -- Chronological: the log reads oldest → failing step, flowing straight into
@@ -41,7 +39,7 @@ import Prettyprinter qualified as PP
 --
 -- Two shapes, by 'View':
 --
--- * 'Focused' — one pool value's story: log (others elided), splice, off-spine
+-- * 'Focused' — one pool value's story: log (others elided), splice, off-log
 --   lifelines, footnotes, footer.
 -- * 'Unfocused' — every step shown. A 'Failure'-less journal (an exception
 --   mid-loop, or a failure in @machine.initial@ at depth 0) has no in-band
@@ -82,13 +80,7 @@ composedDoc style decls trace view notes message loc diff databaseKey =
     -- reason); an in-band failure suppresses it to avoid double-rendering.
     preludeBlock
       | hasInBandFailure notes = Nothing
-      | otherwise = Just (PP.vsep (PP.annotate MessageAnn (PP.pretty message) : topBlock))
-    topBlock =
-      fmap
-        (PP.indent 2)
-        ( maybe [] (\d -> [PP.vsep (diffDocs d)]) diff
-            <> maybe [] (\l -> [PP.annotate LocAnn ("at" <+> locDoc l)]) loc
-        )
+      | otherwise = Just (PP.vsep (headlineBlock message diff loc))
 
 -- | Footnote notes, rendered after the report body (their documented
 -- position, regardless of form).

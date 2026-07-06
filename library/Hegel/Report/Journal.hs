@@ -15,9 +15,11 @@ module Hegel.Report.Journal
     footnoteDocs,
     noteLineDoc,
     locDoc,
+    headlineBlock,
   )
 where
 
+import Data.Text (Text)
 import Data.Traversable (mapAccumL)
 import Data.Tree (Forest, Tree (..))
 import GHC.Stack (SrcLoc (..))
@@ -129,3 +131,16 @@ failureNoteDoc diff n =
 -- | @file:line@ of a source location.
 locDoc :: SrcLoc -> Doc Ann
 locDoc sl = PP.pretty sl.srcLocFile <> ":" <> PP.pretty sl.srcLocStartLine
+
+-- | The failure headline plus its indented diff\/location block, headline first.
+-- Shared by the ordinary report body ("Hegel.Report") and the composed trace
+-- report's 'Failure'-less prelude ("Hegel.Report.Trace.Compose") so the two
+-- agree on the block's shape.
+headlineBlock :: Text -> Maybe Diff -> Maybe SrcLoc -> [Doc Ann]
+headlineBlock message diff loc =
+  PP.annotate MessageAnn (PP.pretty message)
+    : fmap
+      (PP.indent 2)
+      ( maybe [] (\d -> [PP.vsep (diffDocs d)]) diff
+          <> maybe [] (\l -> [PP.annotate LocAnn ("at" <+> locDoc l)]) loc
+      )

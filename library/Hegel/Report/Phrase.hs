@@ -1,6 +1,6 @@
 -- | The fixed wording for every sentence that trace renderers emit.
 --
--- The spine's margin\/elision\/footer text composes its sentences exclusively
+-- The log's margin\/elision\/footer text composes its sentences exclusively
 -- from these fields plus /quoted/ user data.
 module Hegel.Report.Phrase
   ( PhraseTable (..),

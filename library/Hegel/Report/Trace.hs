@@ -31,8 +31,6 @@ import Data.List (find)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Text (Text)
-import GHC.Stack (SrcLoc)
-import Hegel.Diff (Diff)
 import Hegel.Internal.Event (Event (..), Operation (..), Var (..))
 import Hegel.Internal.Tick (Tick (..))
 import Hegel.Report.Note (Note (..), NoteKind (Drawn, Response, StepHeader))
@@ -101,12 +99,11 @@ data Lifeline = Lifeline
   }
   deriving stock (Show)
 
--- | The journaled in-band failure, located to its step.
+-- | The journaled in-band failure: its step and message. (The failing step's
+-- location and diff render from its spliced source, not from here.)
 data Failure = Failure
   { step :: !Int,
-    message :: !Text,
-    loc :: !(Maybe SrcLoc),
-    diff :: !(Maybe Diff)
+    message :: !Text
   }
   deriving stock (Show)
 
@@ -152,10 +149,10 @@ build notes events =
     failureOf :: [Step] -> Maybe Failure
     failureOf steps' =
       listToMaybe
-        [ Failure {step = s.index, message = n.text, loc = n.loc, diff = d}
+        [ Failure {step = s.index, message = n.text}
         | s <- steps',
           n <- s.notes,
-          Note.Failure d <- [n.kind]
+          Note.Failure _ <- [n.kind]
         ]
 
 data Segment = Segment

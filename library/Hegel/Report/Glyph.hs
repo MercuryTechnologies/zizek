@@ -1,4 +1,4 @@
--- | Abstract spine cells and the glyph tables that render them.
+-- | Abstract log cells and the glyph tables that render them.
 --
 -- Designed for qualified import:
 --
@@ -30,7 +30,7 @@ import Hegel.Report.Encoding qualified as Encoding
 import Hegel.Report.Trace (Lifeline (..), Trace)
 import Hegel.Report.Trace qualified as Trace
 
--- | One abstract spine cell. The ascii table must render these injectively so
+-- | One abstract log cell. The ascii table must render these injectively so
 -- the transliteration ('cellTransliterations') is unambiguous.
 data Cell
   = -- Gutter (strand) cells
@@ -40,7 +40,6 @@ data Cell
   | NodeDeath
   | NodeFail
   | EdgeAlive
-  | EdgeDead
   | EdgeElided
   | HistoryEnd
   | -- Text-region sigils
@@ -69,7 +68,6 @@ unicode =
         NodeDeath -> "◌"
         NodeFail -> "✗"
         EdgeAlive -> "│"
-        EdgeDead -> "┊"
         EdgeElided -> "┆"
         HistoryEnd -> "~"
         ElidedMark -> "▸"
@@ -93,7 +91,6 @@ ascii =
         NodeDeath -> "%"
         NodeFail -> "x"
         EdgeAlive -> "|"
-        EdgeDead -> "."
         EdgeElided -> ":"
         HistoryEnd -> "~"
         ElidedMark -> ">"
@@ -159,7 +156,7 @@ cleanFor = \case
   PreferUnicode -> id
 
 -- | Make a rendered report 7-bit clean, covering both the base chrome
--- ('Encoding.baseTransliterations') and this module's spine cell glyphs.
+-- ('Encoding.baseTransliterations') and this module's log cell glyphs.
 sevenBitClean :: Text -> Text
 sevenBitClean =
   Encoding.sevenBitCleanWith (Encoding.baseTransliterations <> cellTransliterations)

@@ -76,9 +76,6 @@ check-conformance: _conformance-build
   @echo "Running standalone conformance binaries…"
   @$(cabal list-bin zizek:test-stateful)
 
-# Profiling: see notes/decisions/profiling-harness.md for the scenario
-# table and how to interpret the captured profiles.
-
 # Optimization level for the profiling build: 1 = what consumers' test suites
 # run (the default), 0 = the un-optimized dev loop (`just prof_opt=0 profile-space …`).
 # Each level gets its own builddir and capture directory, so O0 and O1

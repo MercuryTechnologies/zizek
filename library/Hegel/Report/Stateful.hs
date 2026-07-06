@@ -92,7 +92,7 @@ groupDoc decls g = PP.vsep (anchored <> listings)
     structured = [d | (_, Left d) <- results]
     fragments = [f | (_, Right f) <- results]
     -- The spliced listing replaces the in-band ✗ block, so re-anchor the
-    -- failure on the spine: suffix the group's first structured line
+    -- failure in the event log: suffix the group's first structured line
     -- (normally the step header) with the mark.
     anchored
       | or [isFailureNote n | (n, Right _) <- results],

@@ -28,7 +28,7 @@ data NoteKind
   | -- | Context attached mid-test (an @annotate@-style call).
     Annotation
   | -- | A rule's declared result (a 'Hegel.Stateful.respond' call): the
-    -- right-hand side of the trace spine's @call -> response@ column.
+    -- right-hand side of the event log's @call -> response@ column.
     Response
   | -- | A stateful step header, carrying the step number and rule name
     -- structurally.

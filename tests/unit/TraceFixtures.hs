@@ -18,7 +18,6 @@ module TraceFixtures
     flatFixture,
 
     -- * A pool-free journal (unfocused, no blame)
-    noPoolFixture,
     noPoolTrace,
 
     -- * A two-root ledger (unfocused, blame present)
@@ -223,6 +222,7 @@ eventfulMachine =
             pure m {reused = True},
           Stateful.Rule "consume" \m -> do
             _ <- forAll (Pool.valuesConsumed m.pool)
+            Stateful.respond "consumed ok"
             pure m {consumed = True}
         ],
       invariants =

@@ -72,7 +72,7 @@ new tc = do
   pure Pool {tc, poolId = pid, values = ref}
 
 -- | 'new' with a display label for the failure report: values of a pool
--- named @"h"@ render as @h₁, h₂, …@ in the trace spine.
+-- named @"h"@ render as @h₁, h₂, …@ in the event log.
 named :: Text -> TestCase -> IO (Pool a)
 named label tc = do
   pool <- new tc

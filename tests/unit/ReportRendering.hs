@@ -376,7 +376,7 @@ spec = do
               }
           report = Report {result, stats = Stats {valid = 3, invalid = 0}, databaseKey = Nothing}
       rich <- renderReportRich report
-      -- The step header stays on the spine; the draw and the failure splice
+      -- The step header stays in the event log; the draw and the failure splice
       -- into this very declaration, under one listing header.
       ("Step 1: rule_a" `T.isInfixOf` rich) `shouldBe` True
       ("stateful-splice-marker-draw" `T.isInfixOf` rich) `shouldBe` True

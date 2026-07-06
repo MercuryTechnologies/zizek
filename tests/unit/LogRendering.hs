@@ -54,7 +54,7 @@ renderWith style = docToText (Log.logDoc style handoffTrace (Log.Focused handoff
 spec :: Spec
 spec = do
   describe "logDoc" do
-    it "renders the chronological unicode spine (transfer/handoff shape)" do
+    it "renders the chronological unicode event log (transfer/handoff shape)" do
       renderWith (defaultStyle Glyph.unicode)
         `shouldRenderAs` [ "● @1  open v₁",
                            "┆     ⋯ 2 steps",
@@ -64,7 +64,7 @@ spec = do
                            "✗ @8  read v₁"
                          ]
 
-    it "renders the chronological ascii spine" do
+    it "renders the chronological ascii event log" do
       renderWith (defaultStyle Glyph.ascii)
         `shouldRenderAs` [ "* @1  open v1",
                            ":     ... 2 steps",
@@ -120,7 +120,7 @@ spec = do
   describe "layoutRows" do
     it "puts the failing row last (chronological)" do
       -- Chronological: the oldest step leads, the failing step is the last row.
-      -- (The spine carries no diff — the composed report's splice does.)
+      -- (The event log carries no diff — the composed report's splice does.)
       let rows = Log.layoutRows (defaultStyle Glyph.unicode) handoffTrace (Log.Focused handoffBlame)
       fmap (\r -> (r.kind, r.stepNo)) (take 1 (reverse rows))
         `shouldBe` [(Log.NodeRow, Just 8)]
@@ -197,9 +197,9 @@ spec = do
           rows = Log.layoutRows (defaultStyle Glyph.unicode) t (Log.Focused b)
       [r.call | r <- rows, r.kind == Log.ElisionRow] `shouldBe` ["⋯ 1 step (w₁)"]
 
-    it "gives each elided lifeline its own trajectory (off-spine section)" do
+    it "gives each elided lifeline its own trajectory (off-log section)" do
       -- The failing subject (a₁) is drawn at step 3; an unrelated value (b₁) is
-      -- born at step 2 and never touched again, so it's off-spine. The
+      -- born at step 2 and never touched again, so it's off-log. The
       -- elided-lifelines section reports what it did (`spawn @2`).
       let a1 = h1
           b1 = Var {pool = 1, id = 4}
@@ -230,7 +230,7 @@ spec = do
 
     it "renders a two-root ledger: all steps shown; all-cited so no citation row" do
       -- Every shown step is cited, so the citation would select nothing — the row
-      -- is suppressed (the spine already shows the full evidence).
+      -- is suppressed (the event log already shows the full evidence).
       docToText (Log.logDoc (defaultStyle Glyph.unicode) ledgerTrace (Log.Unfocused (Just ledgerBlame)))
         `shouldRenderAs` [ "● @1  open v₁",
                            "● @2  open v₂",
@@ -270,58 +270,26 @@ spec = do
       docToText (Log.logDoc (defaultStyle Glyph.ascii) t (Log.Unfocused (Just b)))
         `shouldSatisfy` T.isInfixOf "\\_ cites @1, @2"
 
-  describe "review fixes" do
-    it "a lineage cycle terminates root and chain (malformed stream)" do
-      let a = Var {pool = 0, id = 1}
-          b = Var {pool = 0, id = 2}
-          t =
-            Trace.build
-              [header (Tick 1) 1 "loop"]
-              [ eventAt (Tick 2) a (Born (Just b)),
-                eventAt (Tick 3) b (Born (Just a))
-              ]
-      -- Totality is the assertion: these must return, whatever they return.
-      Trace.chain t a `shouldSatisfy` (not . null)
-      Trace.root t a `shouldSatisfy` \v -> v == a || v == b
-
-    it "two same-step touches yield one citation (no orphan link column)" do
-      let t =
-            Trace.build
-              [ header (Tick 1) 1 "open",
-                header (Tick 3) 2 "double",
-                header (Tick 6) 3 "boom",
-                noteAt (Tick 8) 1 (Failure Nothing) "boom"
-              ]
-              [ eventAt (Tick 2) h1 (Born Nothing),
-                eventAt (Tick 4) h1 Reused,
-                eventAt (Tick 5) h1 Reused,
-                eventAt (Tick 7) h1 Reused
-              ]
-          b = fromJust (Blame.analyze t)
-      [(c.to) | c <- Blame.citations b] `shouldBe` [2, 1]
+  describe "glyph tables" do
+    it "ascii preserves semantics within the gutter family" do
+      let gutterCells = [NodeBorn, NodeTouch, NodeTransfer, NodeDeath, NodeFail, EdgeAlive, EdgeElided, HistoryEnd]
+      distinctUnder Glyph.ascii gutterCells `shouldBe` True
 
     it "pool letters stay distinct past five pools" do
       let names = [Glyph.unicode.valueName Nothing p 1 | p <- [0 .. 9]]
       length (nub names) `shouldBe` length names
 
-  describe "glyph tables" do
-    it "ascii preserves semantics within the gutter family" do
-      let gutterCells = [NodeBorn, NodeTouch, NodeTransfer, NodeDeath, NodeFail, EdgeAlive, EdgeDead, EdgeElided, HistoryEnd]
-      distinctUnder Glyph.ascii gutterCells `shouldBe` True
-
   describe "composed report (form selection)" do
-    it "spliced timeline: a pool-free stateful failure keeps the pre-trace layout byte-for-byte" do
+    it "spliced timeline: a pool-free stateful failure renders without a reproduction footer" do
       let report = reportOf [] (fst handoffFixture)
       out <- renderReportRich report
-      out `shouldNotSatisfy` T.isInfixOf "◀"
-      out `shouldNotSatisfy` T.isInfixOf "was consumed at"
       out `shouldNotSatisfy` T.isInfixOf "stored:"
 
-    it "composed trace: pool context composes spine, splice, and footer" do
+    it "composed trace: pool context composes event log, splice, and footer" do
       let (notes, events) = handoffFixture
           report = (reportOf events notes) {databaseKey = Just "some-key"}
       out <- renderReportRich report
-      -- The handoff (close) renders with the transfer glyph on the spine.
+      -- The handoff (close) renders with the transfer glyph in the event log.
       out `shouldSatisfy` T.isInfixOf "◉ @5  close v₁"
       -- Focused suppresses the citation list (the lifeline is the cited set).
       out `shouldNotSatisfy` T.isInfixOf "cites"
@@ -346,16 +314,13 @@ spec = do
 
     it "a multi-root failure renders unfocused (all steps, no elision)" do
       -- The failing settle touches two lineage roots, so chooseView picks
-      -- Unfocused: every step is shown (no focus subject to elide around) and
-      -- the focused-only \"none touch\" elision device never appears, while the
-      -- blame still supplies per-step margins.
+      -- Unfocused: every step is shown (no focus subject to elide around),
+      -- while the blame still supplies per-step margins.
       out <- renderReportRich (uncurry (flip reportOf) ledgerFixture)
       out `shouldSatisfy` T.isInfixOf "open v₁"
       out `shouldSatisfy` T.isInfixOf "open v₂"
-      -- Every shown step is cited, so the citation row is suppressed (selects
-      -- nothing), and the focused-only "none touch" device never appears.
+      -- Every shown step is cited, so the citation row is suppressed (selects nothing).
       out `shouldNotSatisfy` T.isInfixOf "↳"
-      out `shouldNotSatisfy` T.isInfixOf "none touch"
 
     it "delta-only: a call that names its touched values carries no margin fact" do
       -- compare/settle name v₁ v₂ in the call, so a lifecycle fact would only
@@ -387,16 +352,14 @@ spec = do
 
     it "a flat single-value pool failure renders as a focused log (no lead)" do
       out <- renderReportRich (uncurry (flip reportOf) flatFixture)
-      -- A single-value failure is the focused log: born row on the spine, no
+      -- A single-value failure is the focused log: born row in the event log, no
       -- margin fact, and (being focused) no citation list.
       out `shouldSatisfy` T.isInfixOf "● @1  open v₁"
       out `shouldNotSatisfy` T.isInfixOf "cites"
       -- The failing step's reason is spliced (structured fallback here).
       out `shouldSatisfy` T.isInfixOf "Step 3: use"
-      -- No cite-relocation row, no spine link arrows, no headline contrast.
+      -- No cite-relocation row (focused suppresses the citation list).
       out `shouldNotSatisfy` T.isInfixOf "↳"
-      out `shouldNotSatisfy` T.isInfixOf "◀"
-      out `shouldNotSatisfy` T.isInfixOf " — but "
 
   describe "glyph preference" do
     it "HEGEL_GLYPHS overrides detection in both directions" do
@@ -417,7 +380,7 @@ spec = do
         `shouldBe` "x + - | : . -- - v1 \\x597d"
 
     it "a full report survives sevenBitClean without escapes (chrome is transliterated)" do
-      -- The drift guard for the transliteration map: splice chrome, spine
+      -- The drift guard for the transliteration map: splice chrome, event log
       -- glyphs, phrase typography — everything a real report emits must map
       -- to ascii, with \\x escapes reserved for genuinely foreign user text.
       report <- check defaultSettings (Stateful.run transferMachine)
@@ -456,7 +419,7 @@ spec = do
               [() | BornAt _ <- facts] `shouldSatisfy` (not . null)
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
-    it "a real pool machine renders a spine with birth and failure rows" do
+    it "a real pool machine renders an event log with birth and failure rows" do
       report <- check defaultSettings (Stateful.run eventfulMachine)
       case report.result of
         Counterexample {notes, events} -> do

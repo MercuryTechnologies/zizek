@@ -67,7 +67,7 @@ data RowKind
     CiteRow
   deriving stock (Show, Eq)
 
--- | One row of the spine: the gutter glyph, the step number, the call text, and
+-- | One row of the event log: the gutter glyph, the step number, the call text, and
 -- the right-margin gloss.
 data Row = Row
   { kind :: !RowKind,
@@ -91,7 +91,7 @@ layoutRows opts trace = \case
   Focused blame -> focusedRows opts trace blame
   Unfocused mBlame -> unfocusedRows opts trace mBlame
 
--- | The single-subject focused log (today's spine): the terminator (if older
+-- | The single-subject focused log (today's event log): the terminator (if older
 -- history precedes the view) then the subject's steps oldest → newest, others
 -- elided, failing step last.
 focusedRows :: Style -> Trace -> Blame -> [Row]
@@ -121,7 +121,7 @@ focusedRows opts trace blame = terminator <> go Nothing shownAsc
       | otherwise = citedRow s : drawnRows s
 
     -- @~@ at the top when real steps (not the machine-setup prelude, step 0)
-    -- older than the oldest shown step exist — i.e. the spine begins partway
+    -- older than the oldest shown step exist — i.e. the event log begins partway
     -- through the run because earlier steps don't concern the failing value.
     terminator =
       [ Row {kind = TerminatorRow, gutter = HistoryEnd, stepNo = Nothing, call = "", margin = ""}
@@ -156,8 +156,12 @@ focusedRows opts trace blame = terminator <> go Nothing shownAsc
           gutter = gutterFor s,
           stepNo = Just s.index,
           call = callText s,
-          margin = maybe "" (factMargin s) (listToMaybe [o.fact | o <- cited, o.step == s.index])
+          margin = factsDoc opts trace (callText s) [o.fact | o <- cited, o.step == s.index]
         }
+    -- Detail lines for a focused row: free draws only. A shown step's narrative
+    -- annotations are not repeated here — in focused mode the failing step's
+    -- annotations are spliced into source, and the other shown steps are the
+    -- subject's terse lifeline. (Unfocused 'detailRows' does carry annotations.)
     drawnRows :: Step -> [Row]
     drawnRows s =
       [ Row {kind = DetailRow, gutter = EdgeAlive, stepNo = Nothing, call = l, margin = ""}
@@ -167,10 +171,8 @@ focusedRows opts trace blame = terminator <> go Nothing shownAsc
 
     gutterFor s
       | (rootLife >>= (.bornAt)) == Just s.index = NodeBorn
-      -- A lineage-ending consume is a death; a consume continued by a transfer
-      -- is a handoff (its own glyph), never a death.
-      | any (\l -> l.consumedAt == Just s.index && not (Trace.continues trace l.var)) chainLives = NodeDeath
-      | any (\l -> l.consumedAt == Just s.index && Trace.continues trace l.var) chainLives = NodeTransfer
+      | any ((== Just NodeDeath) . consumeGlyph trace s.index) chainLives = NodeDeath
+      | any ((== Just NodeTransfer) . consumeGlyph trace s.index) chainLives = NodeTransfer
       | otherwise = NodeTouch
 
     -- Elision rows for steps strictly between the previous shown step and this
@@ -207,13 +209,6 @@ focusedRows opts trace blame = terminator <> go Nothing shownAsc
 
     callText s = fst (stepCall opts trace s)
 
-    -- Delta-only: emit the fact word only when it names a value the call text
-    -- doesn't already (cross-value / implicit touch). The gutter glyph and the
-    -- rule verb carry the common case.
-    factMargin s fact =
-      let name = nameOf (Blame.factVar fact)
-       in if name `T.isInfixOf` callText s then "" else opts.phrases.observed fact [name]
-
 -- | The unfocused log: every real step shown in order (no single subject to
 -- focus on). Used when the failure has no pool value (@Unfocused Nothing@) or
 -- touches several at once (@Unfocused (Just blame)@). Gutter glyphs and margins
@@ -223,7 +218,6 @@ unfocusedRows :: Style -> Trace -> Maybe Blame -> [Row]
 unfocusedRows opts trace mBlame = concatMap stepRows (sortOn (.index) trace.steps)
   where
     table = opts.glyphs
-    nameOf = displayName table trace
     failingIx = fmap (.step) trace.failure
     -- Every implicated value's story (one claim per root touched at the failing
     -- step); empty when the failure has no pool value.
@@ -273,22 +267,14 @@ unfocusedRows opts trace mBlame = concatMap stepRows (sortOn (.index) trace.step
     -- ✗ (failing) > death > born > access > blank (no pool touch).
     gutterFor s
       | Just s.index == failingIx = NodeFail
-      | any (\t -> consumedHere t s.index) s.touches = NodeDeath
+      | any ((== Just NodeDeath) . touchGlyph s.index) s.touches = NodeDeath
       | any (\t -> bornHere t s.index) s.touches = NodeBorn
-      | any (\t -> transferHere t s.index) s.touches = NodeTransfer
+      | any ((== Just NodeTransfer) . touchGlyph s.index) s.touches = NodeTransfer
       | not (null s.touches) = NodeTouch
       | otherwise = Blank
     bornHere t ix = (Trace.lifeline trace (Trace.root trace t.var) >>= (.bornAt)) == Just ix
-    -- A lineage-ending consume is a death; a consume continued by a transfer is a
-    -- handoff (its own glyph).
-    consumedHere t ix =
-      case Trace.lifeline trace t.var of
-        Just l -> l.consumedAt == Just ix && not (Trace.continues trace l.var)
-        Nothing -> False
-    transferHere t ix =
-      case Trace.lifeline trace t.var of
-        Just l -> l.consumedAt == Just ix && Trace.continues trace l.var
-        Nothing -> False
+    -- Classify a touch's consume at this step (death vs handoff) via its lifeline.
+    touchGlyph ix t = Trace.lifeline trace t.var >>= consumeGlyph trace ix
 
     -- Margins mirror focused mode, unioned across claims: each step carries the
     -- fact(s) of the value(s) implicated there; the failing step carries the
@@ -297,25 +283,8 @@ unfocusedRows opts trace mBlame = concatMap stepRows (sortOn (.index) trace.step
       -- The failing step's citation moves to its own ↳ row (see 'citeRows'); the
       -- margin here carries only cross-value facts, if any.
       | Just s.index == failingIx = ""
-      | otherwise = case [o.fact | c <- claims, o <- c.since, o.step == s.index] of
-          [] -> ""
-          facts -> renderFacts s facts
+      | otherwise = factsDoc opts trace (fst (stepCall opts trace s)) [o.fact | c <- claims, o <- c.since, o.step == s.index]
     citedSteps = [o.step | c <- claims, o <- c.since]
-
-    -- One step may implicate several values: group their facts by verb
-    -- (same-verb → merged names, @a₁, a₂ accessed@; different verbs → @·@-joined,
-    -- strongest first). A collision needs a pre-failure step touching ≥2 roots.
-    -- Delta-only: keep a fact only when its value isn't already named by the call
-    -- text (cross-value / implicit touch); glyph + verb carry the rest.
-    renderFacts s facts =
-      T.intercalate
-        " · "
-        [ opts.phrases.observed f (fmap (nameOf . Blame.factVar) grp)
-        | grp@(f : _) <- groupBy ((==) `on` factRank) (sortOn (Down . factRank) kept)
-        ]
-      where
-        callTxt = fst (stepCall opts trace s)
-        kept = [f | f <- facts, not (nameOf (Blame.factVar f) `T.isInfixOf` callTxt)]
 
 -- | A step reference for the log: real steps read @\@N@; the machine-setup
 -- pseudo-step (0) reads @setup@ (it is not a navigable rule). Shared by the
@@ -340,15 +309,32 @@ citesBody opts trace failingStep steps
     uniq = sort (nub steps)
     priorSteps = sort [s.index | s <- trace.steps, s.index > 0, s.index < failingStep]
 
--- | Display order for facts sharing a margin row (strongest first), mirroring
--- 'Blame''s fact weighting. Injective, so equal rank ⇒ same verb (used to group
--- same-verb facts for merged names).
-factRank :: Fact -> Int
-factRank = \case
-  ConsumedAt {} -> 3
-  TransferredAt {} -> 2
-  TouchedAt {} -> 1
-  BornAt {} -> 0
+-- | Classify a lifeline's consume at a step: 'NodeDeath' for a lineage-ending
+-- consume, 'NodeTransfer' for a consume continued by a transfer (a handoff, its
+-- own glyph — never a death), 'Nothing' if the lifeline is not consumed here.
+-- Both views' gutters agree on death-vs-handoff through this one predicate.
+consumeGlyph :: Trace -> Int -> Lifeline -> Maybe Cell
+consumeGlyph trace ix l
+  | l.consumedAt /= Just ix = Nothing
+  | Trace.continues trace l.var = Just NodeTransfer
+  | otherwise = Just NodeDeath
+
+-- | Render the lifecycle fact(s) implicated at a step, for its margin. Delta-only:
+-- drop any fact whose value the call text already names (the gutter glyph and the
+-- rule verb carry it). Same-verb facts merge into one clause with joined names
+-- (@a₁, a₂ accessed@); different verbs join with @·@, strongest first (facts are
+-- ordered by 'Blame.factWeight', which is injective, so equal weight ⇒ same verb).
+-- Empty when nothing survives. Shared by both views (focused passes ≤1 fact).
+factsDoc :: Style -> Trace -> Text -> [Fact] -> Text
+factsDoc opts trace callTxt facts =
+  T.intercalate
+    " · "
+    [ opts.phrases.observed f (fmap (nameOf . Blame.factVar) grp)
+    | grp@(f : _) <- groupBy ((==) `on` Blame.factWeight) (sortOn (Down . Blame.factWeight) kept)
+    ]
+  where
+    nameOf = displayName opts.glyphs trace
+    kept = [f | f <- facts, not (nameOf (Blame.factVar f) `T.isInfixOf` callTxt)]
 
 -- The rendered call plus the free draws that did NOT inline (→ detail rows).
 -- Free (non-pool) draws fold into the call in journal order — @write h₁ "0"@ —
@@ -409,10 +395,10 @@ trajectory opts trace v = case trajectorySteps trace v of
   entries ->
     Just (opts.phrases.trajectory (displayName opts.glyphs trace v) [(r, T.pack (show i)) | (i, r) <- entries])
 
--- | The off-spine lifelines: each pool value whose lineage root differs from
+-- | The off-log lifelines: each pool value whose lineage root differs from
 -- the failing value's, as a compact trajectory (@▸ h₂: open \@3@). Rendered as
 -- its own section after the splice in the composed report; 'Nothing' when the
--- counterexample has no off-spine values. Capped, with a counted overflow.
+-- counterexample has no off-log values. Capped, with a counted overflow.
 elidedLifelinesDoc :: Style -> Trace -> Blame -> Maybe (Doc Ann)
 elidedLifelinesDoc opts trace blame
   | null allLines = Nothing

@@ -1,4 +1,4 @@
--- | A readable matcher for multi-line rendered output (the citation spine, full
+-- | A readable matcher for multi-line rendered output (the event log, full
 -- reports — anything whose test is a 2-D character grid).
 --
 -- 'shouldBe' on 'Text' reports a mismatch through 'show', which escapes every
