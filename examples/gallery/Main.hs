@@ -19,6 +19,11 @@
 --      footer. Printed in unicode and ascii, beside the unicode report.
 --   5. poked value — a flat story (born, then poked): no death or handoff,
 --      so it degrades to the step timeline with a compact lead
+--   6. ledger — a /multi-subject/ failure: the settling step consumes two
+--      distinct funded accounts, so the failure is caused by two pool values
+--      at once. Today blame picks one for the spine and drops the other to a
+--      footer lead; a permanent before/after fixture for the multi-subject
+--      blame work (see notes/roadmap.md)
 --
 -- Run with @just gallery@ from the repo root (source
 -- splicing resolves @srcLocFile@ relative to the working directory).
@@ -57,6 +62,7 @@ main = do
   runScenario "3: warehouse — realistic interleaving, spliced" (Stateful.run warehouseMachine)
   runTraceScenario True "4: file handles — use-after-close, citation spine" (Stateful.run fileHandleMachine)
   runTraceScenario False "5: poked value — flat story, degrades to lead" (Stateful.run overflowMachine)
+  runTraceScenario False "6: ledger — two accounts settled (multi-subject candidate)" (Stateful.run ledgerMachine)
 
 runScenario :: Text -> Property () -> IO ()
 runScenario title prop = showReport title =<< check defaultSettings prop
@@ -290,7 +296,6 @@ fileHandleMachine =
               modifyIORef' m.epoch (+ 1)
               pure h
             liftIO (Pool.add m.openHandles h)
-            Stateful.respond "ok"
             pure m,
           Stateful.Rule "write" \m -> do
             h <- forAll (Pool.valuesReusable m.openHandles)
@@ -299,7 +304,6 @@ fileHandleMachine =
               e <- readIORef m.epoch
               modifyIORef' m.contents (Map.insert h v)
               modifyIORef' m.lastWriteEpoch (Map.insert h e)
-            Stateful.respond "ok"
             pure m,
           Stateful.Rule "close" \m -> do
             h <- forAll (Pool.transfer m.openHandles m.closedHandles)
@@ -311,7 +315,6 @@ fileHandleMachine =
               case wrote of
                 Just we | e > we -> pure () -- leak!
                 _ -> modifyIORef' m.contents (Map.delete h)
-            Stateful.respond "ok"
             pure m,
           Stateful.Rule "read_closed" \m -> do
             h <- forAll (Pool.valuesReusable m.closedHandles)
@@ -349,7 +352,6 @@ overflowMachine =
       rules =
         [ Stateful.Rule "poke" \m -> do
             _ <- forAll (Pool.valuesReusable m.poked)
-            Stateful.respond "ok"
             pure m {pokes = m.pokes + 1, lastWasPoke = True},
           Stateful.Rule "decoy" \m -> do
             n <- forAll (Gen.int & Gen.min 0 & Gen.max 9 & Gen.build)
@@ -365,4 +367,58 @@ overflowMachine =
               (not (m.pokes >= 5 && m.decoyed && m.lastWasPoke))
               "at most four pokes once a decoy exists"
         ]
+    }
+
+-- * Scenario 6: ledger (multi-subject blame candidate)
+
+-- | The failing step touches /two/ distinct pool values, each with its own
+-- deposit history: @settle@ consumes two funded accounts and trips a claim
+-- about both. Today blame keeps one account for the spine and relegates the
+-- other to a footer lead; once multi-subject blame lands, both operands' stories
+-- should weave into one report. A permanent before/after fixture for that work
+-- (see @notes/roadmap.md@).
+--
+-- The claim is deliberately false — nothing in the model stops two accounts from
+-- holding funds at once — in the spirit of scenario 2's palindrome.
+data LedgerModel = LedgerModel
+  { accounts :: Pool Int,
+    balances :: IORef (Map Int Int),
+    nextAccount :: IORef Int
+  }
+
+ledgerMachine :: Stateful.Machine LedgerModel IO
+ledgerMachine =
+  Stateful.Machine
+    { initial = do
+        env <- askEnv
+        accounts <- liftIO (Pool.named "a" env.testCase)
+        balances <- newIORef Map.empty
+        nextAccount <- newIORef 0
+        pure LedgerModel {accounts, balances, nextAccount},
+      rules =
+        [ Stateful.Rule "open" \m -> do
+            acc <- liftIO do
+              n <- readIORef m.nextAccount
+              modifyIORef' m.nextAccount (+ 1)
+              modifyIORef' m.balances (Map.insert n 0)
+              pure n
+            liftIO (Pool.add m.accounts acc)
+            pure m,
+          Stateful.Rule "deposit" \m -> do
+            acc <- forAll (Pool.valuesReusable m.accounts)
+            amt <- forAll (Gen.int & Gen.min 1 & Gen.max 9 & Gen.build)
+            liftIO (modifyIORef' m.balances (Map.adjust (+ amt) acc))
+            pure m,
+          -- Consumes two distinct accounts (a consuming draw removes the first,
+          -- so the second is necessarily different), giving the failing step two
+          -- pool subjects.
+          Stateful.Rule "settle" \m -> do
+            a <- forAll (Pool.valuesConsumed m.accounts)
+            b <- forAll (Pool.valuesConsumed m.accounts)
+            bals <- liftIO (readIORef m.balances)
+            let funded acc = Map.findWithDefault 0 acc bals > 0
+            assert (not (funded a && funded b)) "funds stay consolidated in one account"
+            pure m
+        ],
+      invariants = []
     }
