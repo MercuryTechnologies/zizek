@@ -26,11 +26,10 @@ import Hegel.Report
 import Hegel.Report.Ann (docToText)
 import Hegel.Report.Glyph (Cell (..), GlyphTable (..))
 import Hegel.Report.Glyph qualified as Glyph
-import Hegel.Report.Style (LinkMode (..), Style (..), defaultStyle)
+import Hegel.Report.Style (Style (..), defaultStyle)
 import Hegel.Report.Trace qualified as Trace
 import Hegel.Report.Trace.Blame (Citation (..), Fact (..))
 import Hegel.Report.Trace.Blame qualified as Blame
-import Hegel.Report.Trace.Compose qualified as Compose
 import Hegel.Report.Trace.Lead qualified as Lead
 import Hegel.Report.Trace.Spine qualified as Spine
 import Hegel.Runner (check)
@@ -53,39 +52,29 @@ renderWith style = docToText (Spine.spineDoc style handoffTrace handoffBlame)
 spec :: Spec
 spec = do
   describe "spineDoc" do
-    it "renders the failure-first unicode spine (transfer/handoff shape)" do
-      renderWith (defaultStyle Glyph.unicode) {linkMode = Links}
-        `shouldRenderAs` [ "✗ 8  read v₁                    ●─┬─┬─╮",
-                           "│    read returned stale bytes    │ │ │",
-                           "┆    ⋯ 2 steps, none touch v₁     ┆ ┆ ┆",
-                           "○ 5  close v₁                   ◀─╯ │ │   v₁ was transferred",
-                           "○ 4  write v₁ → ok              ◀───╯ │   v₁ was accessed",
-                           "┆    ⋯ 2 steps, none touch v₁         ┆",
-                           "● 1  open v₁                    ◀─────╯   v₁ was created"
+    it "renders the chronological unicode spine (transfer/handoff shape)" do
+      renderWith (defaultStyle Glyph.unicode)
+        `shouldRenderAs` [ "● 1  open v₁                    v₁ was created",
+                           "┆    ⋯ 2 steps, none touch v₁",
+                           "○ 4  write v₁ → ok              v₁ was accessed",
+                           "○ 5  close v₁                   v₁ was transferred",
+                           "┆    ⋯ 2 steps, none touch v₁",
+                           "✗ 8  read v₁                    ← cites 1, 4, 5"
                          ]
 
-    it "renders the failure-first ascii spine" do
-      renderWith (defaultStyle Glyph.ascii) {linkMode = Links}
-        `shouldRenderAs` [ "x 8  read v1                     *-+-+-.",
-                           "|    read returned stale bytes     | | |",
-                           ":    ... 2 steps, none touch v1    : : :",
-                           "o 5  close v1                    <-' | |   v1 was transferred",
-                           "o 4  write v1 -> ok              <---' |   v1 was accessed",
-                           ":    ... 2 steps, none touch v1        :",
-                           "* 1  open v1                     <-----'   v1 was created"
+    it "renders the chronological ascii spine" do
+      renderWith (defaultStyle Glyph.ascii)
+        `shouldRenderAs` [ "* 1  open v1                      v1 was created",
+                           ":    ... 2 steps, none touch v1",
+                           "o 4  write v1 -> ok               v1 was accessed",
+                           "o 5  close v1                     v1 was transferred",
+                           ":    ... 2 steps, none touch v1",
+                           "x 8  read v1                      <- cites 1, 4, 5"
                          ]
 
-    it "falls back to numeric citations past the link budget (even in Links mode)" do
-      let out = renderWith (defaultStyle Glyph.unicode) {linkMode = Links, linkBudget = 2}
-      out `shouldSatisfy` T.isInfixOf "← cites 5, 4, 1"
-      out `shouldNotSatisfy` T.isInfixOf "◀"
-
-    it "the default (Numeric) renders the numeric citation list, not connectors" do
-      -- Connectors are reserved for cross-thread citations, and every trace is
-      -- single-thread today, so the default 'Numeric' lists citations instead.
+    it "renders the numeric citation list, cited steps ascending" do
       let out = renderWith (defaultStyle Glyph.unicode)
-      out `shouldSatisfy` T.isInfixOf "← cites 5, 4, 1"
-      out `shouldNotSatisfy` T.isInfixOf "◀"
+      out `shouldSatisfy` T.isInfixOf "← cites 1, 4, 5"
 
     it "clips the call column at the width budget" do
       let out = renderWith (defaultStyle Glyph.unicode) {callWidth = 8}
@@ -98,24 +87,12 @@ spec = do
       out `shouldNotSatisfy` T.isInfixOf "write v..."
 
   describe "layoutRows" do
-    it "puts the failing row first (failure-first) with its details beneath" do
+    it "puts the failing row last (chronological)" do
+      -- Chronological: the oldest step leads, the failing step is the last row.
+      -- (The spine carries no diff — the composed report's splice does.)
       let rows = Spine.layoutRows (defaultStyle Glyph.unicode) handoffTrace handoffBlame
-      take 2 (fmap (.kind) rows)
-        `shouldBe` [Spine.NodeRow, Spine.DetailRow]
-
-    it "splits a multi-line failure message into one detail row per line" do
-      let (notes, events) = handoffFixture
-          multi =
-            [ if n.kind == Failure Nothing
-                then n {text = "expected open\ngot closed"} :: Note
-                else n
-            | n <- notes
-            ]
-          t = Trace.build multi events
-          b = fromJust (Blame.analyze t)
-          rows = Spine.layoutRows (defaultStyle Glyph.unicode) t b
-      [r.call | r <- rows, r.kind == Spine.DetailRow]
-        `shouldBe` ["expected open", "got closed"]
+      fmap (\r -> (r.kind, r.stepNo)) (take 1 (reverse rows))
+        `shouldBe` [(Spine.NodeRow, Just 8)]
 
     it "renders a non-pool draw as a free-draw detail row; pool references stay symbolic" do
       -- A cited history step (write) that draws a pool handle and a plain payload
@@ -147,10 +124,10 @@ spec = do
       [r.call | r <- rows, r.kind == Spine.ElisionRow]
         `shouldBe` ["⋯ 2 steps, none touch v₁", "⋯ 2 steps, none touch v₁"]
 
-    it "gives each elided lifeline its own trajectory in the footer" do
+    it "gives each elided lifeline its own trajectory (off-spine section)" do
       -- The failing subject (a₁) is drawn at step 3; an unrelated value (b₁) is
-      -- born at step 2 and never touched again, so it's off-spine. The footer
-      -- reports what it did (`spawn @2`), not just that it exists.
+      -- born at step 2 and never touched again, so it's off-spine. The
+      -- elided-lifelines section reports what it did (`spawn @2`).
       let a1 = h1
           b1 = Var {pool = 1, id = 4}
           notes =
@@ -166,56 +143,8 @@ spec = do
             ]
           t = Trace.build notes events
           b = fromJust (Blame.analyze t)
-          rows = Spine.layoutRows (defaultStyle Glyph.unicode) t b
-      [r.annot | r <- rows, r.kind == Spine.FooterRow] `shouldSatisfy` any (T.isInfixOf "spawn @2")
-
-  describe "headlineDoc" do
-    it "words the transfer fixture's failure as a reason-led headline" do
-      -- The headline reflows at the layout width; 'unwrap' flattens whitespace
-      -- to compare content. The justifications live in the spine, not here.
-      fmap (unwrap . docToText) (Compose.headlineDoc (defaultStyle Glyph.unicode) handoffTrace handoffBlame)
-        `shouldBe` Just "Step 8 (read): read returned stale bytes."
-
-    it "renders as a headline with no bulleted justifications" do
-      let out = docToText <$> Compose.headlineDoc (defaultStyle Glyph.unicode) handoffTrace handoffBlame
-      -- Just the headline now; each cited fact lives in the spine margin.
-      fmap (T.isInfixOf "•") out `shouldBe` Just False
-      fmap (T.isInfixOf "Step 8 (read)") out `shouldBe` Just True
-
-    it "falls back to the observed response when the failure has no message" do
-      -- With no failure message, the reason-led headline quotes the step's
-      -- declared response instead.
-      let (notes, events) = handoffFixture
-          notes' =
-            [ if n.kind == Failure Nothing then n {text = ""} :: Note else n
-            | n <- notes
-            ]
-              <> [noteAt (Tick 20) 1 Response "Just \"a\""]
-          t = Trace.build notes' events
-          b = fromJust (Blame.analyze t)
-      fmap (unwrap . docToText) (Compose.headlineDoc (defaultStyle Glyph.unicode) t b)
-        `shouldBe` Just "Step 8 (read): read returned Just \"a\"."
-
-    it "is Nothing when there is nothing to cite" do
-      -- A failure whose step touched a pool value born in the same step:
-      -- blame exists, but with no earlier history there are no citations.
-      let t =
-            Trace.build
-              [ header (Tick 1) 1 "boom",
-                noteAt (Tick 3) 1 (Failure Nothing) "boom"
-              ]
-              [eventAt (Tick 2) h1 (Born Nothing)]
-          b = fromJust (Blame.analyze t)
-      Compose.headlineDoc (defaultStyle Glyph.unicode) t b `shouldSatisfy` \case
-        Nothing -> True
-        Just _ -> False
-
-    it "leads with the failure reason for a benign failing fact (no dangling — but)" do
-      -- The failing fact is an ordinary touch, so the headline states the
-      -- failure reason rather than contrasting a benign access.
-      let headline = fmap (unwrap . docToText) (Compose.headlineDoc (defaultStyle Glyph.unicode) flatTrace flatBlame)
-      headline `shouldBe` Just "Step 3 (use): expected fresh handle."
-      headline `shouldSatisfy` maybe False (not . T.isInfixOf " — but ")
+      fmap docToText (Spine.elidedLifelinesDoc (defaultStyle Glyph.unicode) t b)
+        `shouldSatisfy` maybe False (T.isInfixOf "spawn @2")
 
   describe "leadDoc" do
     it "words the failing value's history in rule names, chronological, sans failing step" do
@@ -277,10 +206,6 @@ spec = do
       let gutterCells = [NodeBorn, NodeTouch, NodeDeath, NodeFail, EdgeAlive, EdgeDead, EdgeElided, HistoryEnd]
       distinctUnder Glyph.ascii gutterCells `shouldBe` True
 
-    it "ascii preserves semantics within the link family" do
-      let linkCells = [LinkOrigin, LinkHorizontal, LinkVertical, LinkElided, LinkTeeDown, LinkCornerDown, LinkCornerUp, LinkArrow]
-      distinctUnder Glyph.ascii linkCells `shouldBe` True
-
   describe "composed report (form selection)" do
     it "spliced timeline: a pool-free stateful failure keeps the pre-trace layout byte-for-byte" do
       let report = reportOf [] (fst handoffFixture)
@@ -289,21 +214,17 @@ spec = do
       out `shouldNotSatisfy` T.isInfixOf "was consumed at"
       out `shouldNotSatisfy` T.isInfixOf "stored:"
 
-    it "composed trace: pool context composes headline, spine, splice, and footer" do
+    it "composed trace: pool context composes spine, splice, and footer" do
       let (notes, events) = handoffFixture
           report = (reportOf events notes) {databaseKey = Just "some-key"}
       out <- renderReportRich report
-      out `shouldSatisfy` T.isInfixOf "Step 8 (read): read returned stale bytes"
-      -- The birth and handoff facts live in the spine margin now.
+      -- The birth and handoff facts live in the spine margin.
       out `shouldSatisfy` T.isInfixOf "v₁ was created"
       out `shouldSatisfy` T.isInfixOf "v₁ was transferred"
-      out `shouldSatisfy` (not . T.isInfixOf "•")
-      -- Single-thread trace under the default 'Numeric': numeric citations, no
-      -- link connectors.
-      out `shouldSatisfy` T.isInfixOf "← cites 5, 4, 1"
-      out `shouldNotSatisfy` T.isInfixOf "◀"
+      -- Numeric citations, cited steps ascending (reading order).
+      out `shouldSatisfy` T.isInfixOf "← cites 1, 4, 5"
       -- The failing step's splice (fixture notes carry no locs, so its lines
-      -- are the structured fallbacks).
+      -- are the structured fallbacks); the reason lives here, not in a headline.
       out `shouldSatisfy` T.isInfixOf "  Step 8: read"
       out `shouldSatisfy` T.isInfixOf "✗ read returned stale bytes"
       out `shouldSatisfy` T.isInfixOf "stored: some-key — replays automatically next run"
@@ -379,7 +300,7 @@ spec = do
               [() | BornAt _ <- facts] `shouldSatisfy` (not . null)
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
-    it "a real pool machine renders a spine with a failure row and link connectors" do
+    it "a real pool machine renders a spine with birth and failure rows" do
       report <- check defaultSettings (Stateful.run eventfulMachine)
       case report.result of
         Counterexample {notes, events} -> do
@@ -387,12 +308,9 @@ spec = do
           case Blame.analyze trace of
             Nothing -> expectationFailure "expected blame"
             Just blame -> do
-              -- Force 'Links' so the connector path renders on a real engine
-              -- trace (the single-thread default 'Numeric' would list numerically).
-              let out = docToText (Spine.spineDoc (defaultStyle Glyph.unicode) {linkMode = Links} trace blame)
+              let out = docToText (Spine.spineDoc (defaultStyle Glyph.unicode) trace blame)
               out `shouldSatisfy` T.isInfixOf "✗"
               out `shouldSatisfy` T.isInfixOf "●"
-              out `shouldSatisfy` T.isInfixOf "◀"
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
 -- | A synthetic stateful counterexample report over the fixture streams.

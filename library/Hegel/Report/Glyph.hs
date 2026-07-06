@@ -30,11 +30,8 @@ import Hegel.Report.Encoding qualified as Encoding
 import Hegel.Report.Trace (Lifeline (..), Trace)
 import Hegel.Report.Trace qualified as Trace
 
--- | One abstract spine cell.
---
--- Gutter cells and link cells occupy disjoint regions of a row, so the ascii
--- table only needs injectivity within each family; e.g. a corner @'@ and a
--- dead strand @'@ could never be confused as they cannot share a column.
+-- | One abstract spine cell. The ascii table must render these injectively so
+-- the transliteration ('cellTransliterations') is unambiguous.
 data Cell
   = -- Gutter (strand) cells
     NodeBorn
@@ -45,21 +42,6 @@ data Cell
   | EdgeDead
   | EdgeElided
   | HistoryEnd
-  | -- Link cells
-    LinkOrigin
-  | LinkHorizontal
-  | LinkVertical
-  | LinkElided
-  | -- | Origin-row junction: an inner column continues down to its cited row.
-    LinkTeeDown
-  | -- | Unused since the spine became failure-first only; retained so the
-    -- link-cell family stays complete (transliteration, injectivity pins).
-    LinkTeeUp
-  | -- | Origin-row corner: the outermost column turns down.
-    LinkCornerDown
-  | -- | Cited-row corner: the column turns up-left into the arrowhead.
-    LinkCornerUp
-  | LinkArrow
   | -- Text-region sigils
     ElidedMark
   | Ellipsis
@@ -90,15 +72,6 @@ unicode =
         EdgeDead -> "┊"
         EdgeElided -> "┆"
         HistoryEnd -> "~"
-        LinkOrigin -> "●"
-        LinkHorizontal -> "─"
-        LinkVertical -> "│"
-        LinkElided -> "┆"
-        LinkTeeDown -> "┬"
-        LinkTeeUp -> "┴"
-        LinkCornerDown -> "╮"
-        LinkCornerUp -> "╯"
-        LinkArrow -> "◀"
         ElidedMark -> "▸"
         Ellipsis -> "⋯"
         NumericCite -> "←"
@@ -122,15 +95,6 @@ ascii =
         EdgeDead -> "."
         EdgeElided -> ":"
         HistoryEnd -> "~"
-        LinkOrigin -> "*"
-        LinkHorizontal -> "-"
-        LinkVertical -> "|"
-        LinkElided -> ":"
-        LinkTeeDown -> "+"
-        LinkTeeUp -> "+"
-        LinkCornerDown -> "."
-        LinkCornerUp -> "'"
-        LinkArrow -> "<"
         ElidedMark -> ">"
         Ellipsis -> "..."
         NumericCite -> "<-"

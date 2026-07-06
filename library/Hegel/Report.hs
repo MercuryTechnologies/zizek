@@ -184,8 +184,8 @@ renderFailure message notes loc diff = docToText body
 
 -- | Render a report as plain text, splicing drawn values and the failure
 -- message inline into a source listing — and, for stateful failures with
--- pool context, composing the citation spine and headline above
--- the failing step's splice (see 'renderReportRichWith' for the form selection).
+-- pool context, composing the chronological citation spine above the failing
+-- step's splice (see 'renderReportRichWith' for the form selection).
 -- Reads source files at render time; degrades to 'renderReport' when no
 -- source is readable.
 renderReportRich :: Report -> IO Text

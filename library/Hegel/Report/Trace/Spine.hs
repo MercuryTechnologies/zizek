@@ -1,4 +1,6 @@
--- | A failing value's history rendered as an aligned vertical reference.
+-- | A failing value's history rendered as an aligned vertical spine, oldest
+-- step at the top and the failing step at the bottom — chronological, matching
+-- the timeline form.
 --
 -- Intended to be imported with qualification:
 --
@@ -11,21 +13,21 @@ module Hegel.Report.Trace.Spine
 
     -- * Rendering
     spineDoc,
+    elidedLifelinesDoc,
   )
 where
 
 import Data.IntSet qualified as IntSet
-import Data.List (nub, sortOn)
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.List (nub, sort, sortOn)
+import Data.Maybe (listToMaybe)
 import Data.Ord (Down (..))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Report.Ann (Ann (..))
-import Hegel.Report.Ann qualified as Ann
 import Hegel.Report.Glyph (Cell (..), GlyphTable (..), displayName)
 import Hegel.Report.Phrase (PhraseTable (..))
 import Hegel.Report.Phrase qualified as Phrase
-import Hegel.Report.Style (LinkMode (..), Style (..))
+import Hegel.Report.Style (Style (..))
 import Hegel.Report.Trace (Lifeline (..), Step (..), Touch (..), Trace)
 import Hegel.Report.Trace qualified as Trace
 import Hegel.Report.Trace.Blame (Blame (..), Observation (..))
@@ -37,104 +39,74 @@ import Prettyprinter qualified as PP
 data RowKind
   = -- | A failing or otherwise cited step.
     NodeRow
-  | -- | A dim detail line under the failing step.
+  | -- | A dim detail line under a step (a free draw).
     DetailRow
   | -- | @⋯ n steps@ elided between two rendered steps.
     ElisionRow
-  | -- | @~@ — history continues past the view.
+  | -- | @~@ — older history precedes the view.
     TerminatorRow
-  | -- | @▸ k lifelines elided …@.
-    FooterRow
   deriving stock (Show, Eq)
 
--- | One row of the spine, containing abstract cells for the geometry regions
--- and prepared text for the prose regions.
+-- | One row of the spine: the gutter glyph, the step number, the call text, and
+-- the right-margin gloss.
 data Row = Row
   { kind :: !RowKind,
     gutter :: !Cell,
     stepNo :: !(Maybe Int),
     call :: !Text,
-    link :: [Cell],
-    annot :: !Text,
-    detailAnn :: !(Maybe Ann)
+    -- | The row's right-margin text: the blame fact on a cited row, the
+    -- @← cites …@ list on the failing row.
+    margin :: !Text
   }
   deriving stock (Show, Eq)
 
 -- * Layout
 
--- | Lay the trace out as spine rows.
+-- | Lay the trace out as spine rows, chronological: the terminator (if older
+-- history precedes the view) then the shown steps oldest → newest, with the
+-- failing step last. The failing step's diff is not shown here — the composed
+-- report renders the source splice (which carries it) after the spine.
 layoutRows :: Style -> Trace -> Blame -> [Row]
-layoutRows opts trace blame = orient <> footerRows
+layoutRows opts trace blame = terminator <> go Nothing shownAsc
   where
-    -- Failure-first: the failing row (with its detail lines) sits at the top,
-    -- history reading back through time beneath it.
-    orient = failingBlock <> historyRows
-
     table = opts.glyphs
     closure = Blame.citationClosure blame
     cited = blame.observed.since
-    k = length cited
-    linkWanted = case opts.linkMode of
-      Links -> True
-      Numeric -> False
-    drawLink = linkWanted && k > 0 && k <= opts.linkBudget
-    -- One association, everything link-related projects from it.
-    indexedCites = zip [1 :: Int ..] cited
-    columnOf s = listToMaybe [c | (c, o) <- indexedCites, o.step == s]
-    shown = sortOn (Down . (.index)) [s | s <- trace.steps, IntSet.member s.index closure]
-    (failingSteps, citedSteps) = splitAt 1 shown
+    -- Shown steps oldest → newest; the failing step has the largest index.
+    shownAsc = sortOn (.index) [s | s <- trace.steps, IntSet.member s.index closure]
+    failingIx = listToMaybe (sortOn Down (fmap (.index) shownAsc))
 
-    failingBlock = concatMap failingRows failingSteps
-    failingRows s =
+    -- Walk oldest → newest, inserting elision rows for the gaps between shown
+    -- steps.
+    go _ [] = []
+    go prev (s : rest) =
+      elisionBetween prev s.index
+        <> stepBlock s
+        <> go (Just s.index) rest
+    stepBlock s
+      | Just s.index == failingIx = [failingRow s]
+      | otherwise = citedRow s : drawnRows s
+
+    -- @~@ at the top when real steps (not the machine-setup prelude, step 0)
+    -- older than the oldest shown step exist — i.e. the spine begins partway
+    -- through the run because earlier steps don't concern the failing value.
+    terminator =
+      [ Row {kind = TerminatorRow, gutter = HistoryEnd, stepNo = Nothing, call = "", margin = ""}
+      | oldestShown <- take 1 (fmap (.index) shownAsc),
+        any (\s -> s.index > 0 && s.index < oldestShown) trace.steps
+      ]
+
+    failingRow s =
       Row
         { kind = NodeRow,
           gutter = NodeFail,
           stepNo = Just s.index,
           call = callText s,
-          link = if drawLink then originLink else [],
-          annot =
-            if drawLink || null cited
-              then ""
-              else numericCites,
-          detailAnn = Nothing
+          margin = if null cited then "" else numericCites
         }
-        : detailRows
-
+    -- Cited-step numbers, ascending to match the top → bottom reading order.
     numericCites =
-      table.cell NumericCite <> " " <> opts.phrases.cites [T.pack (show c.step) | c <- cited]
-
-    detailRows =
-      [ Row {kind = DetailRow, gutter = EdgeAlive, stepNo = Nothing, call = t, link = detailLink, annot = "", detailAnn = mAnn}
-      | (t, mAnn) <- details
-      ]
-    -- The details sit between the link's origin and its targets below, so the
-    -- columns pass through.
-    detailLink = verticals allColumns
-    -- Each detail line as (rendered text, structured diff annotation).
-    --
-    -- A diff carries its 'Ann' structurally; a plain message carries none.
-    details :: [(Text, Maybe Ann)]
-    details = case trace.failure of
-      -- One detail row per physical line: an unsplit multi-line message
-      -- would defeat the column-width arithmetic.
-      Just f -> maybe [(l, Nothing) | l <- T.lines f.message] (fmap diffLine) f.diff
-      Nothing -> []
-    diffLine d = (Ann.lineDiffText d, Just (Ann.lineDiffAnn d))
-
-    -- Cited steps and the elisions between them, walking back through time.
-    historyRows = go (listToMaybe (fmap (.index) failingSteps)) citedSteps
-      where
-        go _ [] = terminator
-        go prev (s : rest) =
-          elisionRowsBetween prev s.index
-            <> [citedRow s]
-            <> drawnRows s
-            <> go (Just s.index) rest
-    terminator =
-      [ Row {kind = TerminatorRow, gutter = HistoryEnd, stepNo = Nothing, call = "", link = [], annot = "", detailAnn = Nothing}
-      | earliestShown <- take 1 (reverse (fmap (.index) shown)),
-        any (\s -> s.index < earliestShown) trace.steps
-      ]
+      table.cell NumericCite <> " " <> opts.phrases.cites (fmap (T.pack . show) (sort (nub [o.step | o <- cited])))
 
     citedRow s =
       Row
@@ -142,20 +114,11 @@ layoutRows opts trace blame = orient <> footerRows
           gutter = gutterFor s,
           stepNo = Just s.index,
           call = callText s,
-          link = if drawLink then maybe [] citedLink (columnOf s.index) else [],
-          annot = maybe "" factText (listToMaybe [o.fact | (_, o) <- indexedCites, o.step == s.index]),
-          detailAnn = Nothing
+          margin = maybe "" factText (listToMaybe [o.fact | o <- cited, o.step == s.index])
         }
+    drawnRows :: Step -> [Row]
     drawnRows s =
-      [ Row
-          { kind = DetailRow,
-            gutter = EdgeAlive,
-            stepNo = Nothing,
-            call = l,
-            link = if drawLink then verticalsWith LinkVertical [c | (c, o) <- indexedCites, o.step < s.index] else [],
-            annot = "",
-            detailAnn = Nothing
-          }
+      [ Row {kind = DetailRow, gutter = EdgeAlive, stepNo = Nothing, call = l, margin = ""}
       | d <- s.freeDraws,
         l <- T.lines d
       ]
@@ -167,18 +130,18 @@ layoutRows opts trace blame = orient <> footerRows
       | any (\l -> l.consumedAt == Just s.index && not (Trace.continues trace l.var)) chainLives = NodeDeath
       | otherwise = NodeTouch
 
-    elisionRowsBetween mUpper lower =
+    -- Elision rows for steps strictly between the previous shown step and this
+    -- one.
+    elisionBetween mLo hi =
       [ Row
           { kind = ElisionRow,
             gutter = EdgeElided,
             stepNo = Nothing,
             call = table.cell Ellipsis <> " " <> elisionLabel between,
-            link = elidedVerticals (activeColumnsBelow lower),
-            annot = "",
-            detailAnn = Nothing
+            margin = ""
           }
-      | upper <- maybe [] pure mUpper,
-        let between = [s | s <- trace.steps, s.index > lower, s.index < upper],
+      | lo <- maybe [] pure mLo,
+        let between = [s | s <- trace.steps, s.index > lo, s.index < hi],
         not (null between)
       ]
     elisionLabel between =
@@ -186,30 +149,6 @@ layoutRows opts trace blame = orient <> footerRows
         (length between)
         (if any touchesSubject between then Nothing else Just subjectName)
     touchesSubject s = any (\t -> Trace.root trace t.var == subjectRoot) s.touches
-
-    cornerCell = LinkCornerUp
-    originTee = LinkTeeDown
-    originCorner = LinkCornerDown
-
-    originLink =
-      LinkOrigin
-        : concat [[LinkHorizontal, if c < k then originTee else originCorner] | c <- [1 .. k]]
-    citedLink c =
-      [LinkArrow]
-        <> replicate (2 * c - 1) LinkHorizontal
-        <> [cornerCell]
-        <> concat [[Blank, LinkVertical] | _ <- [c + 1 .. k]]
-    verticals = verticalsWith LinkVertical
-    elidedVerticals = verticalsWith LinkElided
-    verticalsWith cell cols =
-      case cols of
-        [] -> []
-        _ -> Blank : concat [[Blank, if c `elem` cols then cell else Blank] | c <- [1 .. k]]
-    allColumns = if drawLink then [1 .. k] else []
-    activeColumnsBelow lower =
-      if drawLink
-        then [c | (c, o) <- indexedCites, o.step <= lower]
-        else []
 
     subjectRoot = Trace.root trace blame.subject
     rootLife = Trace.lifeline trace subjectRoot
@@ -229,31 +168,37 @@ layoutRows opts trace blame = orient <> footerRows
 
     factText fact = opts.phrases.observed fact (nameOf (Blame.factVar fact))
 
-    -- Each lifeline the spine elided (a value whose root differs from the
-    -- subject's) gets its own compact trajectory — @▸ h₂: open \@3@ — rather
-    -- than a bare count, so the reader sees what the off-spine values did. Cap
-    -- the list; the overflow collapses back to the counted summary.
-    footerRows = fmap footerRow (leadLines <> overflowLines)
-      where
-        footerCap = 3 :: Int
-        mark = table.cell ElidedMark
-        -- Dedupe by lineage root: a transferred value is several lifelines but
-        -- one story, and would otherwise be counted (and led) more than once.
-        elidedRoots =
-          nub [Trace.root trace l.var | l <- trace.lifelines, Trace.root trace l.var /= subjectRoot]
-        leads = [(r, t) | r <- elidedRoots, Just t <- [Lead.trajectory opts trace r]]
-        (shownLeads, hiddenLeads) = splitAt footerCap leads
-        leadLines = [mark <> " " <> t | (_, t) <- shownLeads]
-        overflowLines =
-          [ mark <> " " <> opts.phrases.elidedLifelines (length hiddenLeads) (fmap (nameOf . fst) hiddenLeads) extraSteps
-          | not (null hiddenLeads)
-          ]
-        footerRow annot =
-          Row {kind = FooterRow, gutter = Blank, stepNo = Nothing, call = "", link = [], annot, detailAnn = Nothing}
+-- | The off-spine lifelines: each pool value whose lineage root differs from
+-- the failing value's, as a compact trajectory (@▸ h₂: open \@3@). Rendered as
+-- its own section after the splice in the composed report; 'Nothing' when the
+-- counterexample has no off-spine values. Capped, with a counted overflow.
+elidedLifelinesDoc :: Style -> Trace -> Blame -> Maybe (Doc Ann)
+elidedLifelinesDoc opts trace blame
+  | null allLines = Nothing
+  | otherwise = Just (PP.vsep (fmap (PP.annotate ElidedAnn . PP.pretty) allLines))
+  where
+    table = opts.glyphs
+    footerCap = 3 :: Int
+    mark = table.cell ElidedMark
+    subjectRoot = Trace.root trace blame.subject
+    nameOf = displayName table trace
+    closure = Blame.citationClosure blame
+    -- Dedupe by lineage root: a transferred value is several lifelines but one
+    -- story, and would otherwise be led more than once.
+    elidedRoots =
+      nub [Trace.root trace l.var | l <- trace.lifelines, Trace.root trace l.var /= subjectRoot]
+    leads = [(r, t) | r <- elidedRoots, Just t <- [Lead.trajectory opts trace r]]
+    (shownLeads, hiddenLeads) = splitAt footerCap leads
+    leadLines = [mark <> " " <> t | (_, t) <- shownLeads]
+    overflowLines =
+      [ mark <> " " <> opts.phrases.elidedLifelines (length hiddenLeads) (fmap (nameOf . fst) hiddenLeads) extraSteps
+      | not (null hiddenLeads)
+      ]
     extraSteps =
       case length [s | s <- trace.steps, s.index > 0, not (IntSet.member s.index closure)] of
         0 -> Nothing
         n -> Just n
+    allLines = leadLines <> overflowLines
 
 -- * Rendering
 
@@ -265,14 +210,9 @@ spineDoc opts trace blame = PP.vsep (fmap rowDoc rows)
     table = opts.glyphs
 
     stepW = maximum (1 : [length (show i) | Row {stepNo = Just i} <- rows])
-    callW = maximum (0 : [T.length r.call | r <- rows, r.kind /= FooterRow])
-    linkW = maximum (0 : [linkWidth r.link | r <- rows])
-    linkWidth cells = sum (fmap (T.length . table.cell) cells)
+    callW = maximum (0 : [T.length r.call | r <- rows])
 
-    rowDoc r
-      -- The footer is prose, not a spine line: no ghost columns.
-      | r.kind == FooterRow = PP.annotate ElidedAnn (PP.pretty r.annot)
-      | otherwise = foldMap snd (dropTrailing segments)
+    rowDoc r = foldMap snd (dropTrailing segments)
       where
         segments =
           [ (gutterTxt, gutterDoc),
@@ -280,26 +220,18 @@ spineDoc opts trace blame = PP.vsep (fmap rowDoc rows)
             (stepTxt, PP.annotate StepNoAnn (PP.pretty stepTxt)),
             ("  ", "  "),
             (callPadded, callDoc),
-            ("  ", "  "),
-            (linkPadded, PP.annotate (LinkAnn 0) (PP.pretty linkPadded)),
             ("   ", "   "),
-            (r.annot, annotDoc)
+            (r.margin, PP.annotate NoteAnn (PP.pretty r.margin))
           ]
         gutterTxt = table.cell r.gutter
         gutterDoc = PP.annotate (if r.gutter == NodeFail then FailureMark else StrandAnn 0) (PP.pretty gutterTxt)
         stepTxt = T.justifyRight stepW ' ' (maybe "" (T.pack . show) r.stepNo)
         callPadded = T.justifyLeft callW ' ' r.call
         callDoc = case r.kind of
-          -- A diff detail row carries its structured 'Ann'; a plain message
-          -- detail line has none and renders dim.
-          DetailRow -> PP.annotate (fromMaybe ElidedAnn r.detailAnn) (PP.pretty callPadded)
+          -- Detail and elision rows are supporting context, rendered dim.
+          DetailRow -> PP.annotate ElidedAnn (PP.pretty callPadded)
           ElisionRow -> PP.annotate ElidedAnn (PP.pretty callPadded)
           _ -> respAnnotated callPadded
-        linkTxt = foldMap table.cell r.link
-        linkPadded = linkTxt <> T.replicate (linkW - T.length linkTxt) " "
-        annotDoc = case r.kind of
-          FooterRow -> PP.annotate ElidedAnn (PP.pretty r.annot)
-          _ -> PP.annotate NoteAnn (PP.pretty r.annot)
 
     -- Colour the response tail separately from the call head.
     respAnnotated t = case T.breakOn (" " <> table.cell ResponseArrow <> " ") t of

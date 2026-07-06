@@ -21,16 +21,16 @@
 --      so it degrades to the step timeline with a compact lead
 --   6. ledger — a /multi-subject/ failure: the settling step consumes two
 --      distinct funded accounts, so the failure is caused by two pool values
---      at once. Today blame picks one for the spine and drops the other to a
---      footer lead; a permanent before/after fixture for the multi-subject
---      blame work (see notes/roadmap.md)
+--      at once. Blame surfaces one value; the chronological timeline shows both
+--      accounts' activity. A standing fixture for multi-value failures.
 --
 -- Run with @just gallery@ from the repo root (source
 -- splicing resolves @srcLocFile@ relative to the working directory).
 -- Every scenario renders through 'renderReportRichAnsi', the same path real
--- failures take: scenario 4's handoff earns the composed trace report
--- (reason-led headline, spine, the failing step's splice, footer); scenario 5's
--- flat story degrades to the step timeline with a lead.
+-- failures take: scenario 4's handoff earns the composed trace report — the
+-- chronological citation spine (oldest step to the failing step), then that
+-- step's source splice, then the off-spine lifelines; scenario 5's flat story
+-- degrades to the step timeline with a lead.
 --
 -- Always exits 0; this is an eyeballing harness, not an assertion.
 module Main (main) where
@@ -74,8 +74,8 @@ showReport title report = do
   T.putStrLn =<< renderReportRichAnsi report
 
 -- | The trace scenarios through the /wired/ path — 'renderReportRichAnsi'
--- now composes the headline, citation spine, the failing step's
--- splice, and footer itself — plus the ascii table via the options variant.
+-- composes the citation spine, the failing step's splice, and the footer
+-- itself — plus the ascii table via the options variant.
 runTraceScenario :: Bool -> Text -> Property () -> IO ()
 runTraceScenario withAscii title prop = do
   report <- check defaultSettings prop
@@ -254,8 +254,8 @@ warehouseMachine =
 
 -- * Scenario 4: file handles (citation spine, flagship)
 
--- | Handles live in the @h@ pool while open and 'Pool.transfer' into the
--- @c@ pool on close, so the report keeps one lifeline across both.
+-- | Handles live in the @handle@ pool while open and 'Pool.transfer' into the
+-- @closed@ pool on close, so the report keeps one lifeline across both.
 --
 -- The SUT bug: close drops the handle's buffered content — /unless/ the
 -- handle table was resized (another handle was opened) since that handle's
@@ -281,8 +281,8 @@ fileHandleMachine =
   Stateful.Machine
     { initial = do
         env <- askEnv
-        openHandles <- liftIO (Pool.named "h" env.testCase)
-        closedHandles <- liftIO (Pool.named "c" env.testCase)
+        openHandles <- liftIO (Pool.named "handle" env.testCase)
+        closedHandles <- liftIO (Pool.named "closed" env.testCase)
         nextHandle <- newIORef 0
         contents <- newIORef Map.empty
         lastWriteEpoch <- newIORef Map.empty
@@ -346,7 +346,7 @@ overflowMachine =
     { initial = do
         env <- askEnv
         poked <- liftIO (Pool.new env.testCase)
-        decoys <- liftIO (Pool.new env.testCase)
+        decoys <- liftIO (Pool.named "decoy" env.testCase)
         liftIO (Pool.add poked "the-value")
         pure OverflowModel {poked, decoys, pokes = 0, decoyed = False, lastWasPoke = False},
       rules =
@@ -391,7 +391,7 @@ ledgerMachine =
   Stateful.Machine
     { initial = do
         env <- askEnv
-        accounts <- liftIO (Pool.named "a" env.testCase)
+        accounts <- liftIO (Pool.named "account" env.testCase)
         balances <- newIORef Map.empty
         nextAccount <- newIORef 0
         pure LedgerModel {accounts, balances, nextAccount},
