@@ -30,6 +30,7 @@ import Hegel.Report.Trace (Lifeline (..), Step (..), Touch (..), Trace)
 import Hegel.Report.Trace qualified as Trace
 import Hegel.Report.Trace.Blame (Blame (..), Observation (..))
 import Hegel.Report.Trace.Blame qualified as Blame
+import Hegel.Report.Trace.Lead qualified as Lead
 import Prettyprinter (Doc)
 import Prettyprinter qualified as PP
 
@@ -228,25 +229,27 @@ layoutRows opts trace blame = orient <> footerRows
 
     factText fact = opts.phrases.observed fact (nameOf (Blame.factVar fact))
 
-    footerRows =
-      [ Row
-          { kind = FooterRow,
-            gutter = Blank,
-            stepNo = Nothing,
-            call = "",
-            link = [],
-            annot =
-              table.cell ElidedMark
-                <> " "
-                <> opts.phrases.elidedLifelines
-                  (length others)
-                  (nub (fmap (nameOf . (.var)) others))
-                  extraSteps,
-            detailAnn = Nothing
-          }
-      | let others = [l | l <- trace.lifelines, Trace.root trace l.var /= subjectRoot],
-        not (null others)
-      ]
+    -- Each lifeline the spine elided (a value whose root differs from the
+    -- subject's) gets its own compact trajectory — @▸ h₂: open \@3@ — rather
+    -- than a bare count, so the reader sees what the off-spine values did. Cap
+    -- the list; the overflow collapses back to the counted summary.
+    footerRows = fmap footerRow (leadLines <> overflowLines)
+      where
+        footerCap = 3 :: Int
+        mark = table.cell ElidedMark
+        -- Dedupe by lineage root: a transferred value is several lifelines but
+        -- one story, and would otherwise be counted (and led) more than once.
+        elidedRoots =
+          nub [Trace.root trace l.var | l <- trace.lifelines, Trace.root trace l.var /= subjectRoot]
+        leads = [(r, t) | r <- elidedRoots, Just t <- [Lead.trajectory opts trace r]]
+        (shownLeads, hiddenLeads) = splitAt footerCap leads
+        leadLines = [mark <> " " <> t | (_, t) <- shownLeads]
+        overflowLines =
+          [ mark <> " " <> opts.phrases.elidedLifelines (length hiddenLeads) (fmap (nameOf . fst) hiddenLeads) extraSteps
+          | not (null hiddenLeads)
+          ]
+        footerRow annot =
+          Row {kind = FooterRow, gutter = Blank, stepNo = Nothing, call = "", link = [], annot, detailAnn = Nothing}
     extraSteps =
       case length [s | s <- trace.steps, s.index > 0, not (IntSet.member s.index closure)] of
         0 -> Nothing

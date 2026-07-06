@@ -147,6 +147,28 @@ spec = do
       [r.call | r <- rows, r.kind == Spine.ElisionRow]
         `shouldBe` ["⋯ 2 steps, none touch v₁", "⋯ 2 steps, none touch v₁"]
 
+    it "gives each elided lifeline its own trajectory in the footer" do
+      -- The failing subject (a₁) is drawn at step 3; an unrelated value (b₁) is
+      -- born at step 2 and never touched again, so it's off-spine. The footer
+      -- reports what it did (`spawn @2`), not just that it exists.
+      let a1 = h1
+          b1 = Var {pool = 1, id = 4}
+          notes =
+            [ header (Tick 1) 1 "open",
+              header (Tick 3) 2 "spawn",
+              header (Tick 5) 3 "read",
+              noteAt (Tick 7) 1 (Failure Nothing) "boom"
+            ]
+          events =
+            [ eventAt (Tick 2) a1 (Born Nothing),
+              eventAt (Tick 4) b1 (Born Nothing),
+              eventAt (Tick 6) a1 Reused
+            ]
+          t = Trace.build notes events
+          b = fromJust (Blame.analyze t)
+          rows = Spine.layoutRows (defaultStyle Glyph.unicode) t b
+      [r.annot | r <- rows, r.kind == Spine.FooterRow] `shouldSatisfy` any (T.isInfixOf "spawn @2")
+
   describe "headlineDoc" do
     it "words the transfer fixture's failure as a reason-led headline" do
       -- The headline reflows at the layout width; 'unwrap' flattens whitespace

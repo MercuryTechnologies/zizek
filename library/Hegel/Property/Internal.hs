@@ -169,7 +169,7 @@ forAllWith render gen = do
   a <- drawGen gen
   -- Bind the pool 'Var's this draw resolved to its 'Drawn' note, so the trace
   -- can render @h₁=value@.
-  -- 
+  --
   -- Empty for generators not associated with a pool.
   --
   -- See Note [Draw provenance] in "Hegel.Report.Trace".
