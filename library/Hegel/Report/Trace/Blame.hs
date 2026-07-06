@@ -7,6 +7,7 @@
 module Hegel.Report.Trace.Blame
   ( -- * Blame
     Blame (..),
+    Claim (..),
     Observation (..),
     Fact (..),
 
@@ -18,15 +19,17 @@ module Hegel.Report.Trace.Blame
     Citation (..),
     citations,
     citationClosure,
-    hasLifecycleEvent,
+    primary,
   )
 where
 
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Data.List (sortOn)
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
-import Data.Maybe (listToMaybe, mapMaybe)
+import Data.Maybe (mapMaybe)
 import Data.Ord (Down (..))
 import Hegel.Internal.Event (Operation (..), Var)
 import Hegel.Report.Trace (Lifeline (..), Touch (..), Trace)
@@ -34,14 +37,51 @@ import Hegel.Report.Trace qualified as Trace
 
 -- * Blame
 
--- | Why the trace failed, as a tree of cited observations.
+-- | Why the trace failed: the failing step, and one 'Claim' per distinct
+-- lineage root it touched — each the story of a value the failure implicates.
 --
 -- A 'Blame' is always a /definite/ failure: a counterexample in hand.
+--
+-- Multi-root by construction: a step like @settle a₂ a₁@ that touches two
+-- independent values yields two claims, so both are cited. Claims are ordered
+-- by descending fact weight; the 'primary' (head) is the trunk value used
+-- where a single name is required (the focused view). K=1 (one root) is the
+-- common case and renders exactly as the single-subject design did.
+--
+-- Note [Known limitation: ambient values]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- A long-lived context/config/session value touched at /every/ step cannot
+-- shrink away, so structural union blames it on every row and its citation set
+-- covers everything — a citation that selects all selects nothing. It is
+-- detectable as "non-discriminating" (every fact 'TouchedAt', touched at every
+-- step), but suppressing it must NOT key on fact weight: the future causal case
+-- (@read h₂ ← close h₁@) blames a merely-/touched/ victim, exactly what a
+-- weight filter would drop. Left unhandled until a real case earns the fix.
+--
+-- Note [Deferred: causal (data-flow) blame]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- This module cites every value the failing step /touches/. It does not cite a
+-- value whose earlier operation /caused/ the failure without being touched at
+-- the failing step (@read h₂@ returns garbage because @close h₁@ broke a
+-- promise). That is a different mechanism: it needs a cross-value dependency
+-- edge, which — following the 'Hegel.Pool.transfer' lineage precedent — should
+-- be a /declared/ edge (a @dependsOn@-style journaled link), not inferred from
+-- the trace. 'Observation' already admits a fact whose var differs from its
+-- claim's root, so the rendering vocabulary here extends to it unchanged.
 data Blame = Blame
-  { -- | The trunk value: the failing step's highest-priority variable access.
-    subject :: !Var,
-    -- | The failing observation and, nested beneath it, its justifications.
-    observed :: !Observation
+  { -- | The failing step.
+    step :: !Int,
+    -- | One claim per distinct lineage root touched at the failing step,
+    -- ordered by descending fact weight (head is the 'primary').
+    subjects :: !(NonEmpty Claim)
+  }
+  deriving stock (Show)
+
+-- | One implicated value's story: its fact at the failing step, and the
+-- observations justifying it (its earlier lineage history).
+data Claim = Claim
+  { fact :: !Fact,
+    since :: [Observation]
   }
   deriving stock (Show)
 
@@ -68,7 +108,10 @@ data Fact
 
 -- * Analysis
 
--- | Analyze a trace's failure into a blame tree.
+-- | Analyze a trace's failure into a blame.
+--
+-- One 'Claim' per distinct lineage root touched at the failing step (each root's
+-- strongest fact plus its lineage history), ordered by descending fact weight.
 --
 -- 'Nothing' when there is nothing to cite: no journaled failure, or a
 -- failing step that touched no pool values.
@@ -76,26 +119,29 @@ analyze :: Trace -> Maybe Blame
 analyze trace = do
   failure <- trace.failure
   failing <- Trace.step trace failure.step
-  -- Rank by the *fact* each touch contributes, not its raw event kind, so a
-  -- consumption (the step's action) outranks an incidental reuse at the same
-  -- step.
-  (violation, primary) <-
-    listToMaybe
+  -- One representative touch per lineage root, ranked by the *fact* it
+  -- contributes (not its raw event kind), so a consumption (the step's action)
+  -- outranks an incidental reuse at the same step. Distinct roots stay distinct
+  -- — a two-operand step yields a claim each.
+  claims <-
+    NE.nonEmpty
       ( sortOn
-          (Down . factWeight . fst)
-          [(factAt trace failure.step t, t) | t <- failing.touches]
+          (Down . factWeight . (.fact))
+          [ Claim {fact = violation, since = citationsFor trace failure.step rootVar}
+          | (rootVar, violation) <- Map.toList (perRoot failing.touches)
+          ]
       )
-  let subject = primary.var
-  pure
-    Blame
-      { subject,
-        observed =
-          Observation
-            { step = failure.step,
-              fact = violation,
-              since = citationsFor trace failure.step subject
-            }
-      }
+  pure Blame {step = failure.step, subjects = claims}
+  where
+    -- Collapse the failing step's touches to one strongest fact per lineage
+    -- root; the key is the root var so each independent value is kept.
+    perRoot touches =
+      Map.fromListWith
+        strongest
+        [ (Trace.root trace t.var, factAt trace 0 t)
+        | t <- touches
+        ]
+    strongest a b = if factWeight a >= factWeight b then a else b
 
 -- | Display priority, for choosing subjects and deduping citations:
 factWeight :: Fact -> Int
@@ -167,32 +213,25 @@ data Citation = Citation
   }
   deriving stock (Show, Eq)
 
--- | The blame tree's edges, flattened pre-order.
+-- | Every claim's edges, flattened: the failing step cites each observation in
+-- each claim's history.
 citations :: Blame -> [Citation]
-citations b = go b.observed
-  where
-    go :: Observation -> [Citation]
-    go p = [Citation {from = p.step, to = c.step, fact = c.fact} | c <- p.since] <> concatMap go p.since
+citations b =
+  [ Citation {from = b.step, to = o.step, fact = o.fact}
+  | c <- NE.toList b.subjects,
+    o <- c.since
+  ]
 
--- | Every step the blame tree reaches: the transitive closure of the
--- observation tree's steps.
+-- | Every step the blame reaches: the failing step plus the transitive closure
+-- of every claim's observation history.
 citationClosure :: Blame -> IntSet
-citationClosure b = go b.observed
+citationClosure b =
+  IntSet.insert b.step (IntSet.unions [go o | c <- NE.toList b.subjects, o <- c.since])
   where
     go :: Observation -> IntSet
     go p = IntSet.insert p.step (IntSet.unions (fmap go p.since))
 
--- | Does the blame tree's /cited history/ contain a lifecycle event (a consume
--- or transfer)?
---
--- Only the citations count, not the violation fact at the failing step itself.
-hasLifecycleEvent :: Blame -> Bool
-hasLifecycleEvent b = any go b.observed.since
-  where
-    go :: Observation -> Bool
-    go o = lifecycle o.fact || any go o.since
-    lifecycle :: Fact -> Bool
-    lifecycle = \case
-      ConsumedAt {} -> True
-      TransferredAt {} -> True
-      _ -> False
+-- | The trunk value: the highest-weight claim's value. Used where a single name
+-- is required (the focused view, K=1).
+primary :: Blame -> Var
+primary b = factVar (NE.head b.subjects).fact

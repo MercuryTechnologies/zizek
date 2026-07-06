@@ -22,8 +22,10 @@ module Hegel.Report.Trace.Log
   )
 where
 
+import Data.Function (on)
 import Data.IntSet qualified as IntSet
-import Data.List (nub, sort, sortOn)
+import Data.List (groupBy, nub, sort, sortOn)
+import Data.List.NonEmpty qualified as NE
 import Data.Maybe (listToMaybe)
 import Data.Ord (Down (..))
 import Data.Text (Text)
@@ -37,7 +39,7 @@ import Hegel.Report.Phrase qualified as Phrase
 import Hegel.Report.Style (Style (..))
 import Hegel.Report.Trace (Lifeline (..), Step (..), Touch (..), Trace)
 import Hegel.Report.Trace qualified as Trace
-import Hegel.Report.Trace.Blame (Blame (..), Observation (..))
+import Hegel.Report.Trace.Blame (Blame (..), Claim (..), Fact (..), Observation (..))
 import Hegel.Report.Trace.Blame qualified as Blame
 import Prettyprinter (Doc)
 import Prettyprinter qualified as PP
@@ -61,6 +63,8 @@ data RowKind
     ElisionRow
   | -- | @~@ — older history precedes the view.
     TerminatorRow
+  | -- | @↳ cites …@ — the failing step's citations, on their own row below it.
+    CiteRow
   deriving stock (Show, Eq)
 
 -- | One row of the spine: the gutter glyph, the step number, the call text, and
@@ -95,7 +99,8 @@ focusedRows opts trace blame = terminator <> go Nothing shownAsc
   where
     table = opts.glyphs
     closure = Blame.citationClosure blame
-    cited = blame.observed.since
+    -- Focused is only reached at K=1 (one lineage root), so a single claim.
+    cited = (NE.head blame.subjects).since
     -- Shown steps oldest → newest; the failing step has the largest index.
     shownAsc = sortOn (.index) [s | s <- trace.steps, IntSet.member s.index closure]
     failingIx = listToMaybe (sortOn Down (fmap (.index) shownAsc))
@@ -130,11 +135,10 @@ focusedRows opts trace blame = terminator <> go Nothing shownAsc
           gutter = NodeFail,
           stepNo = Just s.index,
           call = callText s,
-          margin = if null cited then "" else numericCites
+          -- Focused shows exactly the subject's cited steps as visible rows, so a
+          -- @← cites@ list would only restate the lifeline. Suppressed.
+          margin = ""
         }
-    -- Cited-step references, ascending to match the top → bottom reading order.
-    numericCites =
-      table.cell NumericCite <> " " <> opts.phrases.cites (fmap citeToken (sort (nub [o.step | o <- cited])))
 
     -- The de-numbered origin line for a value born in machine setup.
     originRow =
@@ -152,7 +156,7 @@ focusedRows opts trace blame = terminator <> go Nothing shownAsc
           gutter = gutterFor s,
           stepNo = Just s.index,
           call = callText s,
-          margin = maybe "" factText (listToMaybe [o.fact | o <- cited, o.step == s.index])
+          margin = maybe "" (factMargin s) (listToMaybe [o.fact | o <- cited, o.step == s.index])
         }
     drawnRows :: Step -> [Row]
     drawnRows s =
@@ -163,9 +167,10 @@ focusedRows opts trace blame = terminator <> go Nothing shownAsc
 
     gutterFor s
       | (rootLife >>= (.bornAt)) == Just s.index = NodeBorn
-      -- Death glyphs mean death: a consumption continued by a transfer
-      -- renders as an access.
+      -- A lineage-ending consume is a death; a consume continued by a transfer
+      -- is a handoff (its own glyph), never a death.
       | any (\l -> l.consumedAt == Just s.index && not (Trace.continues trace l.var)) chainLives = NodeDeath
+      | any (\l -> l.consumedAt == Just s.index && Trace.continues trace l.var) chainLives = NodeTransfer
       | otherwise = NodeTouch
 
     -- Elision rows for steps strictly between the previous shown step and this
@@ -182,21 +187,32 @@ focusedRows opts trace blame = terminator <> go Nothing shownAsc
         let between = [s | s <- trace.steps, s.index > lo, s.index < hi],
         not (null between)
       ]
+    -- Name the value(s) the elided run concerns — a positive qualifier (what is
+    -- hidden), not the redundant "none touch <subject>". The subject can't appear
+    -- (a step touching it would be shown, not elided); Nothing for a non-pool run.
     elisionLabel between =
-      opts.phrases.elidedSteps
-        (length between)
-        (if any touchesSubject between then Nothing else Just subjectName)
-    touchesSubject s = any (\t -> Trace.root trace t.var == subjectRoot) s.touches
+      opts.phrases.elidedSteps (length between) concerns
+      where
+        concerns =
+          case filter (/= subjectRoot) (nub [Trace.root trace t.var | s <- between, t <- s.touches]) of
+            [] -> Nothing
+            roots -> Just (T.intercalate ", " (fmap nameOf roots))
 
-    subjectRoot = Trace.root trace blame.subject
+    subject = Blame.primary blame
+    subjectRoot = Trace.root trace subject
     rootLife = Trace.lifeline trace subjectRoot
-    chainLives = Trace.chainLifelines trace blame.subject
+    chainLives = Trace.chainLifelines trace subject
     nameOf = displayName table trace
-    subjectName = nameOf blame.subject
+    subjectName = nameOf subject
 
     callText s = fst (stepCall opts trace s)
 
-    factText fact = opts.phrases.observed fact (nameOf (Blame.factVar fact))
+    -- Delta-only: emit the fact word only when it names a value the call text
+    -- doesn't already (cross-value / implicit touch). The gutter glyph and the
+    -- rule verb carry the common case.
+    factMargin s fact =
+      let name = nameOf (Blame.factVar fact)
+       in if name `T.isInfixOf` callText s then "" else opts.phrases.observed fact [name]
 
 -- | The unfocused log: every real step shown in order (no single subject to
 -- focus on). Used when the failure has no pool value (@Unfocused Nothing@) or
@@ -209,11 +225,29 @@ unfocusedRows opts trace mBlame = concatMap stepRows (sortOn (.index) trace.step
     table = opts.glyphs
     nameOf = displayName table trace
     failingIx = fmap (.step) trace.failure
-    cited = maybe [] (\b -> b.observed.since) mBlame
+    -- Every implicated value's story (one claim per root touched at the failing
+    -- step); empty when the failure has no pool value.
+    claims = maybe [] (NE.toList . (.subjects)) mBlame
 
     stepRows s
       | s.index == 0 = detailRows s
+      | Just s.index == failingIx = callRow s : citeRows s <> detailRows s
       | otherwise = callRow s : detailRows s
+
+    -- The failing step's cited-step references, on their own ↳ row below it
+    -- (unfocused shows every step, so the citation selects the evidence among
+    -- them). Empty when the failure has no pool value.
+    citeRows s =
+      [ Row
+          { kind = CiteRow,
+            gutter = Blank,
+            stepNo = Nothing,
+            call = table.cell CiteLead <> " " <> body,
+            margin = ""
+          }
+      | not (null claims),
+        Just body <- [citesBody opts trace s.index citedSteps]
+      ]
 
     callRow s =
       Row
@@ -241,24 +275,47 @@ unfocusedRows opts trace mBlame = concatMap stepRows (sortOn (.index) trace.step
       | Just s.index == failingIx = NodeFail
       | any (\t -> consumedHere t s.index) s.touches = NodeDeath
       | any (\t -> bornHere t s.index) s.touches = NodeBorn
+      | any (\t -> transferHere t s.index) s.touches = NodeTransfer
       | not (null s.touches) = NodeTouch
       | otherwise = Blank
     bornHere t ix = (Trace.lifeline trace (Trace.root trace t.var) >>= (.bornAt)) == Just ix
-    -- Death glyphs mean death: a consumption continued by a transfer is an access.
+    -- A lineage-ending consume is a death; a consume continued by a transfer is a
+    -- handoff (its own glyph).
     consumedHere t ix =
       case Trace.lifeline trace t.var of
         Just l -> l.consumedAt == Just ix && not (Trace.continues trace l.var)
         Nothing -> False
+    transferHere t ix =
+      case Trace.lifeline trace t.var of
+        Just l -> l.consumedAt == Just ix && Trace.continues trace l.var
+        Nothing -> False
 
-    -- Margins mirror focused mode: cited steps carry their fact, the failing
-    -- step carries the @← cites …@ list. No blame → no margins.
+    -- Margins mirror focused mode, unioned across claims: each step carries the
+    -- fact(s) of the value(s) implicated there; the failing step carries the
+    -- @← cites …@ list over every claim. No blame → no margins.
     marginFor s
-      | Just s.index == failingIx, not (null cited) = numericCites
-      | Just fact <- listToMaybe [o.fact | o <- cited, o.step == s.index] = factText fact
-      | otherwise = ""
-    numericCites =
-      table.cell NumericCite <> " " <> opts.phrases.cites (fmap citeToken (sort (nub [o.step | o <- cited])))
-    factText fact = opts.phrases.observed fact (nameOf (Blame.factVar fact))
+      -- The failing step's citation moves to its own ↳ row (see 'citeRows'); the
+      -- margin here carries only cross-value facts, if any.
+      | Just s.index == failingIx = ""
+      | otherwise = case [o.fact | c <- claims, o <- c.since, o.step == s.index] of
+          [] -> ""
+          facts -> renderFacts s facts
+    citedSteps = [o.step | c <- claims, o <- c.since]
+
+    -- One step may implicate several values: group their facts by verb
+    -- (same-verb → merged names, @a₁, a₂ accessed@; different verbs → @·@-joined,
+    -- strongest first). A collision needs a pre-failure step touching ≥2 roots.
+    -- Delta-only: keep a fact only when its value isn't already named by the call
+    -- text (cross-value / implicit touch); glyph + verb carry the rest.
+    renderFacts s facts =
+      T.intercalate
+        " · "
+        [ opts.phrases.observed f (fmap (nameOf . Blame.factVar) grp)
+        | grp@(f : _) <- groupBy ((==) `on` factRank) (sortOn (Down . factRank) kept)
+        ]
+      where
+        callTxt = fst (stepCall opts trace s)
+        kept = [f | f <- facts, not (nameOf (Blame.factVar f) `T.isInfixOf` callTxt)]
 
 -- | A step reference for the log: real steps read @\@N@; the machine-setup
 -- pseudo-step (0) reads @setup@ (it is not a navigable rule). Shared by the
@@ -266,6 +323,32 @@ unfocusedRows opts trace mBlame = concatMap stepRows (sortOn (.index) trace.step
 citeToken :: Int -> Text
 citeToken 0 = "setup"
 citeToken n = "@" <> T.pack (show n)
+
+-- | The citation clause for the ↳ cite row (@cites @1, @4@), or 'Nothing' when
+-- the row should be suppressed. Unfocused shows every step, so citing /every/
+-- prior step selects nothing — the default (all shown steps are evidence), so
+-- the row is dropped. It earns its place only for a strict subset, where a shown
+-- step is load-bearing but not cited. A setup birth keeps the row (the set then
+-- includes @0@, which never equals the real-steps set). No arrow sigil — the
+-- 'CiteLead' glyph precedes it in the row.
+citesBody :: Style -> Trace -> Int -> [Int] -> Maybe Text
+citesBody opts trace failingStep steps
+  | null uniq = Nothing
+  | not (null priorSteps), uniq == priorSteps = Nothing
+  | otherwise = Just (opts.phrases.cites (fmap citeToken uniq))
+  where
+    uniq = sort (nub steps)
+    priorSteps = sort [s.index | s <- trace.steps, s.index > 0, s.index < failingStep]
+
+-- | Display order for facts sharing a margin row (strongest first), mirroring
+-- 'Blame''s fact weighting. Injective, so equal rank ⇒ same verb (used to group
+-- same-verb facts for merged names).
+factRank :: Fact -> Int
+factRank = \case
+  ConsumedAt {} -> 3
+  TransferredAt {} -> 2
+  TouchedAt {} -> 1
+  BornAt {} -> 0
 
 -- The rendered call plus the free draws that did NOT inline (→ detail rows).
 -- Free (non-pool) draws fold into the call in journal order — @write h₁ "0"@ —
@@ -338,7 +421,7 @@ elidedLifelinesDoc opts trace blame
     table = opts.glyphs
     footerCap = 3 :: Int
     mark = table.cell ElidedMark
-    subjectRoot = Trace.root trace blame.subject
+    subjectRoot = Trace.root trace (Blame.primary blame)
     nameOf = displayName table trace
     closure = Blame.citationClosure blame
     -- Dedupe by lineage root: a transferred value is several lifelines but one
@@ -394,6 +477,8 @@ logDoc opts trace view = PP.vsep (fmap rowDoc rows)
           -- Detail and elision rows are supporting context, rendered dim.
           DetailRow -> PP.annotate ElidedAnn (PP.pretty callPadded)
           ElisionRow -> PP.annotate ElidedAnn (PP.pretty callPadded)
+          -- The citation row is evidence below the failing step, not dim context.
+          CiteRow -> PP.annotate NoteAnn (PP.pretty callPadded)
           _ -> respAnnotated callPadded
 
     -- Colour the response tail separately from the call head.

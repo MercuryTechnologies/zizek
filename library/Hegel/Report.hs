@@ -225,23 +225,14 @@ renderRichImpl style plain toText report = do
     Just body -> toText (PP.vsep ["failed after" <+> statsDoc report.stats, body])
 
 -- | Pick the event-log view for a counterexample: 'Log.Focused' on a single
--- failing pool value when blame resolves and the failing step touches exactly
--- one lineage root; otherwise 'Log.Unfocused' (no pool value, or several at
--- once), carrying the blame when present for gutter glyphs and margins.
-chooseView :: Maybe Blame -> Trace.Trace -> Log.View
-chooseView mBlame trace = case mBlame of
-  Just blame | failingRootCount trace == 1 -> Log.Focused blame
-  _ -> Log.Unfocused mBlame
-
--- | How many distinct lineage roots the failing step touches (0 when nothing
--- failed in-band). One root focuses the log on that value; several keep it
--- unfocused with per-step glyphs.
-failingRootCount :: Trace.Trace -> Int
-failingRootCount trace = case trace.failure of
-  Nothing -> 0
-  Just f ->
-    length . nub $
-      [Trace.root trace t.var | s <- trace.steps, s.index == f.step, t <- s.touches]
+-- failing pool value when blame resolves to exactly one lineage root; otherwise
+-- 'Log.Unfocused' (no pool value, or several at once), carrying the blame when
+-- present for gutter glyphs and margins. @Blame.analyze@ owns the "roots touched
+-- at the failing step" derivation, so the root count is just its claim count.
+chooseView :: Maybe Blame -> Log.View
+chooseView = \case
+  Just blame | length blame.subjects == 1 -> Log.Focused blame
+  mBlame -> Log.Unfocused mBlame
 
 -- | Attempt to build the rich failure doc, falling back to 'Nothing' when
 -- the result is not a counterexample or no declaration could be read for
@@ -252,7 +243,7 @@ richDoc style report = case report.result of
     | isStepJournal notes -> do
         decls <- loadDeclarations (noteFiles notes)
         let trace = Trace.build notes events
-            view = chooseView (Blame.analyze trace) trace
+            view = chooseView (Blame.analyze trace)
         pure (Just (composedDoc style decls trace view notes message loc diff report.databaseKey))
     | otherwise -> plainRichDoc message notes loc diff
   _ -> pure Nothing

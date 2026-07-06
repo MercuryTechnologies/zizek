@@ -36,6 +36,7 @@ data Cell
   = -- Gutter (strand) cells
     NodeBorn
   | NodeTouch
+  | NodeTransfer
   | NodeDeath
   | NodeFail
   | EdgeAlive
@@ -46,6 +47,7 @@ data Cell
     ElidedMark
   | Ellipsis
   | NumericCite
+  | CiteLead
   | ResponseArrow
   | Blank
   deriving stock (Show, Eq, Ord, Enum, Bounded)
@@ -63,6 +65,7 @@ unicode =
     { cell = \case
         NodeBorn -> "●"
         NodeTouch -> "○"
+        NodeTransfer -> "◉"
         NodeDeath -> "◌"
         NodeFail -> "✗"
         EdgeAlive -> "│"
@@ -72,6 +75,7 @@ unicode =
         ElidedMark -> "▸"
         Ellipsis -> "⋯"
         NumericCite -> "←"
+        CiteLead -> "↳"
         ResponseArrow -> "→"
         Blank -> " ",
       valueName = \label poolOrd valOrd ->
@@ -85,6 +89,7 @@ ascii =
     { cell = \case
         NodeBorn -> "*"
         NodeTouch -> "o"
+        NodeTransfer -> "#"
         NodeDeath -> "%"
         NodeFail -> "x"
         EdgeAlive -> "|"
@@ -94,6 +99,7 @@ ascii =
         ElidedMark -> ">"
         Ellipsis -> "..."
         NumericCite -> "<-"
+        CiteLead -> "\\_"
         ResponseArrow -> "->"
         Blank -> " ",
       valueName = \label poolOrd valOrd ->

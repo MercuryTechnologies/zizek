@@ -5,6 +5,7 @@ module TraceModel (spec) where
 import Control.Monad.IO.Class (liftIO)
 import Data.Function ((&))
 import Data.IntSet qualified as IntSet
+import Data.List.NonEmpty qualified as NE
 import Data.Maybe (isJust)
 import Hegel.Gen qualified as Gen
 import Hegel.Pool (Pool)
@@ -23,13 +24,13 @@ import Hegel.Report
   )
 import Hegel.Report.Trace (Lifeline (..), Step (..))
 import Hegel.Report.Trace qualified as Trace
-import Hegel.Report.Trace.Blame (Fact (..), Observation (..))
+import Hegel.Report.Trace.Blame (Claim (..), Fact (..), Observation (..))
 import Hegel.Report.Trace.Blame qualified as Blame
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
-import TraceFixtures (eventAt, h1, header, noteAt)
+import TraceFixtures (eventAt, h1, header, ledgerTrace, noteAt)
 
 -- ---------------------------------------------------------------------------
 -- Fixture helpers
@@ -209,11 +210,11 @@ spec = do
       case Blame.analyze reusedTrace of
         Nothing -> expectationFailure "expected blame for the reused-value trace"
         Just b -> do
-          b.subject `shouldBe` h1
-          b.observed.step `shouldBe` 8
-          b.observed.fact `shouldBe` TouchedAt h1
+          Blame.primary b `shouldBe` h1
+          b.step `shouldBe` 8
+          (NE.head b.subjects).fact `shouldBe` TouchedAt h1
           -- Most recent citation first: the peek, the write, then birth.
-          [(p.step, p.fact) | p <- b.observed.since]
+          [(p.step, p.fact) | p <- (NE.head b.subjects).since]
             `shouldBe` [(5, TouchedAt h1), (4, TouchedAt h1), (1, BornAt h1)]
 
     it "citation closure is the reused value's step set" do
@@ -226,6 +227,21 @@ spec = do
         Nothing -> expectationFailure "expected blame"
         Just b ->
           [(c.from, c.to) | c <- Blame.citations b] `shouldBe` [(8, 5), (8, 4), (8, 1)]
+
+    it "blames every root a multi-touch step implicates (structural union)" do
+      -- The failing @audit@ touches two independent accounts, so blame carries a
+      -- claim for each — both cited, each with its own history.
+      case Blame.analyze ledgerTrace of
+        Nothing -> expectationFailure "expected blame for the ledger trace"
+        Just b -> do
+          let a1 = Var {pool = 0, id = 1}
+              a2 = Var {pool = 0, id = 2}
+          NE.length b.subjects `shouldBe` 2
+          fmap (Blame.factVar . (.fact)) (NE.toList b.subjects) `shouldBe` [a1, a2]
+          [[(p.step, p.fact) | p <- c.since] | c <- NE.toList b.subjects]
+            `shouldBe` [ [(3, TouchedAt a1), (1, BornAt a1)],
+                         [(2, BornAt a2)]
+                       ]
 
     it "yields Nothing when the failing step touched no pool values" do
       let t =
@@ -262,10 +278,10 @@ spec = do
       case Blame.analyze t of
         Nothing -> expectationFailure "expected blame"
         Just b -> do
-          b.subject `shouldBe` y
+          Blame.primary b `shouldBe` y
           -- The chain cites the pre-transfer history — and the lineage-linked
           -- consumption is classified as a transfer, not a death.
-          [(p.step, p.fact) | p <- b.observed.since]
+          [(p.step, p.fact) | p <- (NE.head b.subjects).since]
             `shouldBe` [(3, TransferredAt x), (2, TouchedAt x), (1, BornAt x)]
 
     it "lifts pool labels onto lifelines" do
@@ -304,7 +320,7 @@ spec = do
                 Just f -> IntSet.member f.step (Blame.citationClosure b) `shouldBe` True
                 Nothing -> pure ()
               -- The subject is one of the trace's lifelines.
-              [l.var | l <- t.lifelines, l.var == b.subject] `shouldBe` [b.subject]
+              [l.var | l <- t.lifelines, l.var == Blame.primary b] `shouldBe` [Blame.primary b]
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
     it "respond reaches Step.response through a real run" do

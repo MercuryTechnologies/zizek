@@ -1,5 +1,5 @@
 -- | A gallery of deliberately-failing properties: the permanent eyeball
--- harness for the failure renderers. Six scenarios span the spectrum of report
+-- harness for the failure renderers. Five scenarios span the spectrum of report
 -- shapes, each earning its place. Every stateful failure renders as the one
 -- chronological event log (oldest step to the failing step, then that step's
 -- source splice); the log has two views — 'Focused' on a single pool value
@@ -16,18 +16,21 @@
 --      counterexample that interleaves three distinct rules — an unfocused log
 --      with annotation detail rows and 'forAllWithLabel'-labelled draws
 --      (@restock item="apple" qty=5@)
---   4. file handles — the flagship focused log: a use-after-close bug whose
---      /minimal/ counterexample needs an unrelated open between the write and
---      the close, so the focused log shows the full vocabulary — lifecycle
---      gutters, an elision row, a lineage-linked lifeline across two pools
---      ('Pool.transfer'), named values, and an elided-lifeline footer. Printed
---      in unicode and ascii, beside the unicode report.
---   5. poked value — a flat single-value story (born, then poked): no death or
---      handoff, one lineage root, so it renders as the focused log
---   6. ledger — a /multi-value/ failure: the settling step consumes two
+--   4. connection pool — the flagship focused lifeline: a pooled connection
+--      threads idle → active → in-tx → active → idle over its life, so one
+--      value's story crosses four pool boundaries ('Pool.transfer' each). A
+--      use-after-checkin leak whose /minimal/ counterexample needs an unrelated
+--      connect between begin_tx and commit shows the full vocabulary — lifecycle
+--      gutters (each 'Pool.transfer' a @◉@ handoff), an elision row (naming the
+--      unrelated @conn₂@ it hides), a long lineage across four pools, named
+--      values, and an elided-lifeline footer. Printed in unicode and ascii,
+--      beside the unicode report.
+--   5. ledger — a /multi-value/ failure: the settling step consumes two
 --      distinct funded accounts, so the failing step touches two lineage roots
 --      and the log stays unfocused — every step shown with per-step lifecycle
---      glyphs and the blame's margins.
+--      glyphs. Multi-subject blame cites both accounts on a @↳@ row — an explicit
+--      subset, since the load-bearing @accrue@ step touches no pool value and is
+--      shown but uncited.
 --
 -- Run with @just gallery@ from the repo root (source splicing resolves
 -- @srcLocFile@ relative to the working directory). Every scenario renders
@@ -61,9 +64,8 @@ main = do
   runScenario "1: plain property — drawn values spliced, === diff" plainProperty
   runScenario "2: stack palindrome — === diff, spliced" (Stateful.run palindromeMachine)
   runScenario "3: warehouse — realistic interleaving, spliced" (Stateful.run warehouseMachine)
-  runTraceScenario True "4: file handles — use-after-close, focused log" (Stateful.run fileHandleMachine)
-  runTraceScenario False "5: poked value — flat single-value story, focused log" (Stateful.run overflowMachine)
-  runTraceScenario False "6: ledger — two accounts settled, unfocused log" (Stateful.run ledgerMachine)
+  runTraceScenario True "4: connection pool — use-after-checkin, focused lifeline" (Stateful.run connectionMachine)
+  runTraceScenario False "5: ledger — two accounts settled, unfocused log" (Stateful.run ledgerMachine)
 
 runScenario :: Text -> Property () -> IO ()
 runScenario title prop = showReport title =<< check defaultSettings prop
@@ -253,133 +255,99 @@ warehouseMachine =
       invariants = [reservationsMatchOrders, stockCoversReservations, stockNonNegative]
     }
 
--- * Scenario 4: file handles (focused log, flagship)
+-- * Scenario 4: connection pool (focused lifeline, flagship)
 
--- | Handles live in the @handle@ pool while open and 'Pool.transfer' into the
--- @closed@ pool on close, so the report keeps one lifeline across both.
+-- | A pooled connection threads through several pools over its life — @idle@
+-- when available, @active@ when checked out, @in-tx@ mid-transaction — so one
+-- value's lifeline crosses four pool boundaries ('Pool.transfer' each): the
+-- richest focused story the report renders.
 --
--- The SUT bug: close drops the handle's buffered content — /unless/ the
--- handle table was resized (another handle was opened) since that handle's
--- last write, in which case the content leaks and a later read of the
--- closed handle returns stale bytes. The resize is what makes the minimal
--- counterexample visually rich: it must keep an unrelated @open@ between
--- the write and the close (an elision row and a second lifeline that
--- shrinking cannot remove), plus the full born\/accessed\/consumed link.
-data FileModel = FileModel
-  { openHandles :: Pool Int,
-    closedHandles :: Pool Int,
-    nextHandle :: IORef Int,
-    -- | SUT: buffered content per handle.
-    contents :: IORef (Map Int Text),
-    -- | SUT: table size ("epoch") at each handle's last write.
-    lastWriteEpoch :: IORef (Map Int Int),
-    -- | SUT: grows on every open.
-    epoch :: IORef Int
+-- The SUT bug: @commit@ clears the connection's open-transaction flag —
+-- /unless/ the pool grew (another connection opened) since @begin_tx@, in which
+-- case the clear is skipped and the transaction leaks. A later @query@ of the
+-- now-idle, checked-in connection then sees the stale transaction and errors.
+-- The resize forces an unrelated @connect@ between @begin_tx@ and @commit@ (an
+-- elision row and a second lifeline shrinking cannot remove); the leak forces
+-- the whole checkout → begin_tx → commit → checkin chain onto the subject's
+-- lifeline, so the report shows a value crossing every pool boundary.
+data ConnModel = ConnModel
+  { idle :: Pool Int,
+    active :: Pool Int,
+    inTx :: Pool Int,
+    nextConn :: IORef Int,
+    -- | SUT: grows on every connect (the pool table "epoch").
+    epoch :: IORef Int,
+    -- | SUT: the epoch at each connection's begin_tx.
+    txEpoch :: IORef (Map Int Int),
+    -- | SUT: does the connection have an uncommitted transaction?
+    txOpen :: IORef (Map Int Bool)
   }
 
-fileHandleMachine :: Stateful.Machine FileModel IO
-fileHandleMachine =
+connectionMachine :: Stateful.Machine ConnModel IO
+connectionMachine =
   Stateful.Machine
     { initial = do
         env <- askEnv
-        openHandles <- liftIO (Pool.named "handle" env.testCase)
-        closedHandles <- liftIO (Pool.named "closed" env.testCase)
-        nextHandle <- newIORef 0
-        contents <- newIORef Map.empty
-        lastWriteEpoch <- newIORef Map.empty
+        idle <- liftIO (Pool.named "conn" env.testCase)
+        active <- liftIO (Pool.new env.testCase)
+        inTx <- liftIO (Pool.new env.testCase)
+        nextConn <- newIORef 0
         epoch <- newIORef 0
-        pure FileModel {openHandles, closedHandles, nextHandle, contents, lastWriteEpoch, epoch},
+        txEpoch <- newIORef Map.empty
+        txOpen <- newIORef Map.empty
+        pure ConnModel {idle, active, inTx, nextConn, epoch, txEpoch, txOpen},
       rules =
-        [ Stateful.Rule "open" \m -> do
-            h <- liftIO do
-              h <- readIORef m.nextHandle
-              modifyIORef' m.nextHandle (+ 1)
+        [ Stateful.Rule "connect" \m -> do
+            liftIO do
+              c <- readIORef m.nextConn
+              modifyIORef' m.nextConn (+ 1)
               modifyIORef' m.epoch (+ 1)
-              pure h
-            liftIO (Pool.add m.openHandles h)
+              Pool.add m.idle c
             pure m,
-          Stateful.Rule "write" \m -> do
-            h <- forAll (Pool.valuesReusable m.openHandles)
-            v <- forAll (Gen.text & Gen.minSize 1 & Gen.maxSize 4 & Gen.build)
+          Stateful.Rule "checkout" \m -> do
+            _ <- forAll (Pool.transfer m.idle m.active)
+            pure m,
+          Stateful.Rule "begin_tx" \m -> do
+            c <- forAll (Pool.transfer m.active m.inTx)
             liftIO do
               e <- readIORef m.epoch
-              modifyIORef' m.contents (Map.insert h v)
-              modifyIORef' m.lastWriteEpoch (Map.insert h e)
+              modifyIORef' m.txEpoch (Map.insert c e)
+              modifyIORef' m.txOpen (Map.insert c True)
             pure m,
-          Stateful.Rule "close" \m -> do
-            h <- forAll (Pool.transfer m.openHandles m.closedHandles)
+          Stateful.Rule "commit" \m -> do
+            c <- forAll (Pool.transfer m.inTx m.active)
             liftIO do
               e <- readIORef m.epoch
-              wrote <- Map.lookup h <$> readIORef m.lastWriteEpoch
-              -- BUG: skips the cleanup when the table was resized since the
-              -- handle's last write.
-              case wrote of
-                Just we | e > we -> pure () -- leak!
-                _ -> modifyIORef' m.contents (Map.delete h)
+              began <- Map.findWithDefault 0 c <$> readIORef m.txEpoch
+              -- BUG: only clears the transaction when the table hasn't grown
+              -- since begin_tx; a resize makes commit silently leak it.
+              if e > began
+                then pure () -- leak!
+                else modifyIORef' m.txOpen (Map.insert c False)
             pure m,
-          Stateful.Rule "read_closed" \m -> do
-            h <- forAll (Pool.valuesReusable m.closedHandles)
-            r <- liftIO (Map.lookup h <$> readIORef m.contents)
-            Stateful.respondShow r
-            r === Nothing
+          Stateful.Rule "checkin" \m -> do
+            _ <- forAll (Pool.transfer m.active m.idle)
+            pure m,
+          Stateful.Rule "query" \m -> do
+            c <- forAll (Pool.valuesReusable m.idle)
+            open <- liftIO (Map.findWithDefault False c <$> readIORef m.txOpen)
+            Stateful.respondShow open
+            assert (not open) "a checked-in connection has no open transaction"
             pure m
         ],
       invariants = []
     }
 
--- * Scenario 5: poked value (link overflow)
+-- * Scenario 5: ledger (multi-value, unfocused log)
 
--- | More citations than the link budget (numeric fallback) plus a second
--- lifeline that must survive shrinking (the elided-lifelines footer). The
--- subject is registered in @machine.initial@, so its birth lands in the
--- prelude step.
-data OverflowModel = OverflowModel
-  { poked :: Pool Text,
-    decoys :: Pool Int,
-    pokes :: Int,
-    decoyed :: Bool,
-    lastWasPoke :: Bool
-  }
-
-overflowMachine :: Stateful.Machine OverflowModel IO
-overflowMachine =
-  Stateful.Machine
-    { initial = do
-        env <- askEnv
-        poked <- liftIO (Pool.new env.testCase)
-        decoys <- liftIO (Pool.named "decoy" env.testCase)
-        liftIO (Pool.add poked "the-value")
-        pure OverflowModel {poked, decoys, pokes = 0, decoyed = False, lastWasPoke = False},
-      rules =
-        [ Stateful.Rule "poke" \m -> do
-            _ <- forAll (Pool.valuesReusable m.poked)
-            pure m {pokes = m.pokes + 1, lastWasPoke = True},
-          Stateful.Rule "decoy" \m -> do
-            n <- forAll (Gen.int & Gen.min 0 & Gen.max 9 & Gen.build)
-            liftIO (Pool.add m.decoys n)
-            pure m {decoyed = True, lastWasPoke = False}
-        ],
-      invariants =
-        [ -- The 'lastWasPoke' conjunct pins the failing step to a poke of
-          -- the subject (rather than the decoy), so the failure cites the
-          -- subject's full touch history — more than the link budget.
-          Stateful.Invariant "few_pokes" \m ->
-            assert
-              (not (m.pokes >= 5 && m.decoyed && m.lastWasPoke))
-              "at most four pokes once a decoy exists"
-        ]
-    }
-
--- * Scenario 6: ledger (multi-value, unfocused log)
-
--- | The failing step touches /two/ distinct pool values, each with its own
--- deposit history: @settle@ consumes two funded accounts and trips a claim
--- about both. Two lineage roots at the failing step keep the log 'Unfocused' —
--- every step shown with per-step lifecycle glyphs, so both accounts' activity
--- is visible. Blame still surfaces a single subject, so the right-margin facts
--- (@… created@ / @accessed@) and the @← cites@ list follow that one value;
--- the other account's rows show their glyphs but no margin. A standing fixture
--- for multi-value failures.
+-- | The failing step touches /two/ distinct pool values: @settle@ consumes two
+-- funded accounts and trips a claim about both. Two lineage roots at the failing
+-- step keep the log 'Unfocused' — every step shown with per-step lifecycle
+-- glyphs. Multi-subject blame cites /both/ accounts on a @↳ cites@ row below the
+-- failing step. Because @accrue@ (the funding step) touches no pool value, it is
+-- load-bearing but shown-and-uncited, so the citation is an explicit subset
+-- (@↳ cites \@1, \@2@) — the row that a fully-cited failure would drop. A
+-- standing fixture for multi-value failures.
 --
 -- The claim is deliberately false — nothing in the model stops two accounts from
 -- holding funds at once — in the spirit of scenario 2's palindrome.
@@ -407,10 +375,14 @@ ledgerMachine =
               pure n
             liftIO (Pool.add m.accounts acc)
             pure m,
-          Stateful.Rule "deposit" \m -> do
-            acc <- forAll (Pool.valuesReusable m.accounts)
-            amt <- forAll (Gen.int & Gen.min 1 & Gen.max 9 & Gen.build)
-            liftIO (modifyIORef' m.balances (Map.adjust (+ amt) acc))
+          -- Posts interest to every account at once. It draws nothing from the
+          -- pool, so this step touches no pool value: a blank gutter, and the
+          -- failing settle never cites it — even though it is load-bearing (with
+          -- no accrual no account is funded, and settle passes). That is what
+          -- makes the citation an explicit subset (@↳ cites \@1, \@2@); a failure
+          -- whose every shown step is cited drops the row entirely.
+          Stateful.Rule "accrue" \m -> do
+            liftIO (modifyIORef' m.balances (Map.map (+ 1)))
             pure m,
           -- Consumes two distinct accounts (a consuming draw removes the first,
           -- so the second is necessarily different), giving the failing step two
