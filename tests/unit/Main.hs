@@ -3,6 +3,7 @@ module Main (main) where
 import BasicProperties qualified
 import ControlSignals qualified
 import DatabaseReplay qualified
+import Finalizers qualified
 import GeneratorSchemas qualified
 import Integrations qualified
 import KeyedProperties qualified
@@ -30,6 +31,7 @@ main = do
   replay <- testSpec "database replay" DatabaseReplay.spec
   keyed <- testSpec "keyed properties" KeyedProperties.spec
   stateful <- testSpec "stateful testing" Stateful.spec
+  finalizers <- testSpec "finalizers" Finalizers.spec
   poolEvents <- testSpec "pool events" PoolEvents.spec
   traceModel <- testSpec "trace model" TraceModel.spec
   ledger <- testSpec "event-log rendering" LogRendering.spec
@@ -49,6 +51,7 @@ main = do
           keyed,
           KeyedProperties.tastyTree,
           stateful,
+          finalizers,
           poolEvents,
           traceModel,
           ledger

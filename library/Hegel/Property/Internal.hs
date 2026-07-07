@@ -24,6 +24,12 @@ module Hegel.Property.Internal
     assume,
     discard,
 
+    -- * Finalizers
+    Finalizers,
+    newFinalizers,
+    registerFinalizer,
+    drainFinalizers,
+
     -- * Runner hooks
     runPropertyT,
     propertyAction,
@@ -40,7 +46,7 @@ import Control.Exception qualified as E
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Class (MonadTrans (..))
 import Control.Monad.Trans.Reader (ReaderT (..), ask, local)
-import Data.Foldable (toList)
+import Data.Foldable (for_, toList)
 import Data.Sequence ((|>))
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
@@ -56,7 +62,7 @@ import Hegel.Internal.TestCase qualified as TestCase
 import Hegel.Internal.Tick qualified as Tick
 import Hegel.Report.Note (Note (..), NoteKind (..), renderValue)
 import UnliftIO (MonadUnliftIO)
-import UnliftIO.IORef (modifyIORef', newIORef, readIORef)
+import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 
 -- | Whether the current run records its journal.
 --
@@ -76,7 +82,9 @@ data Env = Env
     journal :: !Journal,
     -- | Ambient nesting level stamped onto each journaled 'Note'; raised by
     -- 'nested'.
-    noteDepth :: !Int
+    noteDepth :: !Int,
+    -- | Cleanup actions registered by 'registerFinalizer'.
+    finalizers :: !Finalizers
   }
 
 -- | A property: test logic interleaved with generator draws against a live
@@ -257,6 +265,70 @@ discard :: (MonadIO m) => m a
 discard = liftIO (E.throwIO AssumeRejected)
 {-# INLINE discard #-}
 
+-- * Finalizers
+
+-- | A per-case stack of cleanup actions, drained (LIFO) at the case boundary.
+--
+-- Opaque, so only 'newFinalizers'\/'registerFinalizer'\/'drainFinalizers' touch
+-- the underlying reference.
+newtype Finalizers = Finalizers (IORef [IO ()])
+
+-- | A fresh, empty registry.
+newFinalizers :: IO Finalizers
+newFinalizers = Finalizers <$> newIORef []
+
+-- | Register a cleanup action to run at the end of the current test case.
+--
+-- The primitive for releasing resources acquired mid-property, when release
+-- must happen outside your lexical scope; the canonical case is a resource
+-- acquired in a stateful 'Hegel.Stateful.Machine'\'s @initial@, torn down at
+-- the case boundary the engine controls:
+--
+-- > initial = do
+-- >   mc <- liftIO (spawnMockCore ...)
+-- >   registerFinalizer (cancel mc.thread)   -- closes over the resource
+-- >   pure (Model mc ...)
+--
+-- Semantics are as follows:
+--
+-- * __Runs on exit for every test case__
+--
+-- * __Runs on every replay__: each shrink attempt and the reconstruction
+--   replay is a fresh case with its own registrations and its own drain, so
+--   nothing accumulates across replays.
+--
+-- * __LIFO__: last registered, first run, so nested resources release in
+--   reverse acquisition order.
+--
+-- * __Must not draw, and must not touch the 'TestCase'\/engine__: registration
+--   is a plain list push that replays identically, and a finalizer that drew
+--   ('forAll') would misalign the choice sequence. Finalizers also run after
+--   the case has been reported to the engine, so the borrowed test-case handle
+--   is stale — do not call back into generation or the FFI from one.
+--
+-- * __Acquire, then register, with no draw in between__: a draw ('forAll') can
+--   discard or stop the case, so acquiring a resource and then drawing before
+--   'registerFinalizer' runs leaks it on that path. Register immediately after
+--   acquisition.
+--
+-- * __Must return promptly__: finalizers drain under
+--   'Control.Exception.uninterruptibleMask_', so one that blocks indefinitely
+--   hangs the run un-interruptibly.
+--
+-- * __A finalizer that throws aborts the run__ as 'Hegel.Report.Errored': a
+--   failed teardown means per-case isolation may be broken and later
+--   cases\/replays can no longer be trusted. If the case had already failed,
+--   the abort discards that counterexample — but a persisted database has
+--   already stored its blob (so it replays next run); under the default
+--   settings (database disabled) the drawn values are lost.
+registerFinalizer :: (MonadIO m) => IO () -> PropertyT m ()
+registerFinalizer act = do
+  env <- askEnv
+  let Finalizers ref = env.finalizers
+  -- Newest-first, so 'drainFinalizers' can run the stack LIFO.
+  liftIO (modifyIORef' ref (act :))
+{-# INLINEABLE registerFinalizer #-}
+
 -- * Runner hooks
 
 -- | Run a property against the given 'Env'.
@@ -264,13 +336,32 @@ runPropertyT :: Env -> PropertyT m a -> m a
 runPropertyT env (PropertyT r) = runReaderT r env
 {-# INLINE runPropertyT #-}
 
--- | Lower a property to a per-case run loop.
+-- | Lower a property to a per-case run loop, against a caller-owned finalizer
+-- registry.
 --
 -- Ordinary cases run with a no-op journal; failing cases are journaled later
 -- via 'observeProperty' on the engine's minimal counterexample.
-propertyAction :: Property () -> TestCase -> IO ()
-propertyAction prop tc =
-  runPropertyT Env {testCase = tc, journal = Silent, noteDepth = 0} prop
+propertyAction :: Property () -> Finalizers -> TestCase -> IO ()
+propertyAction prop fin tc =
+  runPropertyT Env {testCase = tc, journal = Silent, noteDepth = 0, finalizers = fin} prop
+
+-- | Run every registered finalizer, LIFO, capturing each one's exception so a
+-- thrower does not skip the rest, and returning them all.
+--
+-- __NOTE__: Runs under 'E.uninterruptibleMask_'; finalizers /must/ execute
+-- promptly.
+drainFinalizers :: Finalizers -> IO [SomeException]
+drainFinalizers (Finalizers ref) = E.uninterruptibleMask_ do
+  -- Newest-first already (registration conses onto the head), so a head-to-tail
+  -- walk runs finalizers LIFO.
+  fs <- atomicModifyIORef' ref \xs -> ([], xs)
+  go [] fs
+  where
+    go acc [] = pure (reverse acc)
+    go acc (f : rest) =
+      E.try f >>= \case
+        Right () -> go acc rest
+        Left (e :: SomeException) -> go (e : acc) rest
 
 -- | Run a property against a test case with a recording journal, returning
 -- how the run ended together with the journal contents and the test case's
@@ -279,8 +370,24 @@ propertyAction prop tc =
 observeProperty :: TestCase -> Property () -> IO (Either SomeException (), [Note], [Event.Event])
 observeProperty tc prop = do
   j <- newIORef Seq.empty
+  fin <- newFinalizers
   let record n = modifyIORef' j (|> n)
-  eRes <- tryProperty (runPropertyT Env {testCase = tc, journal = Recording record, noteDepth = 0} prop)
+  eRes <-
+    tryProperty (runPropertyT Env {testCase = tc, journal = Recording record, noteDepth = 0, finalizers = fin} prop)
+      `E.onException` drainFinalizers fin
+  -- This is the terminal replay: nothing runs after it, so a failed teardown
+  -- cannot contaminate another case.
+  failures <- drainFinalizers fin
+  for_ failures \e -> do
+    clock <- Tick.next tc.recording
+    record
+      Note
+        { kind = Footnote,
+          text = "finalizer failed during replay: " <> T.pack (E.displayException e),
+          loc = Nothing,
+          depth = 0,
+          clock
+        }
   notes <- toList <$> readIORef j
   events <- Tick.drain tc.events
   pure (eRes, notes, events)

@@ -49,6 +49,9 @@ module Hegel.Property
     assume,
     discard,
 
+    -- * Finalizers
+    registerFinalizer,
+
     -- * Assertions
     assert,
     failure,
@@ -74,6 +77,7 @@ import Hegel.Property.Internal
     forAllWith,
     forAllWithLabel,
     hoist,
+    registerFinalizer,
   )
 import Hegel.Report (throwOnFailure)
 import Hegel.Runner (check)

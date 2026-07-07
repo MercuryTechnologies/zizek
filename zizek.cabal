@@ -354,6 +354,7 @@ test-suite unit
     BasicProperties
     ControlSignals
     DatabaseReplay
+    Finalizers
     GeneratorSchemas
     Golden
     Integrations

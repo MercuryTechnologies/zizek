@@ -5,7 +5,7 @@ module Hegel.Runner
 where
 
 import Control.Concurrent.Async (wait, withAsyncBound)
-import Control.Exception (fromException, toException)
+import Control.Exception (SomeException, fromException, mask, toException, try)
 import Data.Bits ((.|.))
 import Data.ByteString (ByteString)
 import Data.Foldable (for_)
@@ -19,16 +19,17 @@ import Foreign.C.Types (CBool (..), CInt, CSize)
 import Hegel.Assertion (originOf)
 import Hegel.Database (Database (..))
 import Hegel.HealthCheck (HealthCheck)
-import Hegel.Internal.Control (ControlSignal (..), MalformedTest, catchControl, isControlSignal)
+import Hegel.Internal.Control (ControlSignal (..), FinalizerFailed (..), MalformedTest, NoBacktrace (..), catchControl, isControlSignal)
 import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
 import Hegel.Internal.TestCase (Handle (..), Status (..), TestCase, markComplete, mkTestCase)
 import Hegel.Internal.Tick qualified as Tick
 import Hegel.Phase (Phase)
-import Hegel.Property.Internal (Property, failureDetails, observeProperty, propertyAction)
+import Hegel.Property.Internal (Finalizers, Property, drainFinalizers, failureDetails, newFinalizers, observeProperty, propertyAction)
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
-import Hegel.Settings (Finalizer (..), Settings (..))
-import UnliftIO.Exception (catch, catchAny, finally, throwIO)
+import Hegel.Settings (Settings (..))
+import UnliftIO.Exception (catch, catchAny, throwIO)
+import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 import Witch qualified
 
 -- | Run a 'Property' through @libhegel@.
@@ -50,8 +51,14 @@ check settings prop =
   -- A MalformedTest (e.g. a state-machine test with no rules) is likewise a
   -- run-level abort, not a counterexample.
   withAsyncBound go wait
-    `catch` (\(e :: MalformedTest) -> pure (aborted (Errored (toException e))))
-    `catch` (\(e :: HegelError) -> pure (aborted (Errored (toException e))))
+    `catch` (\(e :: MalformedTest) -> pure . aborted . Errored $ toException e)
+    `catch` (\(e :: HegelError) -> pure . aborted . Errored $ toException e)
+    -- A finalizer that threw while draining at the case boundary; teardown
+    -- failed, so per-case isolation may be broken.
+    --
+    -- Abort rather than trust the remaining cases or a shrink built on a
+    -- contaminated environment.
+    `catch` (\(e :: FinalizerFailed) -> pure . aborted . Errored $ toException e)
   where
     go = withContext \ctx ->
       withSettings ctx \s -> do
@@ -59,7 +66,7 @@ check settings prop =
         -- Read and copy everything out of the run handle before withRun frees
         -- it on bracket exit (see 'readRunOutcome').
         (nValid, nInvalid, outcome) <- withRun ctx s \run -> do
-          (nv, ni) <- driveLoop ctx settings (propertyAction prop) run
+          (nv, ni) <- driveLoop ctx (propertyAction prop) run
           o <- readRunOutcome ctx run
           pure (nv, ni, o)
         result <- case outcome.status of
@@ -256,11 +263,10 @@ reconstructProperty ctx prop s blob =
 
 driveLoop ::
   Ptr HegelContext ->
-  Settings ->
-  (TestCase -> IO ()) ->
+  (Finalizers -> TestCase -> IO ()) ->
   Ptr HegelRun ->
   IO (Int, Int)
-driveLoop ctx settings action run = loop 0 0
+driveLoop ctx action run = loop 0 0
   where
     loop !nValid !nInvalid = do
       tcPtr <- alloca \out -> do
@@ -269,7 +275,7 @@ driveLoop ctx settings action run = loop 0 0
       if tcPtr == nullPtr
         then pure (nValid, nInvalid)
         else
-          runTestCase ctx settings action tcPtr >>= \case
+          runTestCase ctx action tcPtr >>= \case
             Valid -> loop (nValid + 1) nInvalid
             Invalid -> loop nValid (nInvalid + 1)
             -- A failure (counted via the run result) or an overrun (a
@@ -290,24 +296,48 @@ driveLoop ctx settings action run = loop 0 0
 -- The handlers only classify; 'markComplete' runs once, outside the 'catches'
 -- scope, so an engine error raised while reporting (a 'HegelError') propagates
 -- to 'check''s outer handler instead of being misread as a test failure.
+--
+-- Finalizers registered during the case ('Hegel.Property.registerFinalizer')
+-- are drained under 'mask' after the run returns so a finalizer that throws
+-- will result in an 'Errored' result rather than being misclassified as a
+-- counterexample.
 runTestCase ::
   Ptr HegelContext ->
-  Settings ->
-  (TestCase -> IO ()) ->
+  (Finalizers -> TestCase -> IO ()) ->
   Ptr HegelTestCase ->
   IO Status
-runTestCase ctx settings action tcPtr =
-  run `finally` finalizer
+runTestCase ctx action tcPtr = do
+  finalizers <- newFinalizers
+  -- The case's own failure origin, if it failed before teardown ran; carried
+  -- into 'FinalizerFailed' so aborting on teardown does not silently drop the
+  -- fact that a counterexample was in hand.
+  caseOrigin <- newIORef Nothing
+  -- We must drain on /every/ exit, /except/ for the runner's own exception (a
+  -- 'MalformedTest' or a 'HegelError' from 'markComplete'); that is the
+  -- primary diagnostic and must win over a 'FinalizerFailed' the drain would
+  -- raise.
+  mask \restore -> do
+    result <- try $ restore $ run finalizers caseOrigin
+    failures <- drainFinalizers finalizers
+    case result of
+      -- The run threw: it takes precedence; finalizers were still drained.
+      Left (e :: SomeException) -> throwIO $ NoBacktrace e
+      Right status -> case failures of
+        [] -> pure status
+        -- A captured finalizer failure aborts the run; 'drainFinalizers'
+        -- captures every finalizer exception, so nothing escapes uncaught.
+        es -> do
+          origin <- readIORef caseOrigin
+          throwIO $ FinalizerFailed origin es
   where
-    Finalizer finalizer = settings.perCaseFinalizer
-    run = do
+    run finalizers caseOrigin = do
       tc <- mkTestCase Tick.Silent Handle {ctx, ptr = tcPtr}
       status <-
         -- 'catchControl' catches only Hegel's async control signals via base
         -- 'E.catches'; 'catchAny' (unliftio) then catches all remaining
         -- synchronous exceptions and marks them as failures /except/ for
         -- 'MalformedTest', which is re-thrown so 'check' can abort the run.
-        (action tc $> Valid)
+        (action finalizers tc $> Valid)
           `catchControl` \case
             Assume -> pure Invalid
             -- @libhegel@ owns the choice budget but does not observe that we
@@ -316,5 +346,8 @@ runTestCase ctx settings action tcPtr =
           `catchAny` \e -> case fromException e of
             Just malformed -> throwIO (malformed :: MalformedTest)
             Nothing -> pure . Interesting $ originOf e
+      case status of
+        Interesting origin -> writeIORef caseOrigin (Just origin)
+        _ -> pure ()
       markComplete tc status
       pure status

@@ -1,7 +1,6 @@
 -- | Configuration for a single property run.
 module Hegel.Settings
   ( Settings (..),
-    Finalizer (..),
     defaultSettings,
     withDatabaseKey,
   )
@@ -42,24 +41,13 @@ data Settings = Settings
     -- stopping at the first.
     reportMultipleFailures :: !Bool,
     -- | Health checks to skip.
-    suppressHealthCheck :: ![HealthCheck],
-    -- | Action run after each test case, on both success and failure.
-    perCaseFinalizer :: !Finalizer
+    suppressHealthCheck :: ![HealthCheck]
   }
   deriving stock (Show)
 
--- | A per-test-case finalizer action.
---
--- Wraps an @'IO' ()@ so 'Settings' can derive 'Show' (the action itself
--- renders as a @\<\<finalizer\>\>@ placeholder).
-newtype Finalizer = Finalizer (IO ())
-
-instance Show Finalizer where
-  show _ = "<<finalizer>>"
-
 -- | Defaults for a property run: 100 test cases, a fresh seed each run,
--- all phases enabled, the automatic backend, quiet output, persistence
--- disabled, and no per-case finalizer.
+-- all phases enabled, the automatic backend, quiet output, and persistence
+-- disabled.
 --
 -- > defaultSettings { testCases = 1000 }
 defaultSettings :: Settings
@@ -74,8 +62,7 @@ defaultSettings =
       backend = Auto,
       verbosity = Quiet,
       reportMultipleFailures = False,
-      suppressHealthCheck = [],
-      perCaseFinalizer = Finalizer (pure ())
+      suppressHealthCheck = []
     }
 
 -- | Alias for 'defaultSettings'.
