@@ -164,7 +164,7 @@ focusedRows opts trace blame = terminator <> go Nothing shownAsc
     -- subject's terse lifeline. (Unfocused 'detailRows' does carry annotations.)
     drawnRows :: Step -> [Row]
     drawnRows s =
-      [ Row {kind = DetailRow, gutter = EdgeAlive, stepNo = Nothing, call = l, margin = ""}
+      [ Row {kind = DetailRow, gutter = Blank, stepNo = Nothing, call = l, margin = ""}
       | d <- snd (stepCall opts trace s),
         l <- T.lines d
       ]
@@ -180,9 +180,9 @@ focusedRows opts trace blame = terminator <> go Nothing shownAsc
     elisionBetween mLo hi =
       [ Row
           { kind = ElisionRow,
-            gutter = EdgeElided,
+            gutter = Gap,
             stepNo = Nothing,
-            call = table.cell Ellipsis <> " " <> elisionLabel between,
+            call = elisionLabel between,
             margin = ""
           }
       | lo <- maybe [] pure mLo,

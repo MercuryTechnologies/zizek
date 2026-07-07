@@ -33,14 +33,13 @@ import Hegel.Report.Trace qualified as Trace
 -- | One abstract log cell. The ascii table must render these injectively so
 -- the transliteration ('cellTransliterations') is unambiguous.
 data Cell
-  = -- Gutter (strand) cells
+  = -- Gutter cells
     NodeBorn
   | NodeTouch
   | NodeTransfer
   | NodeDeath
   | NodeFail
-  | EdgeAlive
-  | EdgeElided
+  | Gap
   | HistoryEnd
   | -- Text-region sigils
     ElidedMark
@@ -67,8 +66,7 @@ unicode =
         NodeTransfer -> "◉"
         NodeDeath -> "◌"
         NodeFail -> "✗"
-        EdgeAlive -> "│"
-        EdgeElided -> "┆"
+        Gap -> "┄"
         HistoryEnd -> "~"
         ElidedMark -> "▸"
         Ellipsis -> "⋯"
@@ -90,8 +88,7 @@ ascii =
         NodeTransfer -> "#"
         NodeDeath -> "%"
         NodeFail -> "x"
-        EdgeAlive -> "|"
-        EdgeElided -> ":"
+        Gap -> "-"
         HistoryEnd -> "~"
         ElidedMark -> ">"
         Ellipsis -> "..."

@@ -57,20 +57,20 @@ spec = do
     it "renders the chronological unicode event log (transfer/handoff shape)" do
       renderWith (defaultStyle Glyph.unicode)
         `shouldRenderAs` [ "● @1  open v₁",
-                           "┆     ⋯ 2 steps",
+                           "┄     2 steps",
                            "○ @4  write v₁ → ok",
                            "◉ @5  close v₁",
-                           "┆     ⋯ 2 steps",
+                           "┄     2 steps",
                            "✗ @8  read v₁"
                          ]
 
     it "renders the chronological ascii event log" do
       renderWith (defaultStyle Glyph.ascii)
         `shouldRenderAs` [ "* @1  open v1",
-                           ":     ... 2 steps",
+                           "-     2 steps",
                            "o @4  write v1 -> ok",
                            "# @5  close v1",
-                           ":     ... 2 steps",
+                           "-     2 steps",
                            "x @8  read v1"
                          ]
 
@@ -175,7 +175,7 @@ spec = do
     it "elides unshown steps explicitly, with counts" do
       let rows = Log.layoutRows (defaultStyle Glyph.unicode) handoffTrace (Log.Focused handoffBlame)
       [r.call | r <- rows, r.kind == Log.ElisionRow]
-        `shouldBe` ["⋯ 2 steps", "⋯ 2 steps"]
+        `shouldBe` ["2 steps", "2 steps"]
 
     it "names the value an elided run concerns (positive qualifier)" do
       -- Subject v₁ is shown at steps 1 and 3; the elided step 2 spawns an
@@ -195,7 +195,7 @@ spec = do
           t = Trace.build notes events
           b = fromJust (Blame.analyze t)
           rows = Log.layoutRows (defaultStyle Glyph.unicode) t (Log.Focused b)
-      [r.call | r <- rows, r.kind == Log.ElisionRow] `shouldBe` ["⋯ 1 step (w₁)"]
+      [r.call | r <- rows, r.kind == Log.ElisionRow] `shouldBe` ["1 step (w₁)"]
 
     it "gives each elided lifeline its own trajectory (off-log section)" do
       -- The failing subject (a₁) is drawn at step 3; an unrelated value (b₁) is
@@ -272,7 +272,7 @@ spec = do
 
   describe "glyph tables" do
     it "ascii preserves semantics within the gutter family" do
-      let gutterCells = [NodeBorn, NodeTouch, NodeTransfer, NodeDeath, NodeFail, EdgeAlive, EdgeElided, HistoryEnd]
+      let gutterCells = [NodeBorn, NodeTouch, NodeTransfer, NodeDeath, NodeFail, Gap, HistoryEnd]
       distinctUnder Glyph.ascii gutterCells `shouldBe` True
 
     it "pool letters stay distinct past five pools" do
