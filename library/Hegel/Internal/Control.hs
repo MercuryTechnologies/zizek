@@ -1,19 +1,19 @@
+{-# LANGUAGE CPP #-}
+
 -- | Per-test-case control-flow signals.
---
--- __Internal module.__ Implementation substrate of @zizek@ itself, exposed so
--- you can reach past the public API when you must; it is not part of the
--- stable public interface and may change without notice.
 --
 -- These are /control signals/, not errors: they carry the runner's verdict for
 -- the current test case out of the middle of a draw, up through the property
--- body, to 'Hegel.Runner.runTestCase', which classifies them. They are thrown
--- as /asynchronous/ exceptions so a catch-all in the test body cannot silently
--- swallow one and corrupt the run; 'isControlSignal' recognizes them in
--- handlers that legitimately need to.
+-- body, to 'Hegel.Runner.runTestCase', which classifies them.
+--
+-- They are thrown as /asynchronous/ exceptions so a catch-all in the test body
+-- cannot silently swallow one and corrupt the run; 'isControlSignal'
+-- recognizes them in handlers that legitimately need to.
 module Hegel.Internal.Control
   ( TestStopped (..),
     AssumeRejected (..),
     MalformedTest (..),
+    NoBacktrace (..),
     isControlSignal,
     ControlSignal (..),
     catchControl,
@@ -25,7 +25,6 @@ where
 import Control.Exception
   ( Exception (..),
     Handler (..),
-    NoBacktrace (..),
     SomeException,
     asyncExceptionFromException,
     asyncExceptionToException,
@@ -33,11 +32,34 @@ import Control.Exception
     catches,
     throwIO,
   )
+#if __GLASGOW_HASKELL__ >= 912
+import Control.Exception (NoBacktrace (..))
+#endif
 import Control.Monad (when)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import UnliftIO.Exception (isSyncException)
+
+#if __GLASGOW_HASKELL__ < 912
+-- | Compatibility shim for @base < 4.21@ (GHC < 9.12), which lacks the
+-- 'Control.Exception.NoBacktrace' wrapper.
+--
+-- On GHC 9.12+, 'throwIO' attaches a backtrace annotation by default and
+-- 'NoBacktrace' suppresses it.
+--
+-- On older GHCs there is no automatic backtrace collection, so this delegates
+-- 'toException'\/'fromException' instances to the exception it wraps.
+newtype NoBacktrace e = NoBacktrace e
+
+instance (Show e) => Show (NoBacktrace e) where
+  showsPrec p (NoBacktrace e) = showsPrec p e
+
+instance (Exception e) => Exception (NoBacktrace e) where
+  toException (NoBacktrace e) = toException e
+  fromException = fmap NoBacktrace . fromException
+  displayException (NoBacktrace e) = displayException e
+#endif
 
 -- | Thrown when the engine signals that the current test case should be
 -- abandoned (choice budget exhausted).
@@ -51,9 +73,11 @@ instance Exception TestStopped where
   toException = asyncExceptionToException
   fromException = asyncExceptionFromException
 
+#if __GLASGOW_HASKELL__ >= 912
   -- Suppress backtrace collection: thrown on every budget stop; nothing is
   -- ever rendered from it.
   backtraceDesired _ = False
+#endif
 
 -- | Thrown when a test case is deliberately discarded, either via
 -- 'Hegel.Property.assume' or 'Hegel.Property.discard', or by an exhausted
@@ -65,9 +89,11 @@ instance Exception AssumeRejected where
   toException = asyncExceptionToException
   fromException = asyncExceptionFromException
 
+#if __GLASGOW_HASKELL__ >= 912
   -- Suppress backtrace collection: thrown on every discard; nothing is ever
   -- rendered from it.
   backtraceDesired _ = False
+#endif
 
 -- | Thrown when a test is structurally invalid — a precondition on the test
 -- /definition/ rather than a property failure (for example, a stateful

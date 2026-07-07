@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 -- | Call-stack-aware assertion helpers for property bodies.
 module Hegel.Assertion
   ( AssertionFailure (..),
@@ -49,9 +51,11 @@ instance Exception AssertionFailure where
         <> "\n"
         <> T.pack (prettyCallStack f.callStack)
 
+#if __GLASGOW_HASKELL__ >= 912
   -- Suppress backtrace collection: thrown once per shrink replay; the
   -- rendered call stack is the carried 'callStack' field.
   backtraceDesired _ = False
+#endif
 
 -- | Fail the current property with a message, capturing the call site.
 --

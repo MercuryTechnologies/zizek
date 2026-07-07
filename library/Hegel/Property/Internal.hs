@@ -49,7 +49,7 @@ import GHC.Stack (HasCallStack, SrcLoc, callStack, withFrozenCallStack)
 import Hegel.Assertion (AssertionFailure (..), callSite)
 import Hegel.Diff (Diff)
 import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
-import Hegel.Internal.Control (isControlSignal, isFailure)
+import Hegel.Internal.Control (NoBacktrace (..), isControlSignal, isFailure)
 import Hegel.Internal.Event qualified as Event
 import Hegel.Internal.TestCase (TestCase (..))
 import Hegel.Internal.TestCase qualified as TestCase
@@ -306,7 +306,7 @@ tryProperty act =
       -- 'E.NoBacktrace' because the original throw already collected any
       -- backtrace it wanted (see the same wrapper in
       -- 'Hegel.Internal.Control.onFailure').
-      | otherwise -> E.throwIO (E.NoBacktrace e)
+      | otherwise -> E.throwIO (NoBacktrace e)
 
 -- | Attempt to recover an 'AssertionFailure' from the given exception, and (if
 -- present) extract the message, callsite, and diff associated with it.

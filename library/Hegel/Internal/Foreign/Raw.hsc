@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 -- | Low-level FFI bindings to @libhegel@ (@hegeltest-c@).
 --
 -- __Internal module.__ Implementation substrate of @zizek@ itself, exposed so
@@ -253,10 +255,12 @@ data HegelError = HegelError
   deriving stock (Show)
 
 instance Exception HegelError where
+#if __GLASGOW_HASKELL__ >= 912
   -- Suppress backtrace collection: thrown on every stop/discard (the
   -- control-flow codes arrive here first); the rendered diagnostic is the
   -- engine's message.
   backtraceDesired _ = False
+#endif
 
 -- $errorcodes
 --
