@@ -105,7 +105,7 @@ ascii =
 -- The pool's 'Hegel.Pool.named' label (or an automatic assignment) plus a
 -- numeric identifier in order of a pooled variable's introduction.
 --
--- Defined as @\\tbl trace -> \\v -> …@ so callers that bind
+-- Defined as @\\tbl trace -> \\v -> ...@ so callers that bind
 -- @nameOf = displayName tbl trace@ share the precomputed per-trace name
 -- table across every lookup.
 displayName :: GlyphTable -> Trace -> Var -> Text
@@ -125,7 +125,7 @@ displayName tbl trace =
     precomputed = Map.fromList [(Trace.root trace l.var, compute (Trace.root trace l.var)) | l <- trace.lifelines]
 
 -- | Unlabeled pools are lettered @v, w, x, y, z@ in birth order, doubling
--- past five (@vv, ww, …@) so names never collide across pools.
+-- past five (@vv, ww, ...@) so names never collide across pools.
 poolLetter :: Int -> Text
 poolLetter n = T.replicate (n `div` 5 + 1) (T.singleton letter)
   where

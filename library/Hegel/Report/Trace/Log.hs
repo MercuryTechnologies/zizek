@@ -61,9 +61,9 @@ data RowKind
     DetailRow
   | -- | @⋯ n steps@ elided between two rendered steps.
     ElisionRow
-  | -- | @~@ — older history precedes the view.
+  | -- | @~@: older history precedes the view.
     TerminatorRow
-  | -- | @↳ cites …@ — the failing step's citations, on their own row below it.
+  | -- | @↳ cites ...@: the failing step's citations, on their own row below it.
     CiteRow
   deriving stock (Show, Eq)
 
@@ -74,8 +74,6 @@ data Row = Row
     gutter :: !Cell,
     stepNo :: !(Maybe Int),
     call :: !Text,
-    -- | The row's right-margin text: the blame fact on a cited row, the
-    -- @← cites …@ list on the failing row.
     margin :: !Text
   }
   deriving stock (Show, Eq)
@@ -116,7 +114,7 @@ focusedRows opts trace blame = terminator <> go Nothing shownAsc
       | Just s.index == failingIx = [failingRow s]
       -- The subject's birth in machine setup (step 0) is not a navigable rule:
       -- render it as a de-numbered origin line (@●  v₁ initialized@) rather than
-      -- a @<initial>@ pseudo-step with a redundant @… created@ margin.
+      -- a @<initial>@ pseudo-step with a redundant @... created@ margin.
       | s.index == 0 = [originRow]
       | otherwise = citedRow s : drawnRows s
 
@@ -278,7 +276,7 @@ unfocusedRows opts trace mBlame = concatMap stepRows (sortOn (.index) trace.step
 
     -- Margins mirror focused mode, unioned across claims: each step carries the
     -- fact(s) of the value(s) implicated there; the failing step carries the
-    -- @← cites …@ list over every claim. No blame → no margins.
+    -- @← cites ...@ list over every claim. No blame → no margins.
     marginFor s
       -- The failing step's citation moves to its own ↳ row (see 'citeRows'); the
       -- margin here carries only cross-value facts, if any.

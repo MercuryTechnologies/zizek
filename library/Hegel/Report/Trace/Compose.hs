@@ -28,7 +28,7 @@ import Hegel.Report.Trace.Log qualified as Log
 import Prettyprinter (Doc)
 import Prettyprinter qualified as PP
 
--- | The composed report (sans the @failed after …@ line, which the caller
+-- | The composed report (sans the @failed after ...@ line, which the caller
 -- prepends): the chronological event log, the failing step's source splice,
 -- (focused only) the off-log lifelines, footnotes, and the reproduction
 -- footer. Sections separate with one blank line.

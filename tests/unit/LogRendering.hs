@@ -146,9 +146,9 @@ spec = do
           t = Trace.build notes events
           b = fromJust (Blame.analyze t)
           rows = Log.layoutRows (defaultStyle Glyph.unicode) t (Log.Focused b)
-      -- The payload inlines into the write NodeRow's call…
+      -- The payload inlines into the write NodeRow's call...
       [r.call | r <- rows, r.kind == Log.NodeRow] `shouldSatisfy` any (T.isInfixOf "payload")
-      -- …and the pool draw's value text ("handle") is never rendered (symbolic).
+      -- ...and the pool draw's value text ("handle") is never rendered (symbolic).
       [r.call | r <- rows] `shouldSatisfy` all (not . T.isInfixOf "handle")
 
     it "drops a multi-line free draw to a detail row rather than inlining it" do

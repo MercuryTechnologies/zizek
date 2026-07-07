@@ -142,7 +142,7 @@ statefulSpec = describe "Machine" do
       other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
   it "machinery annotations carry no source location" do
-    -- The 'Step N: …' / invariant-check annotations are emitted by
+    -- The 'Step N: ...' / invariant-check annotations are emitted by
     -- 'Stateful.run' itself; a call-stack loc would point inside
     -- @library/Hegel/Stateful.hs@, which the rich renderer would then try
     -- to splice into the report as if it were the user's test source.

@@ -62,7 +62,7 @@ data Pool a = Pool
 
 -- | Create a new pool. Allocates a pool id from the engine immediately.
 --
--- The failure report auto-names the pool's values (@v₁, w₁, …@ by birth
+-- The failure report auto-names the pool's values (@v₁, w₁, ...@ by birth
 -- order); use 'named' when a semantic letter (@h₁@ for handles) reads
 -- better.
 new :: TestCase -> IO (Pool a)
@@ -72,7 +72,7 @@ new tc = do
   pure Pool {tc, poolId = pid, values = ref}
 
 -- | 'new' with a display label for the failure report: values of a pool
--- named @"h"@ render as @h₁, h₂, …@ in the event log.
+-- named @"h"@ render as @h₁, h₂, ...@ in the event log.
 named :: Text -> TestCase -> IO (Pool a)
 named label tc = do
   pool <- new tc
@@ -146,7 +146,7 @@ consume caller pool tc = do
 --
 -- This is the honest way to model state changes like closing a handle
 -- (consume from the open pool, transfer into the closed pool): a manual
--- @'valuesConsumed' … 'add'@ pair works but severs the value's story.
+-- @'valuesConsumed' ... 'add'@ pair works but severs the value's story.
 --
 -- No engine primitive is involved beyond the same draw + add; the link is
 -- zizek-side bookkeeping. Drawing from an empty @src@ discards the test
