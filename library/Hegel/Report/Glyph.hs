@@ -127,7 +127,7 @@ displayName tbl trace =
     precomputed :: Map.Map Var Text
     precomputed = Map.fromList [(Trace.root trace l.var, compute (Trace.root trace l.var)) | l <- trace.lifelines]
 
--- | Unlabelled pools are lettered @v, w, x, y, z@ in birth order, doubling
+-- | Unlabeled pools are lettered @v, w, x, y, z@ in birth order, doubling
 -- past five (@vv, ww, …@) so names never collide across pools.
 poolLetter :: Int -> Text
 poolLetter n = T.replicate (n `div` 5 + 1) (T.singleton letter)

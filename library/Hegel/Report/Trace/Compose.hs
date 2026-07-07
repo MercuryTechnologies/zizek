@@ -90,8 +90,7 @@ footnotesDoc notes = case footnoteDocs notes of
   ds -> Just (PP.vsep ds)
 
 -- | The reproduction footer: present only when the run persisted under a
--- database key (pointing anywhere else would be dishonest — replay is
--- automatic on the next run, there is no CLI yet). Words from the phrase
--- table, like everything else.
+-- database key (replay is automatic on the next run; there is no CLI to point
+-- at a key by hand yet). Words from the phrase table, like everything else.
 footerDoc :: PhraseTable -> Maybe Text -> Maybe (Doc Ann)
 footerDoc phrases = fmap (PP.annotate LocAnn . PP.pretty . phrases.stored)

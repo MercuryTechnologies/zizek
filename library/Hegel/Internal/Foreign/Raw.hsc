@@ -507,7 +507,7 @@ foreign import ccall unsafe "hegel_context_last_error"
 --
 -- Prefer 'withSettings'.
 
--- | Allocate a settings handle initialised with @libhegel@ defaults, writing
+-- | Allocate a settings handle initialized with @libhegel@ defaults, writing
 -- it into @*out_settings@.
 foreign import ccall unsafe "hegel_settings_new"
   hegel_settings_new :: Ptr HegelContext -> Ptr (Ptr HegelSettings) -> IO CInt
@@ -733,7 +733,7 @@ foreign import ccall unsafe "hegel_new_state_machine"
     -> IO CInt
 
 -- | Draw the next rule index in @[0, num_rules)@ for the given state machine,
--- honouring swarm-selected rule restrictions.
+-- honoring swarm-selected rule restrictions.
 --
 -- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted.
 foreign import ccall unsafe "hegel_state_machine_next_rule"

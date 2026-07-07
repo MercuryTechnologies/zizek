@@ -110,7 +110,7 @@ spec = do
 
     it "nests a stateful journal and renders the failure in-band (=== diff)" $ do
       -- The top-level message\/loc\/diff are populated (as they are for every
-      -- counterexample) but must be *suppressed* in favour of the in-band
+      -- counterexample) but must be *suppressed* in favor of the in-band
       -- 'Failure' note, so they do not appear twice.
       let result =
             Counterexample
@@ -170,7 +170,7 @@ spec = do
                    ]
 
     it "hangs a multi-line drawn value under its own start column" $ do
-      -- Pins the PP.align behaviour inside a nested step indent ahead of the
+      -- Pins the PP.align behavior inside a nested step indent ahead of the
       -- tree-renderer refactor: continuation lines hang under the value's
       -- first column, not the note's indent column.
       let result =

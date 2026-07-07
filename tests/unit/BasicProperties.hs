@@ -27,6 +27,6 @@ spec = do
         fmap (.text) (filter (\n -> isDrawn n.kind) notes) `shouldBe` ["42"]
       other -> expectationFailure ("expected a counterexample, got: " <> show other)
 
-  it "honours phases = [Generate]" $ do
+  it "honors phases = [Generate]" $ do
     check_ (defaultSettings {phases = [Generate]}) $ forEach (intR (0, 100)) $ \n ->
       n `shouldSatisfy` (\x -> x >= 0 && x <= 100)

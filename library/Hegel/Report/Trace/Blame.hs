@@ -39,7 +39,7 @@ import Hegel.Report.Trace qualified as Trace
 -- * Blame
 
 -- | Why the trace failed: the failing step, and one 'Claim' per distinct
--- lineage root it touched — each the story of a value the failure implicates.
+-- lineage root it touched.
 --
 -- A 'Blame' is always a /definite/ failure: a counterexample in hand.
 --
@@ -47,13 +47,13 @@ import Hegel.Report.Trace qualified as Trace
 -- independent values yields two claims, so both are cited. Claims are ordered
 -- by descending fact weight; the 'primary' (head) is the trunk value used
 -- where a single name is required (the focused view). K=1 (one root) is the
--- common case and renders exactly as the single-subject design did.
+-- common case: a single claim, focused rendering.
 --
 -- Note [Known limitation: ambient values]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 -- A long-lived context/config/session value touched at /every/ step cannot
 -- shrink away, so structural union blames it on every row and its citation set
--- covers everything — a citation that selects all selects nothing. It is
+-- covers every step, so the citation conveys nothing. It is
 -- detectable as "non-discriminating" (every fact 'TouchedAt', touched at every
 -- step), but suppressing it must NOT key on fact weight: the future causal case
 -- (@read h₂ ← close h₁@) blames a merely-/touched/ victim, exactly what a
@@ -169,10 +169,8 @@ factAt trace _ t = case t.kind of
     | otherwise -> ConsumedAt t.var
   Reused -> TouchedAt t.var
 
--- | The subject's story.
---
--- The story spans the subject's entire whole lineage 'Trace.chain'; that is
--- to say, a value which was transferred cites its pre-transfer history too.
+-- | The subject's story: its whole lineage across 'Trace.chain', so a value that
+-- was transferred cites its pre-transfer history too.
 citationsFor :: Trace -> Int -> Var -> [Observation]
 citationsFor trace failingStep subject =
   [ Observation {step = s, fact = e}

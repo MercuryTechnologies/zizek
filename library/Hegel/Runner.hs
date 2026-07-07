@@ -149,7 +149,7 @@ data RunStatus
     RunErrored
   deriving stock (Show, Eq)
 
--- | Decode the @hegel_run_status_t@ wire code; an unrecognised code is treated
+-- | Decode the @hegel_run_status_t@ wire code; an unrecognized code is treated
 -- as 'RunErrored'.
 instance Witch.TryFrom CInt RunStatus where
   tryFrom = Witch.maybeTryFrom \case
@@ -284,7 +284,7 @@ driveLoop ctx settings action run = loop 0 0
 --
 -- The classification covers the whole action, draw and body alike, so a
 -- discard ('AssumeRejected') or budget stop ('TestStopped') raised at any
--- point is honoured — this is what lets a property body interleave its own
+-- point is honored — this is what lets a property body interleave its own
 -- draws with test logic.
 --
 -- The handlers only classify; 'markComplete' runs once, outside the 'catches'

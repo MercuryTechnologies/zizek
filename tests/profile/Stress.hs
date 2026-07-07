@@ -116,7 +116,7 @@ cancelOrder =
   Stateful.Rule "cancel_order" \w -> do
     assume (not (Map.null w.pending))
     oid <- forAll (Gen.element (Map.keys w.pending))
-    annotate ("cancelling order #" <> renderValue oid)
+    annotate ("canceling order #" <> renderValue oid)
     pure case Map.lookup oid w.pending of
       -- Unreachable: the 'assume' above guarantees a pending order.
       Nothing -> w

@@ -91,7 +91,7 @@ layoutRows opts trace = \case
   Focused blame -> focusedRows opts trace blame
   Unfocused mBlame -> unfocusedRows opts trace mBlame
 
--- | The single-subject focused log (today's event log): the terminator (if older
+-- | The single-subject focused log, the K=1 special case: the terminator (if older
 -- history precedes the view) then the subject's steps oldest → newest, others
 -- elided, failing step last.
 focusedRows :: Style -> Trace -> Blame -> [Row]
@@ -337,7 +337,7 @@ factsDoc opts trace callTxt facts =
     kept = [f | f <- facts, not (nameOf (Blame.factVar f) `T.isInfixOf` callTxt)]
 
 -- The rendered call plus the free draws that did NOT inline (→ detail rows).
--- Free (non-pool) draws fold into the call in journal order — @write h₁ "0"@ —
+-- Free (non-pool) draws fold into the call in journal order (@write h₁ "0"@)
 -- while each is single-line and the call still fits the width budget; the first
 -- that doesn't (and all after it, to keep order) become dim detail rows. Pool
 -- references stay symbolic (no inline value). Shared by both views.
@@ -467,7 +467,7 @@ logDoc opts trace view = PP.vsep (fmap rowDoc rows)
           CiteRow -> PP.annotate NoteAnn (PP.pretty callPadded)
           _ -> respAnnotated callPadded
 
-    -- Colour the response tail separately from the call head.
+    -- Color the response tail separately from the call head.
     respAnnotated t = case T.breakOn (" " <> table.cell ResponseArrow <> " ") t of
       (_, "") -> PP.pretty t
       (call', resp) -> PP.pretty call' <> PP.annotate ResponseAnn (PP.pretty resp)

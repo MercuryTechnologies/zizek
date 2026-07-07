@@ -118,7 +118,7 @@ stepNote = note Annotation Nothing
 -- The event log renders it as the right-hand side of the step's
 -- @call → response@ line (@read h₁ → Right "a"@); the headline
 -- quotes it as the observed actual. A step's /last/ 'respond' wins. Rules
--- that never call it simply render without a response segment.
+-- that never call it render without a response segment.
 --
 -- @
 -- Stateful.Rule "read" \\s -> do

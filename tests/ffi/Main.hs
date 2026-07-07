@@ -3,7 +3,7 @@
 -- Exercises the raw @libhegel@ C API directly: driving runs with CBOR schema
 -- bytes, calling @hegel_mark_complete@ by hand, the failure+shrink cycle, and
 -- per-case completion semantics. These tests work below 'Hegel.Runner' and
--- 'Hegel.Property', complementing the library-behaviour tests in the unit
+-- 'Hegel.Property', complementing the library-behavior tests in the unit
 -- suite.
 --
 -- Each sequence allocates a 'HegelContext' ('withContext') that carries the

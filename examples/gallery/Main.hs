@@ -14,7 +14,7 @@
 --   3. warehouse — the realistic no-pool report: four rules over three
 --      coupled structures, cross-structure invariants, a minimal
 --      counterexample that interleaves three distinct rules — an unfocused log
---      with annotation detail rows and 'forAllWithLabel'-labelled draws
+--      with annotation detail rows and 'forAllWithLabel'-labeled draws
 --      (@restock item="apple" qty=5@)
 --   4. connection pool — the flagship focused lifeline: a pooled connection
 --      threads idle → active → in-tx → active → idle over its life, so one
@@ -209,9 +209,9 @@ cancelOrder =
   Stateful.Rule "cancel_order" \w -> do
     assume (not (Map.null w.pending))
     oid <- forAllWithLabel "order" (Gen.element (Map.keys w.pending))
-    annotate ("cancelling order #" <> renderValue oid)
+    annotate ("canceling order #" <> renderValue oid)
     -- BUG: releases the reservation held by the *newest* pending order
-    -- instead of the cancelled one — harmless exactly when they coincide.
+    -- instead of the canceled one — harmless exactly when they coincide.
     pure case Map.lookupMax w.pending of
       -- Unreachable: the 'assume' above guarantees a pending order.
       Nothing -> w

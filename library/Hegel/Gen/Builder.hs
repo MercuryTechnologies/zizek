@@ -14,7 +14,7 @@ where
 
 import Hegel.Gen.Internal (Gen)
 
--- | Materialise a fully-configured builder into a 'Gen'.
+-- | Materialize a fully-configured builder into a 'Gen'.
 class Build b a | b -> a where
   build :: b -> Gen a
 

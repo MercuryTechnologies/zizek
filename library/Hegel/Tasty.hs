@@ -44,7 +44,7 @@ instance IsTest HegelTest where
       Ok -> testPassed rendered
       _ -> testFailed rendered
 
--- | Resolve a 'UseColor' setting to a concrete 'Bool'. 'Auto' honours the
+-- | Resolve a 'UseColor' setting to a concrete 'Bool'. 'Auto' honors the
 -- @NO_COLOR@ environment variable (per <https://no-color.org>) and falls
 -- back to a terminal check.
 resolveColor :: UseColor -> IO Bool

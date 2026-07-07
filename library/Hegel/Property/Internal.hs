@@ -150,7 +150,7 @@ journalNote kind loc text = PropertyT do
 -- | Run a property with its journaled notes recorded one level deeper.
 --
 -- 'Hegel.Stateful' uses this to nest a rule\/invariant's draws under the step
--- that produced them. Purely a reporting concern: draw behaviour is unchanged.
+-- that produced them. Purely a reporting concern: draw behavior is unchanged.
 nested :: PropertyT m a -> PropertyT m a
 nested (PropertyT r) = PropertyT (local (\e -> e {noteDepth = e.noteDepth + 1}) r)
 {-# INLINE nested #-}
@@ -182,7 +182,7 @@ forAllWith render gen = do
 -- | 'forAll' with a display label, for rule draws whose bare value reads as
 -- noise in the report. @qty <- forAllWithLabel \"qty\" g@ journals @qty=5@, so
 -- the event log renders @restock item=\"apple\" qty=5@ rather than
--- @restock \"apple\" 5@. A specialisation of 'forAllWith' whose renderer
+-- @restock \"apple\" 5@. A specialization of 'forAllWith' whose renderer
 -- prefixes the label; the label lives in the journal text, not the source (no
 -- source parsing).
 forAllWithLabel :: (HasCallStack, MonadIO m, Show a) => Text -> Gen a -> PropertyT m a

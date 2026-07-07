@@ -194,7 +194,7 @@ keyedT cs settings nat label body = do
         Nothing -> withDatabaseKey (propKey cs path label) settings
   Hspec.it label (HegelExampleT settings' nat body)
 
--- | Returns 'True' when ANSI colour output is appropriate: the output handle
+-- | Returns 'True' when ANSI color output is appropriate: the output handle
 -- is a terminal AND the @NO_COLOR@ environment variable is unset (per
 -- <https://no-color.org>).
 shouldUseColor :: IO Bool

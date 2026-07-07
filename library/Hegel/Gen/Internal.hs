@@ -66,7 +66,7 @@ data BasicGenerator a = BasicGenerator
     -- input is the raw scalar value; for a 'Tuple' schema it is the response
     -- 'Array' wrapping every flat component.
     parse :: Value -> Either ParseError a,
-    -- | The materialised 'schema', CBOR-encoded. Deliberately lazy (the
+    -- | The materialized 'schema', CBOR-encoded. Deliberately lazy (the
     -- package default is 'StrictData'): the thunk is built at construction,
     -- forced on the first draw, and shared by every draw after that —
     -- re-encoding the schema per draw dominated generation profiles.
@@ -90,7 +90,7 @@ data BasicSchema
 
 -- | Concatenate two schemas into a single flat tuple. Used by 'basicAp' to
 -- combine the schemas of two basic generators without rebuilding the
--- materialised tuple schema on every step.
+-- materialized tuple schema on every step.
 instance Semigroup BasicSchema where
   Scalar a <> Scalar b = Tuple a b Seq.empty
   Scalar a <> Tuple b c rest = Tuple a b (c <| rest)
@@ -443,7 +443,7 @@ defer g = Draw \tc -> runGenerator tc g
 -- | Return the finite set of values a generator can produce, or 'Nothing'
 -- if the set is infinite or cannot be statically determined.
 --
--- Useful as an optimisation signal: 'filtered' uses this to pre-filter
+-- Useful as an optimization signal: 'filtered' uses this to pre-filter
 -- finite generators instead of retrying at runtime.
 enumerate :: Gen a -> Maybe [a]
 enumerate (Pure a) = Just [a]

@@ -41,7 +41,7 @@ instance Monoid Style where
   mempty = StyleDefault
 
 -- | Semantic annotations on report fragments.  The plain-text renderer strips
--- them; the ANSI renderer maps them to colours.
+-- them; the ANSI renderer maps them to colors.
 data Ann
   = -- | The failure headline message.
     MessageAnn
@@ -59,11 +59,11 @@ data Ann
     DiffAdded
   | -- | File path in the @┏━━ file ━━━@ header.
     DeclLocation
-  | -- | Line-number gutter, coloured by 'Style'.
+  | -- | Line-number gutter, colored by 'Style'.
     StyledLineNo !Style
-  | -- | @┏━━@ \/ @┃@ border, coloured by 'Style'.
+  | -- | @┏━━@ \/ @┃@ border, colored by 'Style'.
     StyledBorder !Style
-  | -- | Source text, coloured by 'Style'.
+  | -- | Source text, colored by 'Style'.
     StyledSource !Style
   | -- | @│ @ gutter for inlined annotation values.
     AnnotationGutter
@@ -76,12 +76,8 @@ data Ann
     FailureGutter
   | -- | Inlined failure message text.
     FailureMessage
-  | -- | A value strand's gutter glyph (and its name in text), coloured from the
-    -- shared palette by the value's strand index — glyphs carry state, columns
-    -- carry identity, the colour binds a value's name in prose to its strand
-    -- with zero geometry. (The name 'LaneAnn' is reserved for the future braid,
-    -- where a lane is a concurrent thread; see
-    -- notes/decisions/report-visual-grammar.md.)
+  | -- | A value strand's gutter glyph and name, colored from the shared
+    -- palette.
     StrandAnn !Int
   | -- | A log step number (dim).
     StepNoAnn
@@ -95,7 +91,7 @@ data Ann
 docToText :: Doc Ann -> Text
 docToText = PP.Text.renderStrict . PP.layoutPretty PP.defaultLayoutOptions
 
--- | Render a 'Doc Ann' with ANSI colour codes.
+-- | Render a 'Doc Ann' with ANSI color codes.
 docToAnsi :: Doc Ann -> Text
 docToAnsi =
   PP.Terminal.renderStrict
@@ -128,7 +124,7 @@ lineDiffAnn = \case
   LineAdded _ -> DiffAdded
 
 -- | Legend tying the diff markers to the @(===)@ operands: @(- lhs) (+ rhs)@,
--- each token coloured to match the diff lines it keys (hedgehog's header
+-- each token colored to match the diff lines it keys (hedgehog's header
 -- convention). An interleaved diff doesn't otherwise say which operand a
 -- @-@ line came from.
 diffLegend :: Doc Ann
@@ -164,11 +160,13 @@ annToAnsi = \case
   ResponseAnn -> mempty
   ElidedAnn -> PP.Terminal.colorDull PP.Terminal.White
 
--- | The shared five-hue identity palette: strand colours today (a value's
--- identity in the event log), the braid's lane colours later (a thread's identity)
--- — same palette, both axes. Five theme-safe hues; never red (reserved for
--- failure), never white\/black\/grey (theme-fragile). Ordering is
--- colourblind-aware: the deutan confusion pair is deferred to the fifth hue.
+-- | The shared five-hue identity palette, keyed by a value's strand index.
+--
+-- Five theme-safe hues, deliberately avoiding red (reserved for failure),
+-- white, black, and gray.
+--
+-- /NOTE/: Ordering is colorblind-aware: the deutan confusion pair is deferred
+-- to the fifth hue.
 paletteColor :: Int -> AnsiStyle
 paletteColor n =
   PP.Terminal.color case n `mod` 5 of

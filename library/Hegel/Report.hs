@@ -162,7 +162,7 @@ throwOnFailure report = case report.result of
 renderReport :: Report -> Text
 renderReport = docToText . reportDoc
 
--- | Render a report with ANSI colour codes (suitable for TTY output).
+-- | Render a report with ANSI color codes (suitable for TTY output).
 -- Diff lines are red\/green; the failure message is bold; location is dim.
 renderReportAnsi :: Report -> Text
 renderReportAnsi = docToAnsi . reportDoc
@@ -179,7 +179,7 @@ renderFailure message notes loc diff = docToText body
       | hasInBandFailure notes = PP.vsep [headlineDoc message, failureDoc message notes loc diff]
       | otherwise = failureDoc message notes loc diff
 
--- * Source-aware rendering (reads files; degrades gracefully)
+-- * Source-aware rendering (reads files; falls back to plain when none is readable)
 
 -- | Render a report as plain text, splicing drawn values and the failure
 -- message inline into a source listing — and, for stateful failures with
@@ -190,7 +190,7 @@ renderFailure message notes loc diff = docToText body
 renderReportRich :: Report -> IO Text
 renderReportRich = renderReportRichWith (defaultStyle Glyph.unicode)
 
--- | 'renderReportRich' with ANSI colour codes. Degrades to 'renderReportAnsi'
+-- | 'renderReportRich' with ANSI color codes. Degrades to 'renderReportAnsi'
 -- when no source is readable.
 renderReportRichAnsi :: Report -> IO Text
 renderReportRichAnsi = renderReportRichAnsiWith (defaultStyle Glyph.unicode)
@@ -204,8 +204,8 @@ renderReportRichWith style = renderRichImpl style renderReport docToText
 renderReportRichAnsiWith :: Style -> Report -> IO Text
 renderReportRichAnsiWith style = renderRichImpl style renderReportAnsi docToAnsi
 
--- | The integrations' one-stop renderer: rich, ANSI per @useColor@, glyphs
--- per the output 'Glyph.Preference' — with the ascii preference's
+-- | The renderer the framework integrations call: rich, ANSI per @useColor@,
+-- glyphs per the output 'Glyph.Preference', with the ascii preference's
 -- 7-bit-clean guarantee applied to the whole result. Keeps the
 -- render-then-clean invariant in one place instead of one per framework.
 renderReportAuto :: Bool -> Glyph.Preference -> Report -> IO Text

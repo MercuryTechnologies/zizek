@@ -186,7 +186,7 @@ findDeclarations = declarations . classified . positioned
 type Declarations = Map FilePath (Map LineNo (String, Pos String))
 
 -- | Read and scan every distinct file once.  Files that can't be read are
--- simply absent from the cache, so later lookups against them degrade to
+-- absent from the cache, so later lookups against them degrade to
 -- @'Nothing'@.
 loadDeclarations :: [FilePath] -> IO Declarations
 loadDeclarations paths = do

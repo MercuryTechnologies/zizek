@@ -94,9 +94,9 @@ cancelOrder bug =
   Stateful.Rule "cancel_order" \w -> do
     assume (not (Map.null w.pending))
     oid <- forAll (Gen.element (Map.keys w.pending))
-    annotate ("cancelling order #" <> renderValue oid)
+    annotate ("canceling order #" <> renderValue oid)
     -- 'Buggy' releases the reservation held by the *newest* pending order
-    -- instead of the cancelled one — harmless exactly when they coincide.
+    -- instead of the canceled one — harmless exactly when they coincide.
     let released = case bug of
           Fixed -> Map.lookup oid w.pending
           Buggy -> snd <$> Map.lookupMax w.pending

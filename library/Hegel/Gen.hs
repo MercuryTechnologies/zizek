@@ -1,6 +1,6 @@
 -- | Generator combinators, designed for qualified import as @Gen@.
 --
--- Build a generator by chaining modifiers onto a builder and materialising
+-- Build a generator by chaining modifiers onto a builder and materializing
 -- with 'build':
 --
 -- > import Data.Function ((&))

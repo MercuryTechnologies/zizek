@@ -28,11 +28,11 @@ spec = do
     prop ((,) <$> (Gen.bool & Gen.build) <*> intR (0, 10)) $ \(_, n) ->
       n `shouldSatisfy` (\x -> x >= 0 && x <= 10)
 
-  it "ap (pure f) g uses single-leaf optimisation" $ do
+  it "ap (pure f) g uses single-leaf optimization" $ do
     prop (pure (+ 1) <*> intR (0, 10)) $ \n ->
       n `shouldSatisfy` (\x -> x >= 1 && x <= 11)
 
-  it "ap g (pure a) uses single-leaf optimisation without TUPLE span" $ do
+  it "ap g (pure a) uses single-leaf optimization without TUPLE span" $ do
     prop (fmap const (Gen.filtered even (intR (0, 20))) <*> pure ()) $ \n -> do
       n `shouldSatisfy` even
       n `shouldSatisfy` (\x -> x >= 0 && x <= 20)

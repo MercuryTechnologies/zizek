@@ -5,7 +5,7 @@
 -- (exhaustive @switch@es under @-Werror=switch-enum@): if hegel-rust /adds/ an
 -- enumerator, this test target fails to build. This module is the runtime half:
 -- it feeds every value our 'Witch.From' instances produce to the matching guard
--- and asserts it is recognised (returns @0@), catching /value drift/ — a
+-- and asserts it is recognized (returns @0@), catching /value drift/ — a
 -- conversion whose code no longer matches the header.
 module WireEnumCoverage (wireEnumCoverageSpec) where
 
@@ -33,24 +33,24 @@ foreign import ccall unsafe "hegel_guard_label" guardLabel :: Word64 -> IO CInt
 
 foreign import ccall unsafe "hegel_guard_status" guardStatus :: CInt -> IO CInt
 
--- | Assert the guard recognises (returns @0@ for) every supplied wire value.
-allRecognised :: (w -> IO CInt) -> [w] -> Expectation
-allRecognised guard = traverse_ \w -> guard w `shouldReturn` 0
+-- | Assert the guard recognizes (returns @0@ for) every supplied wire value.
+allRecognized :: (w -> IO CInt) -> [w] -> Expectation
+allRecognized guard = traverse_ \w -> guard w `shouldReturn` 0
 
 wireEnumCoverageSpec :: Spec
 wireEnumCoverageSpec = describe "wire enum coverage (conversion values vs hegel.h)" $ do
   it "Backend" $
-    allRecognised guardBackend (Witch.into @CInt <$> [Auto, Default, Urandom])
+    allRecognized guardBackend (Witch.into @CInt <$> [Auto, Default, Urandom])
   it "Verbosity" $
-    allRecognised guardVerbosity (Witch.into @CInt <$> [Quiet, Normal, Verbose, Debug])
+    allRecognized guardVerbosity (Witch.into @CInt <$> [Quiet, Normal, Verbose, Debug])
   it "Phase" $
-    allRecognised guardPhase (Witch.into @Word32 <$> [Explicit, Reuse, Generate, Target, Shrink])
+    allRecognized guardPhase (Witch.into @Word32 <$> [Explicit, Reuse, Generate, Target, Shrink])
   it "HealthCheck" $
-    allRecognised
+    allRecognized
       guardHealthCheck
       (Witch.into @Word32 <$> [FilterTooMuch, TooSlow, TestCasesTooLarge, LargeInitialTestCase])
   it "Label" $
-    allRecognised
+    allRecognized
       guardLabel
       ( Witch.into @Word64
           <$> [ LabelList,
@@ -72,4 +72,4 @@ wireEnumCoverageSpec = describe "wire enum coverage (conversion values vs hegel.
               ]
       )
   it "Status" $
-    allRecognised guardStatus (Witch.into @CInt <$> [Valid, Invalid, Overrun, Interesting "x"])
+    allRecognized guardStatus (Witch.into @CInt <$> [Valid, Invalid, Overrun, Interesting "x"])

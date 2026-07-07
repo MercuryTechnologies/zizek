@@ -8,7 +8,7 @@
 -- the current test case out of the middle of a draw, up through the property
 -- body, to 'Hegel.Runner.runTestCase', which classifies them. They are thrown
 -- as /asynchronous/ exceptions so a catch-all in the test body cannot silently
--- swallow one and corrupt the run; 'isControlSignal' recognises them in
+-- swallow one and corrupt the run; 'isControlSignal' recognizes them in
 -- handlers that legitimately need to.
 module Hegel.Internal.Control
   ( TestStopped (..),
@@ -108,7 +108,7 @@ data ControlSignal
 -- discriminate which one fired, and let every other exception propagate.
 --
 -- Uses base 'Control.Exception.catches' so the async tagging of the signals is
--- honoured: @unliftio@\/@safe-exceptions@ combinators rethrow async exceptions
+-- honored: @unliftio@\/@safe-exceptions@ combinators rethrow async exceptions
 -- and therefore cannot be used to catch these.
 catchControl :: IO a -> (ControlSignal -> IO a) -> IO a
 catchControl act h =
