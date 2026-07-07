@@ -21,7 +21,7 @@
     {
       packages = forAllSystems ({ pkgs, ... }: {
         hegel-core = (pkgs.callPackage ./nix/hegel-core.nix { });
-        libhegel = pkgs.callPackage ./nix/libhegel { };
+        inherit (pkgs) libhegel;
       });
 
       devShells = forAllSystems (
@@ -61,7 +61,7 @@
                 # python interpreter with hegel-core + conformance test deps
                 python
                 # native libhegel C library + pkg-config for discovery
-                self'.packages.libhegel
+                libhegel
                 pkg-config
               ]
               ++ lib.optionals stdenv.hostPlatform.isDarwin [
@@ -72,7 +72,9 @@
       );
 
       overlays = {
-        default = _: _: { };
+        default = final: _prev: {
+          libhegel = final.callPackage ./nix/libhegel { };
+        };
       };
     };
 
