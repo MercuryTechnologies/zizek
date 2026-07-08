@@ -122,7 +122,7 @@ stepNote = note Annotation Nothing
 --
 -- @
 -- Stateful.Rule "read" \\s -> do
---   h <- forAll (Pool.valuesReusable s.handles)
+--   h <- forAll (Pool.reuse s.handles)
 --   r <- liftIO (readHandle h)
 --   Stateful.respond (T.pack (show r))
 --   r === modelRead s h

@@ -13,7 +13,6 @@ import Golden (shouldRenderAs)
 import Hegel.Gen qualified as Gen
 import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, forAll, forAllWithLabel)
-import Hegel.Property.Internal (Env (..), askEnv)
 import Hegel.Report
   ( Event (..),
     Note (..),
@@ -459,9 +458,8 @@ transferMachine :: Stateful.Machine (Pool.Pool Int, Pool.Pool Int) IO
 transferMachine =
   Stateful.Machine
     { initial = do
-        env <- askEnv
-        open <- liftIO (Pool.named "h" env.testCase)
-        closed <- liftIO (Pool.named "c" env.testCase)
+        open <- Pool.named "h"
+        closed <- Pool.named "c"
         pure (open, closed),
       rules =
         [ Stateful.Rule "open" \m@(open, _) -> do
@@ -471,7 +469,7 @@ transferMachine =
             _ <- forAll (Pool.transfer open closed)
             pure m,
           Stateful.Rule "read_closed" \m@(_, closed) -> do
-            _ <- forAll (Pool.valuesReusable closed)
+            _ <- forAll (Pool.reuse closed)
             assert False "reads of closed handles always fail (bug)"
             pure m
         ],

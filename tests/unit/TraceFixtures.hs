@@ -40,7 +40,6 @@ import Hegel.Gen qualified as Gen
 import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, forAll)
-import Hegel.Property.Internal (Env (..), askEnv)
 import Hegel.Report (Event (..), Note (..), NoteKind (..), Operation (..), Tick (..), Var (..))
 import Hegel.Report.Trace (Trace)
 import Hegel.Report.Trace qualified as Trace
@@ -209,8 +208,7 @@ eventfulMachine :: Stateful.Machine Model IO
 eventfulMachine =
   Stateful.Machine
     { initial = do
-        env <- askEnv
-        p <- liftIO (Pool.new env.testCase)
+        p <- Pool.new
         pure Model {pool = p, reused = False, consumed = False},
       rules =
         [ Stateful.Rule "register" \m -> do
@@ -218,10 +216,10 @@ eventfulMachine =
             liftIO (Pool.add m.pool n)
             pure m,
           Stateful.Rule "reuse" \m -> do
-            _ <- forAll (Pool.valuesReusable m.pool)
+            _ <- forAll (Pool.reuse m.pool)
             pure m {reused = True},
           Stateful.Rule "consume" \m -> do
-            _ <- forAll (Pool.valuesConsumed m.pool)
+            _ <- forAll (Pool.consume m.pool)
             Stateful.respond "consumed ok"
             pure m {consumed = True}
         ],

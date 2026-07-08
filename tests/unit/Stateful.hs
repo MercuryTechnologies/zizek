@@ -12,7 +12,6 @@ import Hegel.Gen qualified as Gen
 import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, assume, forAll, forAllSilent)
-import Hegel.Property.Internal (Env (..), askEnv)
 import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), isFailureNote, renderReportRich)
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
@@ -74,10 +73,9 @@ poolSpec :: Spec
 poolSpec = describe "Pool" do
   it "empty pool draw is Invalid, not Interesting" do
     report <- check defaultSettings do
-      env <- askEnv
-      pool <- liftIO (Pool.new env.testCase)
+      pool <- Pool.new
       -- Immediately draw from an empty pool → AssumeRejected → Invalid.
-      _ <- forAllSilent (Pool.valuesReusable pool)
+      _ <- forAllSilent (Pool.reuse pool)
       assert False "should not be reached"
     -- Every case is discarded, so we expect GaveUp (all Invalid), never a failure.
     case report.result of
@@ -85,26 +83,24 @@ poolSpec = describe "Pool" do
       Counterexample {} -> expectationFailure "expected GaveUp, got a counterexample"
       other -> expectationFailure ("expected GaveUp (all invalid), got: " <> show other)
 
-  it "valuesReusable returns an added value without removing it" do
+  it "reuse returns an added value without removing it" do
     report <- check defaultSettings do
-      env <- askEnv
-      pool <- liftIO (Pool.new env.testCase)
+      pool <- Pool.new
       n <- forAll intGen
       liftIO (Pool.add pool n)
-      a <- forAll (Pool.valuesReusable pool)
-      b <- forAll (Pool.valuesReusable pool)
+      a <- forAll (Pool.reuse pool)
+      b <- forAll (Pool.reuse pool)
       assert (a == n && b == n) "reusable draw returns the added value each time"
     report.result `shouldSatisfy` \case
       Ok -> True
       _ -> False
 
-  it "valuesConsumed returns and removes the value" do
+  it "consume returns and removes the value" do
     report <- check defaultSettings do
-      env <- askEnv
-      pool <- liftIO (Pool.new env.testCase)
+      pool <- Pool.new
       n <- forAll intGen
       liftIO (Pool.add pool n)
-      v <- forAll (Pool.valuesConsumed pool)
+      v <- forAll (Pool.consume pool)
       assert (v == n) "consumed value matches what was added"
       empty <- liftIO (Pool.isEmpty pool)
       assert empty "pool is empty after consuming the only value"
@@ -274,7 +270,7 @@ register =
 useReusable :: Stateful.Rule Model IO
 useReusable =
   Stateful.Rule "use_reusable" \m -> do
-    v <- forAll (Pool.valuesReusable m.pool)
+    v <- forAll (Pool.reuse m.pool)
     assert (Set.member v m.registered) "reusable draw was previously registered"
     pure m
 
@@ -282,7 +278,7 @@ useReusable =
 useConsumed :: Stateful.Rule Model IO
 useConsumed =
   Stateful.Rule "use_consumed" \m -> do
-    v <- forAll (Pool.valuesConsumed m.pool)
+    v <- forAll (Pool.consume m.pool)
     assert (Set.member v m.registered) "consumed draw was previously registered"
     pure m
 
@@ -290,8 +286,7 @@ poolMachine :: Stateful.Machine Model IO
 poolMachine =
   Stateful.Machine
     { initial = do
-        env <- askEnv
-        p <- liftIO (Pool.new env.testCase)
+        p <- Pool.new
         pure (Model p Set.empty),
       rules = [register, useReusable, useConsumed],
       invariants = []

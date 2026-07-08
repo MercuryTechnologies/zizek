@@ -53,7 +53,6 @@ import Hegel.Property (Property, annotate, assume, forAll, forAllWithLabel, (===
 import Hegel.Report (Report (..), renderReportRichAnsi, renderReportRichAnsiWith, renderValue)
 import Hegel.Report.Glyph qualified as Glyph
 import Hegel.Report.Style (defaultStyle)
-import Hegel.Property.Internal (Env (..), askEnv)
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
@@ -287,10 +286,9 @@ connectionMachine :: Stateful.Machine ConnModel IO
 connectionMachine =
   Stateful.Machine
     { initial = do
-        env <- askEnv
-        idle <- liftIO (Pool.named "conn" env.testCase)
-        active <- liftIO (Pool.new env.testCase)
-        inTx <- liftIO (Pool.new env.testCase)
+        idle <- Pool.named "conn"
+        active <- Pool.new
+        inTx <- Pool.new
         nextConn <- newIORef 0
         epoch <- newIORef 0
         txEpoch <- newIORef Map.empty
@@ -329,7 +327,7 @@ connectionMachine =
             _ <- forAll (Pool.transfer m.active m.idle)
             pure m,
           Stateful.Rule "query" \m -> do
-            c <- forAll (Pool.valuesReusable m.idle)
+            c <- forAll (Pool.reuse m.idle)
             open <- liftIO (Map.findWithDefault False c <$> readIORef m.txOpen)
             Stateful.respondShow open
             assert (not open) "a checked-in connection has no open transaction"
@@ -361,8 +359,7 @@ ledgerMachine :: Stateful.Machine LedgerModel IO
 ledgerMachine =
   Stateful.Machine
     { initial = do
-        env <- askEnv
-        accounts <- liftIO (Pool.named "account" env.testCase)
+        accounts <- Pool.named "account"
         balances <- newIORef Map.empty
         nextAccount <- newIORef 0
         pure LedgerModel {accounts, balances, nextAccount},
@@ -388,8 +385,8 @@ ledgerMachine =
           -- so the second is necessarily different), giving the failing step two
           -- pool subjects.
           Stateful.Rule "settle" \m -> do
-            a <- forAll (Pool.valuesConsumed m.accounts)
-            b <- forAll (Pool.valuesConsumed m.accounts)
+            a <- forAll (Pool.consume m.accounts)
+            b <- forAll (Pool.consume m.accounts)
             bals <- liftIO (readIORef m.balances)
             let funded acc = Map.findWithDefault 0 acc bals > 0
             assert (not (funded a && funded b)) "funds stay consolidated in one account"

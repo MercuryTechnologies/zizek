@@ -7,13 +7,13 @@
 --
 -- Usage:
 --
--- > pool <- Pool.new tc
+-- > pool <- Pool.new
 -- > Pool.add pool someValue
 -- > Pool.add pool anotherValue
 -- >
 -- > -- In a rule body:
--- > v <- forAll (Pool.valuesReusable pool)   -- does not remove from pool
--- > v <- forAll (Pool.valuesConsumed pool)   -- removes from pool
+-- > v <- forAll (Pool.reuse pool)     -- does not remove from pool
+-- > v <- forAll (Pool.consume pool)   -- removes from pool
 --
 -- Drawing from an empty pool discards the current test case (equivalent to
 -- @assume False@); the run is tallied as 'Invalid', not a failure.
@@ -33,13 +33,14 @@ module Hegel.Pool
     isEmpty,
 
     -- * Generators
-    valuesReusable,
-    valuesConsumed,
+    reuse,
+    consume,
     transfer,
   )
 where
 
 import Control.Exception (throwIO)
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Text (Text)
@@ -48,6 +49,7 @@ import Hegel.Internal.Control (AssumeRejected (..))
 import Hegel.Internal.DataSource (labelPool, newPool, poolAdd, poolAddFrom, poolGenerate)
 import Hegel.Internal.Event (Var (..))
 import Hegel.Internal.TestCase (TestCase)
+import Hegel.Property.Internal (Env (..), PropertyT, askEnv)
 import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 
 -- | Opaque handle to a @libhegel@-managed pool of values of type @a@.
@@ -60,23 +62,27 @@ data Pool a = Pool
     values :: !(IORef (IntMap a))
   }
 
--- | Create a new pool. Allocates a pool id from the engine immediately.
+-- | Create a new pool against the running property's test case. Allocates a
+-- pool id from the engine immediately.
 --
 -- The failure report auto-names the pool's values (@v₁, w₁, ...@ by birth
 -- order); use 'named' when a semantic letter (@h₁@ for handles) reads
 -- better.
-new :: TestCase -> IO (Pool a)
-new tc = do
-  pid <- newPool tc
-  ref <- newIORef IntMap.empty
-  pure Pool {tc, poolId = pid, values = ref}
+new :: (MonadIO m) => PropertyT m (Pool a)
+new = do
+  env <- askEnv
+  let tc = env.testCase
+  liftIO do
+    pid <- newPool tc
+    ref <- newIORef IntMap.empty
+    pure Pool {tc, poolId = pid, values = ref}
 
 -- | 'new' with a display label for the failure report: values of a pool
 -- named @"h"@ render as @h₁, h₂, ...@ in the event log.
-named :: Text -> TestCase -> IO (Pool a)
-named label tc = do
-  pool <- new tc
-  labelPool tc pool.poolId label
+named :: (MonadIO m) => Text -> PropertyT m (Pool a)
+named label = do
+  pool <- new
+  liftIO (labelPool pool.tc pool.poolId label)
   pure pool
 
 -- | Add a value to the pool. The engine assigns the variable id.
@@ -97,8 +103,8 @@ isEmpty pool = IntMap.null <$> readIORef pool.values
 --
 -- The engine picks the variable id so the choice shrinks like any other draw.
 -- Drawing from an empty pool discards the current test case.
-valuesReusable :: Pool a -> Gen a
-valuesReusable pool = Draw \tc -> do
+reuse :: Pool a -> Gen a
+reuse pool = Draw \tc -> do
   vals <- readIORef pool.values
   if IntMap.null vals
     then throwIO AssumeRejected
@@ -109,21 +115,21 @@ valuesReusable pool = Draw \tc -> do
         Nothing ->
           -- Engine returned a variable id that was never added — engine-contract
           -- violation, not a user error.
-          error ("Hegel.Pool.valuesReusable: unknown variable id " <> show vid)
+          error ("Hegel.Pool.reuse: unknown variable id " <> show vid)
 
 -- | A generator that consumes values from the pool, removing each yielded
 -- value so it is never drawn again.
 --
 -- Drawing from an empty pool discards the current test case.
-valuesConsumed :: Pool a -> Gen a
-valuesConsumed pool = Draw \tc -> snd <$> consume "valuesConsumed" pool tc
+consume :: Pool a -> Gen a
+consume pool = Draw \tc -> snd <$> drawConsuming "consume" pool tc
 
--- | The consuming draw shared by 'valuesConsumed' and 'transfer': draw a
+-- | The consuming draw shared by 'consume' and 'transfer': draw a
 -- vid from the engine (removing it there) and pop the mirrored value.
 --
 -- Throws 'AssumeRejected' when the pool is empty, discarding the test case.
-consume :: String -> Pool a -> TestCase -> IO (Int, a)
-consume caller pool tc = do
+drawConsuming :: String -> Pool a -> TestCase -> IO (Int, a)
+drawConsuming caller pool tc = do
   empty <- IntMap.null <$> readIORef pool.values
   if empty
     then throwIO AssumeRejected
@@ -146,14 +152,14 @@ consume caller pool tc = do
 --
 -- This is the honest way to model state changes like closing a handle
 -- (consume from the open pool, transfer into the closed pool): a manual
--- @'valuesConsumed' ... 'add'@ pair works but severs the value's story.
+-- @'consume' ... 'add'@ pair works but severs the value's story.
 --
 -- No engine primitive is involved beyond the same draw + add; the link is
 -- zizek-side bookkeeping. Drawing from an empty @src@ discards the test
 -- case.
 transfer :: Pool a -> Pool a -> Gen a
 transfer src dst = Draw \tc -> do
-  (vid, v) <- consume "transfer" src tc
+  (vid, v) <- drawConsuming "transfer" src tc
   vid' <- poolAddFrom tc dst.poolId Var {pool = src.poolId, id = vid}
   modifyIORef' dst.values (IntMap.insert vid' v)
   pure v

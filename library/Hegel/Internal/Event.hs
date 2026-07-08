@@ -39,9 +39,9 @@ data Event = Event
 data Operation
   = -- | A value is registered via 'Hegel.Pool.add'.
     Born !(Maybe Var)
-  | -- | Drawn without removal via 'Hegel.Pool.valuesReusable'.
+  | -- | Drawn without removal via 'Hegel.Pool.reuse'.
     Reused
-  | -- | Drawn and removed via 'Hegel.Pool.valuesConsumed'.
+  | -- | Drawn and removed via 'Hegel.Pool.consume'.
     Consumed
   | -- | Labeled via 'Hegel.Pool.named'.
     Named !Text

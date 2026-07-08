@@ -27,7 +27,6 @@ import Hegel.Gen qualified as Gen
 import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (forAll, (===))
-import Hegel.Property.Internal (Env (..), askEnv)
 import Hegel.Stateful qualified as Stateful
 import UnliftIO.IORef (IORef, modifyIORef', newIORef, readIORef)
 
@@ -46,9 +45,8 @@ machine :: Bug -> Stateful.Machine FileModel IO
 machine bug =
   Stateful.Machine
     { initial = do
-        env <- askEnv
-        openHandles <- liftIO (Pool.named "h" env.testCase)
-        closedHandles <- liftIO (Pool.named "c" env.testCase)
+        openHandles <- Pool.named "h"
+        closedHandles <- Pool.named "c"
         nextHandle <- newIORef 0
         contents <- newIORef Map.empty
         pure FileModel {openHandles, closedHandles, nextHandle, contents},
@@ -63,7 +61,7 @@ machine bug =
             Stateful.respond "ok"
             pure m,
           Stateful.Rule "write" \m -> do
-            h <- forAll (Pool.valuesReusable m.openHandles)
+            h <- forAll (Pool.reuse m.openHandles)
             v <- forAll (Gen.text & Gen.minSize 1 & Gen.maxSize 4 & Gen.build)
             liftIO (modifyIORef' m.contents (Map.insert h v))
             Stateful.respond "ok"
@@ -77,7 +75,7 @@ machine bug =
             Stateful.respond "ok"
             pure m,
           Stateful.Rule "read_closed" \m -> do
-            h <- forAll (Pool.valuesReusable m.closedHandles)
+            h <- forAll (Pool.reuse m.closedHandles)
             r <- liftIO (Map.findWithDefault "" h <$> readIORef m.contents)
             Stateful.respondShow r
             r === ""
