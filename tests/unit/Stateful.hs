@@ -3,6 +3,7 @@ module Stateful (spec) where
 
 import Control.Monad.IO.Class (liftIO)
 import Data.Function ((&))
+import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import Data.Maybe (isNothing)
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -12,7 +13,7 @@ import Hegel.Gen qualified as Gen
 import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, assume, forAll, forAllSilent)
-import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), isFailureNote, renderReportRich)
+import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), Stats (..), isFailureNote, renderReportRich)
 import Hegel.Runner (check)
 import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
@@ -229,9 +230,17 @@ statefulSpec = describe "Machine" do
   it "precondition (assume) in a rule skips the step without failing" do
     -- A rule that always rejects via assume; the machine should give up rather
     -- than fail, since every step is skipped.
+    --
+    -- The engine's cap counts dispatched rules, including assume-tripping
+    -- ones, toward its ~50-step ceiling. An always-rejecting machine should
+    -- hit that ceiling on every case, well short of the 1000-attempt
+    -- livelock backstop; a regression that let the backstop take over
+    -- instead would multiply the dispatch count by roughly 20x.
+    dispatches <- newIORef (0 :: Int)
     let alwaysRejects :: Stateful.Rule Counter IO
         alwaysRejects =
           Stateful.Rule "always_rejects" \s -> do
+            liftIO (atomicModifyIORef' dispatches \c -> (c + 1, ()))
             assume False
             pure s
         machine =
@@ -246,6 +255,32 @@ statefulSpec = describe "Machine" do
       GaveUp _ -> pure ()
       Counterexample {} -> expectationFailure "a rule with assume False should not produce a counterexample"
       other -> expectationFailure ("unexpected result: " <> show other)
+    total <- readIORef dispatches
+    total `shouldSatisfy` (<= report.stats.valid * 60)
+
+  it "an always-succeeding rule never approaches the 1000-attempt livelock backstop" do
+    -- Analogue of the Rust reference's test_step_cap_is_50_most_of_the_time:
+    -- the engine's own step cap should bound dispatched rules at ~50 per
+    -- case. An off-by-one in the Nothing (HEGEL_STATE_MACHINE_DONE) handling
+    -- would silently let this run to the 1000-attempt backstop instead.
+    dispatches <- newIORef (0 :: Int)
+    let alwaysSucceeds :: Stateful.Rule Counter IO
+        alwaysSucceeds =
+          Stateful.Rule "increment" \(Counter n) -> do
+            liftIO (atomicModifyIORef' dispatches \c -> (c + 1, ()))
+            pure (Counter (n + 1))
+        machine =
+          Stateful.Machine
+            { initial = pure (Counter 0),
+              rules = [alwaysSucceeds],
+              invariants = []
+            }
+    report <- check defaultSettings (Stateful.run machine)
+    report.result `shouldSatisfy` \case
+      Ok -> True
+      _ -> False
+    total <- readIORef dispatches
+    total `shouldSatisfy` (<= report.stats.valid * 60)
 
 -- ---------------------------------------------------------------------------
 -- Pool + Machine integration

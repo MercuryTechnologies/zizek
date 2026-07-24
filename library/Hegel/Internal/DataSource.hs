@@ -612,15 +612,18 @@ newStateMachine tc ruleNames invariantNames =
               >>= handleReturnCode tc
             fromIntegral <$> (peek outId :: IO Int64)
 
--- | Draw the next rule index for the state machine.
+-- | Draw the next rule index for the state machine, or 'Nothing' once the
+-- engine has decided the machine is done stepping.
 --
--- Throws 'TestStopped' when the choice budget is exhausted.
-stateMachineNextRule :: TestCase -> Int -> IO Int
+-- Throws 'TestStopped' when the choice budget is exhausted, distinct from a
+-- clean 'Nothing'.
+stateMachineNextRule :: TestCase -> Int -> IO (Maybe Int)
 stateMachineNextRule tc mid =
   withSlotOf tc.slot \outIdx -> do
     hegel_state_machine_next_rule tc.handle.ctx tc.handle.ptr (fromIntegral mid) outIdx
       >>= handleReturnCode tc
-    fromIntegral <$> (peek outIdx :: IO Int64)
+    raw <- peek outIdx :: IO Int64
+    pure $ if raw == HEGEL_STATE_MACHINE_DONE then Nothing else Just (fromIntegral raw)
 
 -- * Spans
 

@@ -6,8 +6,8 @@
 -- 'foreign import ccall' declaration together with phantom types representing
 -- handles to C constructs, error-code pattern synonyms, and bracket helpers.
 --
--- Not yet bound: @hegel_generate_date@\/@_time@\/@_datetime@ and
--- @hegel_generate_ipv4@\/@_ipv6@.
+-- Not yet bound: @hegel_generate_date@\/@_time@\/@_datetime@,
+-- @hegel_generate_ipv4@\/@_ipv6@, and @hegel_string_generator_email@.
 --
 -- __Calling convention__: every @libhegel@ entry point takes a
 -- @hegel_context_t*@ as its first argument and returns a @hegel_result_t@,
@@ -59,6 +59,10 @@ module Hegel.Internal.Foreign.Raw
     pattern HEGEL_E_NOT_COMPLETE,
     pattern HEGEL_E_INTERNAL,
     pattern HEGEL_E_CONCURRENT_USE,
+
+    -- * State-machine termination sentinel
+    -- $statemachine
+    pattern HEGEL_STATE_MACHINE_DONE,
 
     -- * Phase bitmask pattern synonyms
     -- $phases
@@ -385,6 +389,17 @@ pattern HEGEL_E_INTERNAL = (#const HEGEL_E_INTERNAL)
 pattern HEGEL_E_CONCURRENT_USE :: CInt
 pattern HEGEL_E_CONCURRENT_USE = (#const HEGEL_E_CONCURRENT_USE)
 
+-- $statemachine
+--
+-- The value 'hegel_state_machine_next_rule' writes into its @out_rule_index@
+-- out-parameter to signal that a state machine has finished stepping, rather
+-- than naming a rule to run. It shares that function's @int64_t@ domain
+-- rather than the @hegel_result_t@ domain the error-code synonyms above cover,
+-- since it is not a return code at all.
+
+pattern HEGEL_STATE_MACHINE_DONE :: Int64
+pattern HEGEL_STATE_MACHINE_DONE = (#const HEGEL_STATE_MACHINE_DONE)
+
 -- $phases
 --
 -- @Word32@ flags, OR\'d and passed to 'hegel_settings_set_phases', which
@@ -672,15 +687,18 @@ foreign import ccall unsafe "hegel_settings_set_suppress_health_check"
 -- @line@ is NUL-terminated UTF-8 whose 'CSize' length excludes the terminator,
 -- has no trailing newline, and is valid only for the duration of the call.
 --
--- During a run the engine emits from its worker thread, so a sink must be
--- thread-safe; a blob replay emits synchronously on the calling thread.
+-- The callback fires synchronously on whichever thread calls
+-- 'hegel_next_test_case', the same thread a blob replay emits on. A sink
+-- shared across concurrent 'check' calls may still want thread-safety for
+-- its own reasons, but the engine itself no longer imposes it.
 --
 -- Currently always @NULL@ (output stays on stderr).
 type OutputSink = Ptr () -> CString -> CSize -> IO ()
 
--- | Spawn the engine worker thread and write a run handle into @*out_run@;
--- returns immediately. @callback@ (with its @user_data@) receives engine output
--- line by line; a @NULL@ 'FunPtr' leaves output on stderr.
+-- | Build the run and write a handle into @*out_run@; returns immediately. No
+-- test case is generated until the first 'hegel_next_test_case' call.
+-- @callback@ (with its @user_data@) receives engine output line by line; a
+-- @NULL@ 'FunPtr' leaves output on stderr.
 foreign import ccall unsafe "hegel_run_start"
   hegel_run_start
     :: Ptr HegelContext
@@ -690,13 +708,15 @@ foreign import ccall unsafe "hegel_run_start"
     -> Ptr (Ptr HegelRun)
     -> IO CInt
 
--- | Block until the engine produces the next test case, writing a __caller-owned__
--- handle into @*out_test_case@ (or @NULL@ when the run is finished).
+-- | Run the engine inline on the calling thread up through the next test
+-- case, writing a __caller-owned__ handle into @*out_test_case@ (or @NULL@
+-- when the run is finished).
 --
 -- The caller must release the handle with 'hegel_test_case_free'.
 --
--- Declared @safe@ so it does not pin a GHC capability while blocked on the
--- Rust worker.
+-- Declared @safe@ since a call can take a full generation, mutation, or
+-- shrink step; an @unsafe@ call would pin the calling capability for that
+-- whole duration.
 foreign import ccall safe "hegel_next_test_case"
   hegel_next_test_case :: Ptr HegelContext -> Ptr HegelRun -> Ptr (Ptr HegelTestCase) -> IO CInt
 
@@ -715,9 +735,11 @@ foreign import ccall unsafe "hegel_run_result"
 foreign import ccall unsafe "hegel_run_result_free"
   hegel_run_result_free :: Ptr HegelContext -> Ptr HegelRunResult -> IO CInt
 
--- | Join the worker thread and free the run handle.
+-- | Free the run handle. Dropping a run mid-flight simply drops the rest of
+-- its exploration; there is no worker to wind down.
 --
--- Imported @safe@ to avoid pinning a capability during the join.
+-- Imported @safe@: on the early-exit path this may synchronously complete an
+-- in-flight test case, which would otherwise pin the calling capability.
 foreign import ccall safe "hegel_run_free"
   hegel_run_free :: Ptr HegelContext -> Ptr HegelRun -> IO CInt
 
@@ -734,12 +756,13 @@ foreign import ccall safe "hegel_run_free"
 --
 -- Nearly all are declared @unsafe@. Despite the request/reply framing, they
 -- execute inline on the calling thread, never call back into Haskell, and
--- never touch disk. Database persistence and shrink bookkeeping happen in the
--- worker's run loop behind 'hegel_next_test_case', which never touches a live
--- handle's own mutex. Each handle's mutex is held only by the one thread
--- driving that handle, so under that one-thread-per-handle discipline it is
--- never actually contended. That holds whether a family is just the single
--- handle 'hegel_next_test_case' hands out or several more cloned off it.
+-- never touch disk. The engine does not run at all between
+-- 'hegel_next_test_case' calls, so per-case calls never contend with the
+-- database persistence and shrink bookkeeping those calls do. Each handle's
+-- mutex is held only by the one thread driving that handle, so under that
+-- one-thread-per-handle discipline it is never actually contended. That holds
+-- whether a family is just the single handle 'hegel_next_test_case' hands out
+-- or several more cloned off it.
 --
 -- The @safe@-call ceremony was a measurable fraction of the ~1.1µs per-draw
 -- floor, since a capability release and reacquire costs on the order of a
@@ -859,9 +882,18 @@ foreign import ccall unsafe "hegel_new_state_machine"
     -> IO CInt
 
 -- | Draw the next rule index in @[0, num_rules)@ for the given state machine,
--- honoring swarm-selected rule restrictions.
+-- honoring swarm-selected rule restrictions, or signal that the machine is
+-- done stepping.
 --
--- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted.
+-- The engine owns the machine's step cap: once it decides to stop, this
+-- writes 'HEGEL_STATE_MACHINE_DONE' into @*out_rule_index@ instead of a rule
+-- index, rather than returning an error. Call this exactly once per loop
+-- iteration, unconditionally, on generation and replay alike, since skipping
+-- a call misaligns every later draw the same way skipping any other draw
+-- would.
+--
+-- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted, which is
+-- distinct from the machine finishing normally.
 foreign import ccall unsafe "hegel_state_machine_next_rule"
   hegel_state_machine_next_rule
     :: Ptr HegelContext

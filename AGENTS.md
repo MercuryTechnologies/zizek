@@ -150,7 +150,7 @@ Spans (`start_span`/`stop_span`) group related generation calls so the engine ca
 
 ### Stateful Testing
 
-`Hegel.Stateful.run` drives a `Machine` (initial state, `Rule`s, `Invariant`s) inside an ordinary property. The engine owns rule selection (including swarm testing: per-test-case rule subsets), the step cap, and shrinking; invariants are checked after every successful step, and a failing assertion is journaled in-band at the step that produced it. Replay alignment is load-bearing: every draw (including the step cap) is part of the choice sequence and happens unconditionally, on replay too — skipping one misaligns every later draw and the counterexample stops reproducing. `Hegel.Pool` provides engine-managed value pools for rules to draw from.
+`Hegel.Stateful.run` drives a `Machine` (initial state, `Rule`s, `Invariant`s) inside an ordinary property. The engine owns rule selection (including swarm testing: per-test-case rule subsets), the step cap, and shrinking; invariants are checked after every successful step, and a failing assertion is journaled in-band at the step that produced it. Replay alignment is load-bearing: every draw, and every poll for the next rule, is part of the choice sequence and happens unconditionally, on replay too — skipping one misaligns every later draw and the counterexample stops reproducing. `Hegel.Pool` provides engine-managed value pools for rules to draw from.
 
 ### Framework Integrations
 
