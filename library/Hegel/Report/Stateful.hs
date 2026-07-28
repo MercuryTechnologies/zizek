@@ -63,6 +63,7 @@ classifyJournal notes
     -- every one of them stamps depth the same way; the depth-0 guard here
     -- excludes a stateful run nested inside a concurrent branch, whose
     -- depth-0 note is a 'BranchHeader' instead.
+    isStepHeaderAtDepth0 :: Note -> Bool
     isStepHeaderAtDepth0 n = n.depth == 0 && case n.kind of StepHeader {} -> True; _ -> False
 
 -- | The failing step alone, spliced — the composed event-log report's source
