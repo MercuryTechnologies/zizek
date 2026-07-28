@@ -26,7 +26,7 @@ import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Float (double2Float, float2Double)
-import Hegel.Gen.Builder (Build (..), GenValidationError (..), HasMax (..), HasMin (..), checkOrdered)
+import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), ValidationError (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (FloatSpec (..), drawFloat)
 
@@ -112,7 +112,7 @@ checkFloatBounds what b = do
       | b.bExclMin || b.bExclMax ->
           when (lo >= hi) $
             throwIO
-              GenValidationError
+              ValidationError
                 { context = what,
                   detail = "empty exclusive range: min (" <> T.pack (show lo) <> ") >= max (" <> T.pack (show hi) <> ")"
                 }
@@ -121,7 +121,7 @@ checkFloatBounds what b = do
   where
     checkNotNaN Nothing = pure ()
     checkNotNaN (Just x)
-      | isNaN x = throwIO GenValidationError {context = what, detail = "bound is NaN"}
+      | isNaN x = throwIO ValidationError {context = what, detail = "bound is NaN"}
       | otherwise = pure ()
 
 instance Build (FloatBuilder Float) Float where

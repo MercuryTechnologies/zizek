@@ -19,6 +19,21 @@ module Hegel
     resource,
     resource_,
 
+    -- * Properties
+    Property,
+    PropertyT,
+    hoist,
+    check,
+    forAll,
+    forAllWith,
+    forAllWithLabel,
+    forAllSilent,
+    annotate,
+    annotateShow,
+    footnote,
+    assume,
+    discard,
+
     -- * Forks
 
     -- | Only the handle type is exported here; import
@@ -32,6 +47,7 @@ module Hegel
     module Hegel.Backend,
     module Hegel.Verbosity,
     module Hegel.Database,
+    module Hegel.HealthCheck,
     module Hegel.Report,
     module Hegel.Phase,
 
@@ -51,18 +67,31 @@ import Hegel.Assertion
 import Hegel.Backend
 import Hegel.Database
 import Hegel.Gen.Internal (Gen)
+import Hegel.HealthCheck
 import Hegel.Phase
 import Hegel.Pool
 import Hegel.Property
   ( Fork,
+    Property,
+    PropertyT,
+    annotate,
+    annotateShow,
+    assume,
+    check,
     check_,
+    discard,
+    footnote,
+    forAll,
+    forAllSilent,
+    forAllWith,
+    forAllWithLabel,
     forEach,
     forEachWith,
+    hoist,
     registerFinalizer,
     resource,
     resource_,
   )
-import Hegel.Property.Internal (PropertyT)
 import Hegel.Report
 import Hegel.Settings
 import Hegel.Stateful (Invariant (..), Machine (..), Rule (..))

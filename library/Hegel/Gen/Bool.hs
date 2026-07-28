@@ -11,7 +11,7 @@ where
 
 import Control.Exception (throwIO)
 import Data.Text qualified as T
-import Hegel.Gen.Builder (Build (..), GenValidationError (..))
+import Hegel.Gen.Builder (Build (..), ValidationError (..))
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (drawBool)
 
@@ -41,7 +41,7 @@ checkProbability :: Double -> IO ()
 checkProbability p
   | isNaN p || p < 0 || p > 1 =
       throwIO
-        GenValidationError
+        ValidationError
           { context = "Hegel.Gen.Bool",
             detail = "probability (" <> T.pack (show p) <> ") outside [0, 1]"
           }

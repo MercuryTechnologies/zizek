@@ -1,7 +1,7 @@
 -- | Coverage for builder-level validation: 'Hegel.Gen.Builder's checkers
 -- ('checkOrdered'\/'checkOrderedMaybe'\/'checkNonNegative'\/'checkSizeBounds')
 -- directly, plus a sample of the 'Hegel.Gen.Builder.Build' instances that
--- call them, confirming a misconfigured builder raises 'GenValidationError'
+-- call them, confirming a misconfigured builder raises 'ValidationError'
 -- at draw rather than wrapping silently or deferring to an opaque engine
 -- 'HegelError'.
 module GenValidation (spec) where
@@ -12,7 +12,7 @@ import Data.Time.Calendar (fromGregorian)
 import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), midnight)
 import Hegel (prop)
 import Hegel.Gen qualified as Gen
-import Hegel.Gen.Builder (GenValidationError (..), checkNonNegative, checkOrdered, checkOrderedMaybe, checkSizeBounds)
+import Hegel.Gen.Builder (ValidationError (..), checkNonNegative, checkOrdered, checkOrderedMaybe, checkSizeBounds)
 import Hegel.Report (PropertyFailed (..))
 import Test.Hspec
 
@@ -33,9 +33,9 @@ spec = do
       it "passes when lo == hi" $ do
         checkOrdered "Test" (1 :: Int) 1
 
-      it "throws GenValidationError when lo > hi" $ do
+      it "throws ValidationError when lo > hi" $ do
         checkOrdered "Test.context" (2 :: Int) 1
-          `shouldThrow` \GenValidationError {context = ctx} -> ctx == "Test.context"
+          `shouldThrow` \ValidationError {context = ctx} -> ctx == "Test.context"
 
     describe "checkOrderedMaybe" $ do
       it "passes when either bound is absent" $ do
@@ -44,16 +44,16 @@ spec = do
         checkOrderedMaybe "Test" (Nothing :: Maybe Int) Nothing
 
       it "throws only when both bounds are present and inverted" $ do
-        checkOrderedMaybe "Test" (Just (2 :: Int)) (Just 1) `shouldThrow` \GenValidationError {} -> True
+        checkOrderedMaybe "Test" (Just (2 :: Int)) (Just 1) `shouldThrow` \ValidationError {} -> True
 
     describe "checkNonNegative" $ do
       it "passes on zero and positive values" $ do
         checkNonNegative "Test" (0 :: Int)
         checkNonNegative "Test" (5 :: Int)
 
-      it "throws GenValidationError on a negative value" $ do
+      it "throws ValidationError on a negative value" $ do
         checkNonNegative "Test.context" (-1 :: Int)
-          `shouldThrow` \GenValidationError {context = ctx} -> ctx == "Test.context"
+          `shouldThrow` \ValidationError {context = ctx} -> ctx == "Test.context"
 
     describe "checkSizeBounds" $ do
       it "passes a valid minSize/maxSize pair" $ do
@@ -62,13 +62,13 @@ spec = do
       it "throws on a negative minSize even with no maxSize set" $ do
         -- With no maxSize there is no ordering check to catch a negative
         -- minSize as a side effect, so non-negativity is checked directly.
-        checkSizeBounds "Test" (-1) Nothing `shouldThrow` \GenValidationError {} -> True
+        checkSizeBounds "Test" (-1) Nothing `shouldThrow` \ValidationError {} -> True
 
       it "throws on a negative maxSize" $ do
-        checkSizeBounds "Test" 0 (Just (-1)) `shouldThrow` \GenValidationError {} -> True
+        checkSizeBounds "Test" 0 (Just (-1)) `shouldThrow` \ValidationError {} -> True
 
       it "throws on an inverted pair even when both are non-negative" $ do
-        checkSizeBounds "Test" 10 (Just 5) `shouldThrow` \GenValidationError {} -> True
+        checkSizeBounds "Test" 10 (Just 5) `shouldThrow` \ValidationError {} -> True
 
   describe "Gen validation wiring" $ do
     describe "Gen.text" $ do

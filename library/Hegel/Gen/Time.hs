@@ -19,7 +19,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time.LocalTime (TimeOfDay (..), midnight)
-import Hegel.Gen.Builder (Build (..), GenValidationError (..), HasMax (..), HasMin (..), checkOrdered)
+import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), ValidationError (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (drawTime)
 
@@ -51,7 +51,7 @@ instance Build TimeBuilder TimeOfDay where
 
 -- | Require @hour@ in @[0, 23]@, @minute@\/@second@ in @[0, 59]@, and
 -- @second@'s fractional part to be a whole number of microseconds, throwing
--- 'GenValidationError' otherwise.
+-- 'ValidationError' otherwise.
 checkFields :: Text -> TimeOfDay -> IO ()
 checkFields ctx t
   | t.todHour < 0 || t.todHour > 23 = invalid "hour" t.todHour
@@ -59,7 +59,7 @@ checkFields ctx t
   | t.todSec < 0 || t.todSec >= 60 = invalid "second" t.todSec
   | not (wholeMicroseconds t.todSec) =
       throwIO
-        GenValidationError
+        ValidationError
           { context = ctx,
             detail = "second (" <> T.pack (show t.todSec) <> ") is finer than libhegel's microsecond resolution"
           }
@@ -70,7 +70,7 @@ checkFields ctx t
     invalid :: (Show a) => Text -> a -> IO ()
     invalid field v =
       throwIO
-        GenValidationError
+        ValidationError
           { context = ctx,
             detail = field <> " (" <> T.pack (show v) <> ") outside libhegel's range"
           }

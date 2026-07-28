@@ -13,7 +13,7 @@ module Hegel.Gen.Builder
 
     -- * Validation
     -- $validation
-    GenValidationError (..),
+    ValidationError (..),
     checkOrdered,
     checkOrderedMaybe,
     checkNonNegative,
@@ -59,7 +59,7 @@ class HasYear b where
 -- 'Gen' draws.
 --
 -- 'Build' instances run one of these checkers at the top of the draw closure,
--- turning a misuse into a 'GenValidationError' at first draw rather than an
+-- turning a misuse into a 'ValidationError' at first draw rather than an
 -- opaque engine 'Hegel.Internal.Foreign.Raw.HegelError'.
 --
 -- A malformed /expression/, like an empty 'Hegel.Gen.oneOf' or a non-positive
@@ -67,7 +67,7 @@ class HasYear b where
 -- "Hegel.Gen.Internal".
 
 -- | Thrown when a materialized builder's configuration is invalid.
-data GenValidationError = GenValidationError
+data ValidationError = ValidationError
   { -- | The fully-qualified module defining the builder that raised it, e.g.
     -- @\"Hegel.Gen.Text\"@.
     context :: !Text,
@@ -76,16 +76,16 @@ data GenValidationError = GenValidationError
   }
   deriving stock (Show)
 
-instance Exception GenValidationError where
+instance Exception ValidationError where
   displayException e = T.unpack e.context <> ": " <> T.unpack e.detail
 
--- | Require @lo <= hi@, throwing 'GenValidationError' otherwise.
+-- | Require @lo <= hi@, throwing 'ValidationError' otherwise.
 checkOrdered :: (Ord a, Show a) => Text -> a -> a -> IO ()
 checkOrdered what lo hi
   | lo <= hi = pure ()
   | otherwise =
       throwIO
-        GenValidationError
+        ValidationError
           { context = what,
             detail = "min (" <> T.pack (show lo) <> ") > max (" <> T.pack (show hi) <> ")"
           }
@@ -96,12 +96,12 @@ checkOrderedMaybe :: (Ord a, Show a) => Text -> Maybe a -> Maybe a -> IO ()
 checkOrderedMaybe what (Just lo) (Just hi) = checkOrdered what lo hi
 checkOrderedMaybe _ _ _ = pure ()
 
--- | Require @n >= 0@, throwing 'GenValidationError' otherwise.
+-- | Require @n >= 0@, throwing 'ValidationError' otherwise.
 checkNonNegative :: (Ord a, Num a, Show a) => Text -> a -> IO ()
 checkNonNegative what n
   | n >= 0 = pure ()
   | otherwise =
-      throwIO GenValidationError {context = what, detail = "negative size (" <> T.pack (show n) <> ")"}
+      throwIO ValidationError {context = what, detail = "negative size (" <> T.pack (show n) <> ")"}
 
 -- | Validate a @minSize@\/@maxSize@ pair: each bound must be non-negative,
 -- and ordered when both are set.

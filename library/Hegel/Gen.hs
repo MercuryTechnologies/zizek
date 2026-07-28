@@ -176,12 +176,13 @@ module Hegel.Gen
 
     -- * Exceptions
     AssumeRejected (..),
+    ValidationError (..),
   )
 where
 
 import Hegel.Gen.Binary (BinaryBuilder, binary)
 import Hegel.Gen.Bool (BoolBuilder, bool, weighted)
-import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasSize (..), HasYear (..))
+import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasSize (..), HasYear (..), ValidationError (..))
 import Hegel.Gen.Char
   ( CharBuilder,
     Codec (..),

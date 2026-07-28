@@ -23,7 +23,7 @@ import Data.Text qualified as T
 import Data.UUID (UUID)
 import Data.UUID qualified as UUID
 import Data.Word (Word8)
-import Hegel.Gen.Builder (Build (..), GenValidationError (..))
+import Hegel.Gen.Builder (Build (..), ValidationError (..))
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (InvariantViolation (..), drawUuid)
 
@@ -56,7 +56,7 @@ instance Build UuidBuilder UUID where
       checkVersion (Just v)
         | v > 15 =
             throwIO
-              GenValidationError
+              ValidationError
                 { context = "Hegel.Gen.Uuid",
                   detail = "version (" <> T.pack (show v) <> ") > 15 (RFC 4122 nibble range)"
                 }

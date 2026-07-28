@@ -25,7 +25,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text qualified as T
 import Data.Time.Calendar (diffDays, fromGregorian)
 import Data.Time.Clock (NominalDiffTime, nominalDiffTimeToSeconds, secondsToNominalDiffTime)
-import Hegel.Gen.Builder (Build (..), GenValidationError (..), HasMax (..), HasMin (..), checkOrdered)
+import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), ValidationError (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (drawInteger)
 
@@ -73,7 +73,7 @@ instance Build DurationBuilder NominalDiffTime where
       checkNonNegative n
         | n < 0 =
             throwIO
-              GenValidationError
+              ValidationError
                 { context = "Hegel.Gen.Duration",
                   detail = "negative duration (" <> T.pack (show n) <> ")"
                 }

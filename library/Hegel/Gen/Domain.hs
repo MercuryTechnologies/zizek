@@ -20,7 +20,7 @@ where
 import Control.Exception (throwIO)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Hegel.Gen.Builder (Build (..), GenValidationError (..))
+import Hegel.Gen.Builder (Build (..), ValidationError (..))
 import Hegel.Gen.Internal (Gen (..), draw)
 import Hegel.Gen.Internal.String (stringGen)
 import Hegel.Internal.DataSource (buildDomainGen)
@@ -51,7 +51,7 @@ instance Build DomainBuilder Text where
       checkMaxLength n
         | n < 4 || n > 255 =
             throwIO
-              GenValidationError
+              ValidationError
                 { context = "Hegel.Gen.Domain",
                   detail = "maxLength (" <> T.pack (show n) <> ") outside [4, 255]"
                 }

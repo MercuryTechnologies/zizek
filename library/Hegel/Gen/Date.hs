@@ -30,7 +30,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time.Calendar (Day, fromGregorian, toGregorian)
-import Hegel.Gen.Builder (Build (..), GenValidationError (..), HasMax (..), HasMin (..), HasYear (..), checkOrdered)
+import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasYear (..), ValidationError (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (drawDate)
 
@@ -65,12 +65,12 @@ instance Build DateBuilder Day where
       hi = fromMaybe (fromGregorian 999999 12 31) b.bMax
 
 -- | Require the year to fall in @[-999999, 999999]@, throwing
--- 'GenValidationError' otherwise.
+-- 'ValidationError' otherwise.
 checkYearRange :: Text -> Day -> IO ()
 checkYearRange ctx d
   | y < -999999 || y > 999999 =
       throwIO
-        GenValidationError
+        ValidationError
           { context = ctx,
             detail = "year (" <> T.pack (show y) <> ") outside libhegel's [-999999, 999999] range"
           }
