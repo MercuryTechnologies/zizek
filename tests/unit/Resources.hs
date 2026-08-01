@@ -5,6 +5,7 @@ import Control.Concurrent (threadDelay)
 import Control.Exception (displayException, fromException)
 import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
+import Data.Default.Class (def)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Internal.Control (MalformedTest (..))
@@ -72,7 +73,7 @@ spec = describe "resource" do
   it "runs open, then drains close at case end, in a plain property" do
     opened <- newIORef (0 :: Int)
     closed <- newIORef (0 :: Int)
-    report <- check defaultSettings do
+    report <- check def do
       _ <- resource (modifyIORef' opened (+ 1)) (const (modifyIORef' closed (+ 1)))
       pure ()
     report.result `shouldSatisfy` isOk
@@ -84,7 +85,7 @@ spec = describe "resource" do
   it "resource_ behaves like resource with no handle to thread through" do
     opened <- newIORef False
     closed <- newIORef False
-    report <- check defaultSettings do
+    report <- check def do
       resource_ (writeIORef opened True) (writeIORef closed True)
     report.result `shouldSatisfy` isOk
     readIORef opened `shouldReturn` True
@@ -101,7 +102,7 @@ spec = describe "resource" do
               rules = [increment],
               invariants = [neverAboveFive]
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     case report.result of
       Counterexample {} -> pure ()
       other -> expectationFailure ("expected Counterexample, got: " <> show other)
@@ -126,7 +127,7 @@ spec = describe "resource" do
               rules = [onceRule],
               invariants = []
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     report.result `shouldSatisfy` isResourceGuardAbort
 
   it "throws MalformedTest inside an Invariant's check after a successful step" do
@@ -142,7 +143,7 @@ spec = describe "resource" do
               rules = [increment],
               invariants = [checkAfterStep]
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     report.result `shouldSatisfy` isResourceGuardAbort
 
   it "throws MalformedTest inside an Invariant's initial check, before any step runs" do
@@ -161,7 +162,7 @@ spec = describe "resource" do
               rules = [increment],
               invariants = [checkOnInitial]
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     report.result `shouldSatisfy` isResourceGuardAbort
 
   it "still allows registerFinalizer called directly inside a Rule's apply" do
@@ -177,7 +178,7 @@ spec = describe "resource" do
               rules = [bumpingRule],
               invariants = []
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     report.result `shouldSatisfy` isOk
     readIORef ran >>= (`shouldSatisfy` (> 0))
 
@@ -191,7 +192,7 @@ spec = describe "resource" do
 
   it "still drains close on a discarded case" do
     closed <- newIORef False
-    report <- check defaultSettings do
+    report <- check def do
       _ <- resource (pure ()) (const (writeIORef closed True))
       discard
     readIORef closed `shouldReturn` True
@@ -200,7 +201,7 @@ spec = describe "resource" do
       other -> expectationFailure ("expected GaveUp, got: " <> show other)
 
   it "aborts the run as Errored when a resource's close throws" do
-    report <- check defaultSettings do
+    report <- check def do
       _ <- resource (pure ()) (const (throwIO (userError "close boom")))
       pure ()
     case report.result of
@@ -231,7 +232,7 @@ spec = describe "resource" do
               rules = [outerRule],
               invariants = []
             }
-    report <- check defaultSettings (Stateful.run outerMachine)
+    report <- check def (Stateful.run outerMachine)
     report.result `shouldSatisfy` isResourceGuardAbort
 
   describe "concurrent branches and forks" do
@@ -247,7 +248,7 @@ spec = describe "resource" do
                 rules = [bugRule],
                 invariants = []
               }
-      report <- check defaultSettings (Stateful.run machine)
+      report <- check def (Stateful.run machine)
       report.result `shouldSatisfy` isResourceGuardAbort
 
     it "throws MalformedTest for resource inside a joined Fork.spawn within a Rule's apply" do
@@ -263,7 +264,7 @@ spec = describe "resource" do
                 rules = [bugRule],
                 invariants = []
               }
-      report <- check defaultSettings (Stateful.run machine)
+      report <- check def (Stateful.run machine)
       report.result `shouldSatisfy` isResourceGuardAbort
 
     it "allows resource inside Branch.concurrently in a plain, non-stateful property" do
@@ -271,7 +272,7 @@ spec = describe "resource" do
       -- outside any rule, so this is distinguished by scope, not by which
       -- combinator is used.
       ran <- newIORef False
-      report <- check defaultSettings do
+      report <- check def do
         ((), n) <- Branch.concurrently (resource (pure ()) (const (writeIORef ran True))) (pure (1 :: Int))
         assert (n == 1) "branch result survives"
       report.result `shouldSatisfy` isOk
@@ -284,7 +285,7 @@ spec = describe "resource" do
       -- Fork.cancel's Async.uninterruptibleCancel, still lets runBranch's own
       -- exception handling drain it, rather than leaking it.
       closed <- newIORef False
-      report <- check defaultSettings do
+      report <- check def do
         f <- Fork.spawn do
           _ <- resource (pure ()) (const (writeIORef closed True))
           liftIO spinForever

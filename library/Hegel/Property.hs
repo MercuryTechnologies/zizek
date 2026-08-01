@@ -5,13 +5,13 @@
 --
 -- @
 -- import Data.Function ((&))
--- import Hegel (defaultSettings)
+-- import Data.Default.Class (def)
 -- import Hegel.Gen qualified as Gen
 -- import Hegel.Property
 --
 -- prop_reverseInvolutive :: IO 'Hegel.Report.Report'
 -- prop_reverseInvolutive =
---   'check' defaultSettings do
+--   'check' def do
 --     n  <- 'forAll' (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
 --     xs <- 'forAll' (Gen.list (Gen.int & Gen.build) & Gen.maxSize n & Gen.build)
 --     'annotate' "comparing double reversal"

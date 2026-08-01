@@ -2,6 +2,7 @@
 module Stateful (spec) where
 
 import Control.Monad.IO.Class (liftIO)
+import Data.Default.Class (def)
 import Data.Function ((&))
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import Data.Maybe (isNothing)
@@ -15,7 +16,6 @@ import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, assume, forAll, forAllSilent)
 import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), Stats (..), isFailureNote, renderReportRich)
 import Hegel.Runner (check)
-import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
 
@@ -73,7 +73,7 @@ pushNonZeroBug =
 poolSpec :: Spec
 poolSpec = describe "Pool" do
   it "empty pool draw is Invalid, not Interesting" do
-    report <- check defaultSettings do
+    report <- check def do
       pool <- Pool.new
       -- Immediately draw from an empty pool → AssumeRejected → Invalid.
       _ <- forAllSilent (Pool.reuse pool)
@@ -85,7 +85,7 @@ poolSpec = describe "Pool" do
       other -> expectationFailure ("expected GaveUp (all invalid), got: " <> show other)
 
   it "reuse returns an added value without removing it" do
-    report <- check defaultSettings do
+    report <- check def do
       pool <- Pool.new
       n <- forAll intGen
       Pool.add pool n
@@ -97,7 +97,7 @@ poolSpec = describe "Pool" do
       _ -> False
 
   it "consume returns and removes the value" do
-    report <- check defaultSettings do
+    report <- check def do
       pool <- Pool.new
       n <- forAll intGen
       Pool.add pool n
@@ -121,7 +121,7 @@ statefulSpec = describe "Machine" do
               rules = [increment],
               invariants = [alwaysNonNegative]
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     report.result `shouldSatisfy` \case
       Ok -> True
       _ -> False
@@ -133,7 +133,7 @@ statefulSpec = describe "Machine" do
               rules = [increment],
               invariants = [neverAboveFive]
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     case report.result of
       Counterexample {} -> pure ()
       other -> expectationFailure ("expected Counterexample, got: " <> show other)
@@ -149,7 +149,7 @@ statefulSpec = describe "Machine" do
               rules = [increment],
               invariants = [neverAboveFive]
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     case report.result of
       Counterexample {notes} -> do
         let machinery = [n | n <- notes, isMachinery n.kind]
@@ -171,7 +171,7 @@ statefulSpec = describe "Machine" do
               rules = [increment],
               invariants = [neverAboveFive]
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     case report.result of
       Counterexample {notes} ->
         case filter isFailureNote notes of
@@ -192,7 +192,7 @@ statefulSpec = describe "Machine" do
               rules = [increment],
               invariants = [neverAboveFive]
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     rich <- renderReportRich report
     -- The invariant's assert line (in 'neverAboveFive') is spliced.
     ("assert (n <= 5)" `T.isInfixOf` rich) `shouldBe` True
@@ -209,7 +209,7 @@ statefulSpec = describe "Machine" do
               rules = [push, pushNonZeroBug],
               invariants = []
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     case report.result of
       Counterexample {} -> pure ()
       other -> expectationFailure ("expected Counterexample, got: " <> show other)
@@ -222,7 +222,7 @@ statefulSpec = describe "Machine" do
               rules = [],
               invariants = []
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     case report.result of
       Aborted _ -> pure ()
       other -> expectationFailure ("expected Aborted, got: " <> show other)
@@ -249,7 +249,7 @@ statefulSpec = describe "Machine" do
               rules = [alwaysRejects],
               invariants = []
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     case report.result of
       Ok -> pure () -- livelock guard may allow the machine to "succeed" with 0 steps
       GaveUp _ -> pure ()
@@ -275,7 +275,7 @@ statefulSpec = describe "Machine" do
               rules = [alwaysSucceeds],
               invariants = []
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     report.result `shouldSatisfy` \case
       Ok -> True
       _ -> False
@@ -330,7 +330,7 @@ poolMachine =
 poolMachineSpec :: Spec
 poolMachineSpec = describe "Pool + Machine" do
   it "values added in one rule are drawn back in another" do
-    report <- check defaultSettings (Stateful.run poolMachine)
+    report <- check def (Stateful.run poolMachine)
     report.result `shouldSatisfy` \case
       Ok -> True
       _ -> False

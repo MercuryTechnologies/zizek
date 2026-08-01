@@ -3,6 +3,7 @@ module PropertyChecks (spec) where
 
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ask, runReaderT)
+import Data.Default.Class (def)
 import Data.Function ((&))
 import Data.Maybe (isJust)
 import Data.Text qualified as T
@@ -23,7 +24,6 @@ import Hegel.Property
   )
 import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), Stats (..), isDrawn, renderReport)
 import Hegel.Runner (check)
-import Hegel.Settings (defaultSettings)
 import Test.Hspec
 import UnliftIO.Exception (throwIO, tryAny)
 import UnliftIO.IORef (newIORef, readIORef, writeIORef)
@@ -34,7 +34,7 @@ intR (lo, hi) = Gen.integral & Gen.min lo & Gen.max hi & Gen.build
 spec :: Spec
 spec = do
   it "interleaves draws, notes, and assertions" $ do
-    report <- check defaultSettings do
+    report <- check def do
       x <- forAll (intR (0, 100))
       annotate "first draw done"
       y <- forAll (intR (0, 100))
@@ -44,7 +44,7 @@ spec = do
       _ -> False
 
   it "reports counterexamples through the journal" $ do
-    report <- check defaultSettings do
+    report <- check def do
       x <- forAll (intR (0, 100))
       annotate "drew the first addend"
       y <- forAll (intR (0, 100))
@@ -58,7 +58,7 @@ spec = do
       other -> expectationFailure ("expected a counterexample, got: " <> show other)
 
   it "discards mid-body via assume" $ do
-    report <- check defaultSettings do
+    report <- check def do
       x <- forAll (intR (0, 100))
       assume (x < 50)
       assert (x < 50) "assumed bound holds"
@@ -70,7 +70,7 @@ spec = do
     -- The discard signal is thrown as an asynchronous exception, so a body-level
     -- 'tryAny' must rethrow it; otherwise the x >= 50 cases would run and fail
     -- the assertion.
-    report <- check defaultSettings do
+    report <- check def do
       x <- forAll (intR (0, 100))
       _ <- tryAny (assume (x < 50))
       assert (x < 50) "assumed bound holds despite the catch-all"
@@ -79,7 +79,7 @@ spec = do
       other -> expectationFailure ("expected Ok, got: " <> show other)
 
   it "reports non-assertion exceptions as counterexamples" $ do
-    report <- check defaultSettings do
+    report <- check def do
       x <- forAll (intR (0, 100))
       if x >= 0 then throwIO (userError "boom") else pure ()
     case report.result of
@@ -91,7 +91,7 @@ spec = do
     -- x = y = 50. The capture is written by the reconstruction replay, so
     -- it doubles as a check that reconstruction re-executes the body.
     capture <- newIORef (0, 0)
-    report <- check defaultSettings do
+    report <- check def do
       x <- forAll (intR (0, 1000))
       y <- forAll (intR (0, x))
       writeIORef capture (x, y)
@@ -106,7 +106,7 @@ spec = do
       other -> expectationFailure ("expected a counterexample, got: " <> show other)
 
   it "journals forAllWith renderings but not silent draws" $ do
-    report <- check defaultSettings do
+    report <- check def do
       _x <- forAllWith (\n -> "custom:" <> T.pack (show n)) (intR (0, 10))
       _y <- forAllSilent (intR (0, 10))
       footnote "from the footer"
@@ -124,7 +124,7 @@ spec = do
       other -> expectationFailure ("expected a counterexample, got: " <> show other)
 
   it "carries (===) diffs into the counterexample diff field" $ do
-    report <- check defaultSettings do
+    report <- check def do
       x <- forAll (intR (0, 100))
       x === x + 1
     case report.result of
@@ -141,7 +141,7 @@ spec = do
       other -> expectationFailure ("expected a counterexample, got: " <> show other)
 
   it "hoists application monads and lifts base actions" $ do
-    report <- check defaultSettings $ hoist (`runReaderT` 25) do
+    report <- check def $ hoist (`runReaderT` 25) do
       bound <- lift ask
       x <- forAll (intR (0, bound))
       assert (x <= bound) "stays within the environment bound"

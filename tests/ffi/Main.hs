@@ -16,6 +16,7 @@ import Control.Concurrent (runInBoundThread, threadDelay)
 import Control.Concurrent.Async (cancel, withAsync)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (SomeException, finally, throwIO, try)
+import Data.Default.Class (def)
 import Data.Either (isLeft)
 import Data.Function ((&))
 import Data.Int (Int64)
@@ -32,7 +33,6 @@ import Hegel.Internal.TestCase qualified as TC
 import Hegel.Internal.Tick qualified as Tick
 import Hegel.Property (forEach)
 import Hegel.Runner qualified as Runner
-import Hegel.Settings (defaultSettings)
 import Test.Hspec
 import Test.Tasty (defaultMain)
 import Test.Tasty.Hspec (testSpec)
@@ -262,7 +262,7 @@ asyncTeardownSpec = describe "async teardown" $ do
     cleanedUp <- newIORef False
     withAsync
       ( Runner.check
-          defaultSettings
+          def
           ( forEach (Gen.bool & Gen.build) \_ ->
               putMVar started () *> threadDelay 5_000_000 `finally` writeIORef cleanedUp True
           )

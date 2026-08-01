@@ -6,6 +6,7 @@ import Control.Concurrent (threadDelay)
 import Control.Exception (SomeException, displayException)
 import Control.Monad (replicateM)
 import Control.Monad.IO.Class (liftIO)
+import Data.Default.Class (def)
 import Data.Function ((&))
 import Data.List (sort)
 import Data.Text qualified as T
@@ -61,21 +62,21 @@ spec :: Spec
 spec = describe "Hegel.Property.Fork" do
   describe "Fork.spawn / Fork.join" do
     it "returns the fork's result on join" do
-      report <- check defaultSettings do
+      report <- check def do
         f <- Fork.spawn (pure (42 :: Int))
         v <- Fork.join f
         assert (v == 42) "fork result observed"
       report.result `shouldSatisfy` isOk
 
     it "lets a fork draw independently" do
-      report <- check defaultSettings do
+      report <- check def do
         f <- Fork.spawn (forAll (intR (0, 100)))
         v <- Fork.join f
         assert (v >= 0) "fork drew a value"
       report.result `shouldSatisfy` isOk
 
     it "reports a joined fork's failure as a shrinkable counterexample, not Errored" do
-      report <- check defaultSettings do
+      report <- check def do
         f <- Fork.spawn (assert False "fork failed")
         Fork.join f
       case report.result of
@@ -94,7 +95,7 @@ spec = describe "Hegel.Property.Fork" do
       -- unwind instead, so the test observes "first" rather than a
       -- leaked-fork malformed-test abort.
       let oneRun = do
-            report <- check defaultSettings do
+            report <- check def do
               Fork.scoped (assert False "first") \f1 ->
                 Fork.scoped (assert False "second") \f2 -> do
                   _ <- Fork.join f1
@@ -107,7 +108,7 @@ spec = describe "Hegel.Property.Fork" do
       results `shouldSatisfy` all (== Just "first")
 
     it "folds a joined fork's notes under a Fork N header" do
-      report <- check defaultSettings do
+      report <- check def do
         f <- Fork.spawn (annotateShow (1 :: Int))
         _ <- Fork.join f
         assert False "force a counterexample so the journal renders"
@@ -118,7 +119,7 @@ spec = describe "Hegel.Property.Fork" do
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
     it "splices a fork's source into the rich report under Fork N:, distinct from Branch N:" do
-      report <- check defaultSettings do
+      report <- check def do
         f <- Fork.spawn (assert False "fork failed")
         Fork.join f
       rich <- renderReportRich report
@@ -132,7 +133,7 @@ spec = describe "Hegel.Property.Fork" do
       -- would double the rendered value up on itself. The value is a
       -- distinctive number, not e.g. "99", so it can't collide with the
       -- source splice's own context lines, including this comment.
-      report <- check defaultSettings do
+      report <- check def do
         annotateShow (424242 :: Int)
         f <- Fork.spawn (assert False "fork failed")
         Fork.join f
@@ -141,7 +142,7 @@ spec = describe "Hegel.Property.Fork" do
       ("424242: 424242" `T.isInfixOf` rich) `shouldBe` False
 
     it "Fork.poll observes a fork's outcome without consuming it" do
-      report <- check defaultSettings do
+      report <- check def do
         f <- Fork.spawn (pure (7 :: Int))
         mr <- pollUntilSettled f
         assert (case mr of Just (Right 7) -> True; _ -> False) "poll observed the fork's successful result"
@@ -158,7 +159,7 @@ spec = describe "Hegel.Property.Fork" do
       -- depending on global mutable state, and it trips the non-determinism
       -- health check. Keeping every racy access inside its own clone avoids
       -- that.
-      report <- check defaultSettings do
+      report <- check def do
         pool <- Pool.new
         Pool.add pool (1 :: Int)
         Pool.add pool (2 :: Int)
@@ -172,7 +173,7 @@ spec = describe "Hegel.Property.Fork" do
       report.result `shouldSatisfy` isOk
 
     it "supports a fork whose own body forks and joins another fork" do
-      report <- check defaultSettings do
+      report <- check def do
         outer <- Fork.spawn do
           inner <- Fork.spawn (pure (41 :: Int))
           v <- Fork.join inner
@@ -183,7 +184,7 @@ spec = describe "Hegel.Property.Fork" do
 
   describe "leaked forks" do
     it "fails the case as a malformed test when a fork is never joined or cancelled" do
-      report <- check defaultSettings do
+      report <- check def do
         _ <- Fork.spawn (pure ())
         pure ()
       case report.result of
@@ -191,7 +192,7 @@ spec = describe "Hegel.Property.Fork" do
         other -> expectationFailure ("expected Aborted Errored, got: " <> show other)
 
     it "folds a leaked fork's own failure text into the malformed-test message" do
-      report <- check defaultSettings do
+      report <- check def do
         f <- Fork.spawn (assert False "fork failed before anyone joined it")
         -- Deterministically wait for the leaked fork to actually finish
         -- before letting the case end, without joining or cancelling it, so
@@ -240,7 +241,7 @@ spec = describe "Hegel.Property.Fork" do
   describe "Fork.scoped" do
     it "cancels a still-running fork when the scope exits, without waiting for it" do
       reachedRef <- newIORef False
-      report <- check defaultSettings do
+      report <- check def do
         Fork.scoped
           (liftIO (threadDelay 200000) *> liftIO (writeIORef reachedRef True))
           (\_ -> pure ())
@@ -249,14 +250,14 @@ spec = describe "Hegel.Property.Fork" do
       reached `shouldBe` False
 
     it "propagates a body failure when joined inside use" do
-      report <- check defaultSettings do
+      report <- check def do
         Fork.scoped (assert False "scoped body failed") Fork.join
       case report.result of
         Counterexample {message} -> message `shouldBe` "scoped body failed"
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
     it "yields the cancelled outcome when polled after Fork.scoped already released it" do
-      report <- check defaultSettings do
+      report <- check def do
         stash <- liftIO (newIORef Nothing)
         Fork.scoped spinForever (\f -> liftIO (writeIORef stash (Just f)))
         Just f <- liftIO (readIORef stash)
@@ -265,6 +266,6 @@ spec = describe "Hegel.Property.Fork" do
       report.result `shouldSatisfy` isOk
 
     it "does not leak when the caller never explicitly joins or cancels inside use" do
-      report <- check defaultSettings do
+      report <- check def do
         Fork.scoped (pure (1 :: Int)) (\_ -> pure ())
       report.result `shouldSatisfy` isOk

@@ -56,6 +56,7 @@
 module Main (main) where
 
 import Control.Monad.IO.Class (liftIO)
+import Data.Default.Class (def)
 import Data.Function ((&))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -79,7 +80,6 @@ import Hegel.Report (Report (..), renderReportRichAnsi, renderReportRichAnsiWith
 import Hegel.Report.Style qualified as Style
 import Hegel.Report.Style (defaultStyle)
 import Hegel.Runner (check)
-import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import UnliftIO.IORef (IORef, modifyIORef', newIORef, readIORef)
 
@@ -95,7 +95,7 @@ main = do
   runScenario "8: fork — spawned worker fails independently, top-level lines unlabeled" forkedWorkerProperty
 
 runScenario :: Text -> Property () -> IO ()
-runScenario title prop = showReport title =<< check defaultSettings prop
+runScenario title prop = showReport title =<< check def prop
 
 -- | Print one report through the wired rich ANSI renderer.
 showReport :: Text -> Report -> IO ()
@@ -108,7 +108,7 @@ showReport title report = do
 -- itself — plus the ascii table via the options variant.
 runTraceScenario :: Bool -> Text -> Property () -> IO ()
 runTraceScenario withAscii title prop = do
-  report <- check defaultSettings prop
+  report <- check def prop
   showReport title report
   if withAscii
     then do

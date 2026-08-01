@@ -4,6 +4,7 @@ module Finalizers (spec) where
 import Control.Exception (displayException)
 import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
+import Data.Default.Class (def)
 import Data.Function ((&))
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -47,7 +48,7 @@ spec :: Spec
 spec = describe "registerFinalizer" do
   it "runs once per case on success, with no cross-case bleed" do
     ref <- newIORef (0 :: Int)
-    report <- check defaultSettings do
+    report <- check def do
       registerFinalizer (modifyIORef' ref (+ 1))
       pure ()
     count <- readIORef ref
@@ -60,7 +61,7 @@ spec = describe "registerFinalizer" do
 
   it "runs on a failing case" do
     ran <- newIORef False
-    report <- check defaultSettings do
+    report <- check def do
       registerFinalizer (writeIORef ran True)
       _ <- forAll (intR (0, 100))
       failure "always fails"
@@ -71,7 +72,7 @@ spec = describe "registerFinalizer" do
 
   it "runs on a discarded case" do
     ran <- newIORef False
-    report <- check defaultSettings do
+    report <- check def do
       registerFinalizer (writeIORef ran True)
       discard
     readIORef ran `shouldReturn` True
@@ -103,7 +104,7 @@ spec = describe "registerFinalizer" do
     readIORef counter `shouldReturn` n
 
   it "aborts the run as Errored when a finalizer throws" do
-    report <- check defaultSettings do
+    report <- check def do
       registerFinalizer (throwIO (userError "teardown boom"))
       pure ()
     case report.result of
@@ -114,7 +115,7 @@ spec = describe "registerFinalizer" do
     -- A finalizer runs after the case is markComplete'd, so a discard/stop it
     -- throws is misuse, not a live signal to honor. The drain must capture it
     -- (→ Errored), not let it escape check uncaught and crash the host.
-    report <- check defaultSettings do
+    report <- check def do
       registerFinalizer (discard :: IO ())
       pure ()
     case report.result of
@@ -122,7 +123,7 @@ spec = describe "registerFinalizer" do
       other -> expectationFailure ("expected Aborted Errored, got: " <> show other)
 
   it "finalizer failure wins over a body counterexample, but surfaces the case origin" do
-    report <- check defaultSettings do
+    report <- check def do
       registerFinalizer (throwIO (userError "teardown boom"))
       _ <- forAll (intR (0, 100))
       failure "body fails too"
@@ -139,7 +140,7 @@ spec = describe "registerFinalizer" do
     --
     -- The run's own exception is the primary diagnostic and must survive
     -- the drain, rather than being replaced by the finalizer's FinalizerFailed.
-    report <- check defaultSettings do
+    report <- check def do
       registerFinalizer (throwIO (userError "teardown boom"))
       throwIO (MalformedTest "malformed body")
     case report.result of
@@ -154,7 +155,7 @@ spec = describe "registerFinalizer" do
     -- reconstruction replay, never the live/shrink cases (which are Silent).
     -- Decision: keep the counterexample, attach a footnote (no further cases to
     -- contaminate), rather than aborting as on the live path.
-    report <- check defaultSettings do
+    report <- check def do
       env <- askEnv
       let recording = case env.journal of
             Recording _ -> True
@@ -188,7 +189,7 @@ spec = describe "registerFinalizer" do
               rules = [increment],
               invariants = [neverAboveFive]
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     case report.result of
       Counterexample {} -> pure ()
       other -> expectationFailure ("expected Counterexample, got: " <> show other)

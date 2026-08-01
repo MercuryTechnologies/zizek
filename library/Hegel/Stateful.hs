@@ -27,7 +27,7 @@
 --   }
 --
 -- test_counter :: IO ()
--- test_counter = check_ defaultSettings (Stateful.run counterMachine)
+-- test_counter = check_ def (Stateful.run counterMachine)
 -- @
 --
 -- = Notes

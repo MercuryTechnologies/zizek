@@ -2,6 +2,7 @@
 -- outside a property run.
 module Sampling (spec) where
 
+import Data.Default.Class (def)
 import Data.Function ((&))
 import Data.List (nub)
 import Hegel (Gen, defaultSettings, sample, samples)
@@ -16,7 +17,7 @@ spec :: Spec
 spec = do
   describe "sample" do
     it "returns a value from the generator" do
-      n <- sample defaultSettings (intR (0, 100))
+      n <- sample def (intR (0, 100))
       n `shouldSatisfy` \x -> x >= 0 && x <= 100
 
     it "reproduces the same value under the same seed" do
@@ -33,17 +34,17 @@ spec = do
       a `shouldNotBe` b
 
     it "throws on a generator that always discards" do
-      sample defaultSettings Gen.discard `shouldThrow` anyIOException
+      sample def Gen.discard `shouldThrow` anyIOException
 
   describe "samples" do
     it "returns at most n values" do
-      xs <- samples defaultSettings 50 (intR (0, 1000000))
+      xs <- samples def 50 (intR (0, 1000000))
       length xs `shouldSatisfy` (<= 50)
 
     it "returns more than one distinct value" do
-      xs <- samples defaultSettings 50 (intR (0, 1000000))
+      xs <- samples def 50 (intR (0, 1000000))
       length (nub xs) `shouldSatisfy` (> 1)
 
     it "throws when the generator's valid rate is too low to pass FilterTooMuch" do
-      samples defaultSettings 100 (Gen.filtered (const False) (Gen.int & Gen.build))
+      samples def 100 (Gen.filtered (const False) (Gen.int & Gen.build))
         `shouldThrow` anyIOException

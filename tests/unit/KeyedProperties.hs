@@ -45,7 +45,7 @@ spec = do
 
   describe "withDatabaseKey" $ do
     it "sets the key without changing the store" $ do
-      let s = withDatabaseKey "k" defaultSettings
+      let s = withDatabaseKey "k" def
       s.databaseKey `shouldBe` Just "k"
       s.database `shouldSatisfy` isDisabled
 

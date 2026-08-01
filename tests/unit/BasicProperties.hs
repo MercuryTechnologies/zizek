@@ -1,5 +1,6 @@
 module BasicProperties (spec) where
 
+import Data.Default.Class (def)
 import Data.Function ((&))
 import Hegel (Gen, prop)
 import Hegel.Gen qualified as Gen
@@ -20,7 +21,7 @@ spec = do
       n `shouldSatisfy` (\x -> x >= 0 && x <= 100)
 
   it "shrinks to the smallest forbidden value" $ do
-    report <- check defaultSettings $ forEach (intR (0, 100)) $ \n ->
+    report <- check def $ forEach (intR (0, 100)) $ \n ->
       n `shouldSatisfy` (< 42)
     case report.result of
       Counterexample {notes} ->

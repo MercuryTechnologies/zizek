@@ -67,6 +67,7 @@ module Hegel
   )
 where
 
+import Data.Default.Class (def)
 import Hegel.Assertion
 import Hegel.Backend
 import Hegel.Database
@@ -108,7 +109,7 @@ import UnliftIO (MonadUnliftIO)
 -- use inside a test framework's @it@\/@testCase@, where the framework owns the
 -- label and reports the thrown failure.
 prop :: (Show a) => Gen a -> (a -> IO ()) -> IO ()
-prop gen body = check_ defaultSettings (forEach gen body)
+prop gen body = check_ def (forEach gen body)
 
 -- | Run a stateful test specified by a 'Machine'. Sugar for 'Stateful.run'.
 runMachine :: (MonadUnliftIO m) => Machine s m -> PropertyT m ()

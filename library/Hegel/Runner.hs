@@ -169,7 +169,7 @@ drawOneCase ctx gen run = do
 -- 'Hegel.HealthCheck.FilterTooMuch'.
 --
 -- __Do not call this from inside a 'Property' body!__
--- 
+--
 -- See the 'sample' documentation for additional details.
 samples :: Settings -> Int -> Gen a -> IO [a]
 samples settings n gen =

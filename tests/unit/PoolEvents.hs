@@ -3,6 +3,7 @@
 -- with the note journal.
 module PoolEvents (spec) where
 
+import Data.Default.Class (def)
 import Data.List (nub, sort)
 import Hegel.Property (assert)
 import Hegel.Report
@@ -15,7 +16,6 @@ import Hegel.Report
     isDrawn,
   )
 import Hegel.Runner (check)
-import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
 import TraceFixtures (eventfulMachine)
@@ -24,7 +24,7 @@ import TraceFixtures (eventfulMachine)
 -- stream to the assertion body.
 withEventfulCounterexample :: ([Note] -> [Event] -> Expectation) -> Expectation
 withEventfulCounterexample body = do
-  report <- check defaultSettings (Stateful.run eventfulMachine)
+  report <- check def (Stateful.run eventfulMachine)
   case report.result of
     Counterexample {notes, events} -> body notes events
     other -> expectationFailure ("expected Counterexample, got: " <> show other)
@@ -89,7 +89,7 @@ spec = describe "pool-event stream" do
                     assert (n <= 5) "counter does not exceed 5"
                 ]
             }
-    report <- check defaultSettings (Stateful.run machine)
+    report <- check def (Stateful.run machine)
     case report.result of
       Counterexample {events} -> events `shouldBe` []
       other -> expectationFailure ("expected Counterexample, got: " <> show other)

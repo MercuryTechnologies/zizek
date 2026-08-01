@@ -25,6 +25,7 @@ module Hegel.Hspec
 where
 
 import Control.Monad ((>=>))
+import Data.Default.Class (def)
 import Data.Maybe (isJust)
 import Data.Text qualified as T
 import GHC.Stack (CallStack, HasCallStack, SrcLoc (..), callStack, withFrozenCallStack)
@@ -53,7 +54,7 @@ import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 instance (m ~ IO) => Hspec.Example (arg -> PropertyT m ()) where
   type Arg (arg -> PropertyT m ()) = arg
   evaluateExample mkProp _params aroundAction _progress =
-    withAroundResult aroundAction (runProperty defaultSettings . mkProp)
+    withAroundResult aroundAction (runProperty def . mkProp)
 
 -- | A property paired with the 'Settings' it should run under, so the
 -- example-database key derived by 'prop'\/'propWith' reaches the runner.

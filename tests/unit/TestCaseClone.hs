@@ -11,6 +11,7 @@ module TestCaseClone (spec) where
 import Control.Concurrent.Async (concurrently_)
 import Control.Monad (replicateM_)
 import Control.Monad.IO.Class (liftIO)
+import Data.Default.Class (def)
 import Data.Function ((&))
 import Data.Text (Text)
 import Hegel (Gen)
@@ -46,7 +47,7 @@ annotatedValues = \case
 spec :: Spec
 spec = describe "TestCase.withClone" do
   it "gives the clone its own event and draw buffers, not the source's" do
-    report <- check defaultSettings do
+    report <- check def do
       env <- askEnv
       liftIO $ TestCase.withClone env.testCase \cloned -> do
         (cloned.events == env.testCase.events) `shouldBe` False
@@ -54,7 +55,7 @@ spec = describe "TestCase.withClone" do
     report.result `shouldSatisfy` isOk
 
   it "draws independently from the clone" do
-    report <- check defaultSettings do
+    report <- check def do
       env <- askEnv
       liftIO $ TestCase.withClone env.testCase \cloned -> do
         _ <- draw cloned intGen
@@ -62,7 +63,7 @@ spec = describe "TestCase.withClone" do
     report.result `shouldSatisfy` isOk
 
   it "drives the source and its clone concurrently with no HEGEL_E_CONCURRENT_USE" do
-    report <- check defaultSettings do
+    report <- check def do
       env <- askEnv
       liftIO $ TestCase.withClone env.testCase \cloned ->
         concurrently_
@@ -71,7 +72,7 @@ spec = describe "TestCase.withClone" do
     report.result `shouldSatisfy` isOk
 
   it "repeated clone/free cycles against one source keep working" do
-    report <- check defaultSettings do
+    report <- check def do
       env <- askEnv
       liftIO $
         replicateM_ 20 $

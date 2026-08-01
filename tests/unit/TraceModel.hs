@@ -2,6 +2,7 @@
 -- end-to-end run through the engine.
 module TraceModel (spec) where
 
+import Data.Default.Class (def)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Hegel.Report
@@ -17,7 +18,6 @@ import Hegel.Report
 import Hegel.Report.Trace (Identity (..), Step (..))
 import Hegel.Report.Trace qualified as Trace
 import Hegel.Runner (check)
-import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
 import TraceFixtures (eventAt, eventfulMachine, h1, header, noteAt)
@@ -226,7 +226,7 @@ spec = do
 
   describe "end to end (engine)" do
     it "a real pool machine builds a trace with a failure and identities" do
-      report <- check defaultSettings (Stateful.run eventfulMachine)
+      report <- check def (Stateful.run eventfulMachine)
       case report.result of
         Counterexample {notes, events} -> do
           let t = Trace.build notes events
@@ -235,7 +235,7 @@ spec = do
         other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
     it "respond reaches Step.response through a real run" do
-      report <- check defaultSettings (Stateful.run eventfulMachine)
+      report <- check def (Stateful.run eventfulMachine)
       case report.result of
         Counterexample {notes, events} -> do
           let t = Trace.build notes events

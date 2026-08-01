@@ -6,16 +6,17 @@
 module Alphabet (spec) where
 
 import Data.Char (GeneralCategory (..), generalCategory, ord)
+import Data.Default.Class (def)
 import Data.Function ((&))
 import Data.Set qualified as Set
-import Hegel (defaultSettings, prop, samples)
+import Hegel (prop, samples)
 import Hegel.Alphabet qualified as Alphabet
 import Hegel.Gen qualified as Gen
 import Test.Hspec
 
 -- | The distinct characters a builder draws over @n@ test cases.
 sample :: Int -> Gen.CharBuilder -> IO (Set.Set Char)
-sample n b = Set.fromList <$> samples defaultSettings n (b & Gen.build)
+sample n b = Set.fromList <$> samples def n (b & Gen.build)
 
 -- | A codepoint-range membership predicate, inclusive on both ends.
 inRange :: Int -> Int -> Char -> Bool

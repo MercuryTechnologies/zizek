@@ -3,6 +3,7 @@
 -- the full path.
 module LogRendering (spec) where
 
+import Data.Default.Class (def)
 import Data.Function ((&))
 import Data.List (nub)
 import Data.Text (Text)
@@ -29,7 +30,6 @@ import Hegel.Report.Style (GlyphTable (..), Style (..), defaultStyle)
 import Hegel.Report.Style qualified as Style
 import Hegel.Report.Trace qualified as Trace
 import Hegel.Runner (check)
-import Hegel.Settings (defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import System.Environment (setEnv, unsetEnv)
 import System.IO (stdout)
@@ -276,7 +276,7 @@ spec = do
       -- The drift guard for the transliteration map: splice chrome, event log
       -- glyphs, phrase typography — everything a real report emits must map
       -- to ascii, with \\x escapes reserved for genuinely foreign user text.
-      report <- check defaultSettings (Stateful.run transferMachine)
+      report <- check def (Stateful.run transferMachine)
       out <- renderReportRich (report {databaseKey = Just "k"} :: Report)
       Style.sevenBitClean out `shouldNotSatisfy` T.isInfixOf "\\x"
 
@@ -288,7 +288,7 @@ spec = do
   describe "forAllWithLabel" do
     it "journals the label with the drawn value (name=value)" do
       report <-
-        check defaultSettings do
+        check def do
           n <- forAllWithLabel "qty" (Gen.int & Gen.min 5 & Gen.max 5 & Gen.build)
           assert (n /= (5 :: Int)) "boom"
       case report.result of
@@ -297,7 +297,7 @@ spec = do
 
   describe "end to end (engine)" do
     it "a real pool machine renders an event log with a failing row" do
-      report <- check defaultSettings (Stateful.run eventfulMachine)
+      report <- check def (Stateful.run eventfulMachine)
       case report.result of
         Counterexample {notes, events} -> do
           let trace = Trace.build notes events
