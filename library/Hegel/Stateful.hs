@@ -37,8 +37,9 @@
 --   test must tolerate repetition; reset\/setup belongs in 'initial'.
 --
 -- * Preconditions are expressed with 'assume'\/'discard' at the head of a
---   rule's 'apply'. A rejected precondition skips the step (the attempt still
---   counts toward the livelock guard) but does not discard the whole sequence.
+--   rule's 'apply'; a rejected precondition skips the step without discarding
+--   the entire sequence, however the skipped step still counts toward
+--   'Hegel.Settings.statefulStepCount'.
 --
 -- * @StateT s (PropertyT m)@ rules adapt with
 --   @\\s -> execStateT myStateRule s :: s -> PropertyT m s@.
@@ -151,10 +152,12 @@ data Machine s m = Machine
 -- machine is done or the choice budget is exhausted, checking invariants
 -- after every successful step.
 --
--- The engine owns the step cap; this only polls for the next rule to run. The
--- poll happens unconditionally, including on replay: it is part of the choice
--- sequence, so skipping one would misalign every later draw and the
--- counterexample would not reproduce.
+-- The engine owns the step cap and bounds every case to at most
+-- 'Hegel.Settings.statefulStepCount' steps.
+--
+-- This only polls for the next rule to run; the poll happens unconditionally,
+-- including on replay, as it is part of the choice sequence, so skipping one
+-- would misalign every later draw and the counterexample would not reproduce.
 run :: forall s m. (MonadUnliftIO m) => Machine s m -> PropertyT m ()
 run machine = do
   when (null machine.rules) $
@@ -195,58 +198,53 @@ run machine = do
   stepNote "Initial invariant check."
   checkInvariants s0
 
-  -- Ported from stateful.rs:255-274. The engine owns the step cap; this loop
-  -- only polls for the next rule and stops on 'Nothing'. @attemptBudget@ is a
-  -- flat livelock backstop, not a termination mechanism: an always-succeeding
-  -- machine hits the engine's own cap long before it.
+  -- Ported from stateful.rs:255-274:
+  --
+  -- The engine halts the loop once it has handed out 'Hegel.Settings.statefulStepCount'
+  -- steps, counting steps that trip 'assume'.
+  --
+  -- This loop only polls for the next rule and stops on 'Nothing'.
   let loop :: s -> Int -> PropertyT m ()
-      loop s attempts
-        | attempts >= attemptBudget = pure ()
-        | otherwise = do
-            -- STOP_TEST from next_rule propagates to the runner; we don't catch it.
-            mRuleIndex <- liftIO (stateMachineNextRule tc machineId)
-            case mRuleIndex of
-              -- HEGEL_STATE_MACHINE_DONE: the engine says stop.
-              Nothing -> pure ()
-              Just ruleIndex -> do
-                let rule = case lookup ruleIndex (zip [0 ..] machine.rules) of
-                      Just r -> r
-                      -- @libhegel@ guarantees indices in @[0, num_rules)@, so
-                      -- this is unreachable unless the engine itself is
-                      -- misbehaving.
-                      Nothing ->
-                        error
-                          ( "Hegel.Stateful.run: libhegel returned rule index "
-                              <> show ruleIndex
-                              <> " for a machine with "
-                              <> show (length machine.rules)
-                              <> " rules. This should be impossible; please report it as a libhegel bug."
-                          )
-                let stepIndex = attempts + 1
-                note
-                  (StepHeader stepIndex rule.name)
-                  Nothing
-                  ("Step " <> T.pack (show stepIndex) <> ": " <> rule.name)
-                -- Only control signals are caught here; a real failure is
-                -- journaled in-band (via 'withFailureNote') and then
-                -- propagates out to the runner as the counterexample.
-                verdict <-
-                  withRunInIO \runInIO ->
-                    (Right <$> runInIO (nested (withFailureNote (withScope InStep (rule.apply s)))))
-                      `catchControl` (pure . Left)
-                case verdict of
-                  Right s' -> do
-                    checkInvariants s'
-                    loop s' (attempts + 1)
-                  Left Stop -> pure ()
-                  Left Assume -> do
-                    stepNote "Rule stopped early due to violated assumption."
-                    loop s (attempts + 1)
-      -- A fixed backstop, not a cap-scaling constant: the engine's own step
-      -- cap already bounds dispatched rules (including 'assume'-tripping
-      -- ones), so this only guards against genuine livelock.
-      attemptBudget :: Int
-      attemptBudget = 1000
+      loop s attempts = do
+        -- STOP_TEST from next_rule propagates to the runner; we don't catch it.
+        mRuleIndex <- liftIO (stateMachineNextRule tc machineId)
+        case mRuleIndex of
+          -- HEGEL_STATE_MACHINE_DONE: the engine says stop.
+          Nothing -> pure ()
+          Just ruleIndex -> do
+            let rule = case lookup ruleIndex (zip [0 ..] machine.rules) of
+                  Just r -> r
+                  -- @libhegel@ guarantees indices in @[0, num_rules)@, so
+                  -- this is unreachable unless the engine itself is
+                  -- misbehaving.
+                  Nothing ->
+                    error
+                      ( "Hegel.Stateful.run: libhegel returned rule index "
+                          <> show ruleIndex
+                          <> " for a machine with "
+                          <> show (length machine.rules)
+                          <> " rules. This should be impossible; please report it as a libhegel bug."
+                      )
+            let stepIndex = attempts + 1
+            note
+              (StepHeader stepIndex rule.name)
+              Nothing
+              ("Step " <> T.pack (show stepIndex) <> ": " <> rule.name)
+            -- Only control signals are caught here; a real failure is
+            -- journaled in-band  and then propagates out to the runner as the
+            -- counterexample.
+            verdict <-
+              withRunInIO \runInIO ->
+                (Right <$> runInIO (nested (withFailureNote (withScope InStep (rule.apply s)))))
+                  `catchControl` (pure . Left)
+            case verdict of
+              Right s' -> do
+                checkInvariants s'
+                loop s' (attempts + 1)
+              Left Stop -> pure ()
+              Left Assume -> do
+                stepNote "Rule stopped early due to violated assumption."
+                loop s (attempts + 1)
 
   loop s0 0
 {-# INLINEABLE run #-}

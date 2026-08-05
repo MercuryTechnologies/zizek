@@ -19,6 +19,16 @@ import Hegel.Verbosity (Verbosity (..))
 data Settings = Settings
   { -- | Number of test cases to attempt.
     testCases :: !Int,
+    -- | Target number of steps each stateful test case runs. Every case
+    -- runs at least one step and at most this many. The engine chooses
+    -- where in that range to stop.
+    --
+    -- Must be at least 1.
+    --
+    -- __NOTE__: There is an upstream bug that can cause the underlying
+    -- @libhegel@ engine to produce a 'Hegel.Report.ReplayDiverged' error when
+    -- this is set above the default value of @50@.
+    statefulStepCount :: !Int,
     -- | RNG seed. 'Nothing' picks a fresh seed each run.
     seed :: !(Maybe Word64),
     -- | Derive the seed from a hash of 'databaseKey' so runs are
@@ -50,15 +60,14 @@ data Settings = Settings
   }
   deriving stock (Show)
 
--- | Defaults for a property run: 100 test cases, a fresh seed each run,
--- all phases enabled, the automatic backend, quiet output, and persistence
--- disabled.
---
--- > defaultSettings { testCases = 1000 }
+-- | Defaults for a property run: 100 test cases, up to 50 steps per
+-- stateful test case, a fresh seed each run, all phases enabled, the
+-- automatic backend, quiet output, and persistence disabled.
 defaultSettings :: Settings
 defaultSettings =
   Settings
     { testCases = 100,
+      statefulStepCount = 50,
       seed = Nothing,
       derandomize = False,
       database = DatabaseDisabled,

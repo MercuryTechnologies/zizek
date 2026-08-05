@@ -6,9 +6,11 @@
  * in Hegel.Internal.Foreign.Raw).
  *
  * Each function is an EXHAUSTIVE switch with no `default:`. Compiled with
- * `-Werror=switch-enum`, the build FAILS if hegel-rust adds a new enumerator
- * we don't handle — naming the missing value — so a libhegel bump can't
- * silently widen an enum out from under the closed ADTs.
+ * `-Werror=switch-enum -Werror=switch`, the build FAILS if hegel-rust adds a
+ * new enumerator we don't handle — naming the missing value — so a libhegel
+ * bump can't silently widen an enum out from under the closed ADTs. Both
+ * flags matter on clang: a missing case with no `default:` is diagnosed
+ * under `-Wswitch`, not `-Wswitch-enum`.
  *
  * Parameters take the wire width our `Witch.into` produces (Word32 for
  * Backend/Verbosity/Phase/HealthCheck/Status, Word64 for Label; RunStatus and
@@ -98,6 +100,7 @@ int hegel_guard_label(uint64_t x) {
     case HEGEL_LABEL_BOOLEAN:
     case HEGEL_LABEL_BYTES:
     case HEGEL_LABEL_STRING:
+    case HEGEL_LABEL_STATEFUL_RULE:
       return 0;
   }
   return -1;

@@ -284,7 +284,13 @@ test-suite ffi
   pkgconfig-depends: hegel
   -- Closed-world guard: fails to build if libhegel adds an enum variant.
   c-sources: cbits/wire_enum_guard.c
-  cc-options: -Werror=switch-enum
+  -- Both flags are needed: our switches have no `default:`, and on clang a
+  -- missing case with no default is diagnosed under -Wswitch, not
+  -- -Wswitch-enum.
+  cc-options:
+    -Werror=switch-enum
+    -Werror=switch
+
   other-modules: WireEnumCoverage
   ghc-options:
     -threaded

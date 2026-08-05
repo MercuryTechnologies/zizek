@@ -145,6 +145,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_settings_set_mode,
     hegel_settings_set_backend,
     hegel_settings_set_test_cases,
+    hegel_settings_set_stateful_step_count,
     hegel_settings_set_verbosity,
     hegel_settings_set_seed,
     hegel_settings_set_derandomize,
@@ -709,6 +710,10 @@ foreign import ccall unsafe "hegel_settings_set_backend"
 foreign import ccall unsafe "hegel_settings_set_test_cases"
   hegel_settings_set_test_cases :: Ptr HegelContext -> Ptr HegelSettings -> Word64 -> IO CInt
 
+-- | Set the target number of steps a stateful test case runs (default: 50).
+foreign import ccall unsafe "hegel_settings_set_stateful_step_count"
+  hegel_settings_set_stateful_step_count :: Ptr HegelContext -> Ptr HegelSettings -> Int64 -> IO CInt
+
 -- | Set engine output verbosity.
 foreign import ccall unsafe "hegel_settings_set_verbosity"
   hegel_settings_set_verbosity :: Ptr HegelContext -> Ptr HegelSettings -> Word32 -> IO CInt
@@ -1246,19 +1251,16 @@ foreign import ccall unsafe "hegel_string_generator_free"
 -- 'HEGEL_E_ASSUME' when the draw rejected itself (e.g. an email exceeding the
 -- RFC length cap — discard the test case as invalid).
 --
--- __The one per-test-case primitive imported @safe@, deliberately.__ Every
--- other draw in @$typeddraws@ (boolean\/integer\/float\/bytes\/uuid) is a
--- single bounded RNG-consuming operation, same as the rest of
--- @$pertestcase@ — that's what makes @unsafe@ safe to use there (see the
--- rationale on that section). A regex-backed draw is not: the engine
--- generates a candidate from the pattern's AST and, when a deferred check
--- (a lookaround, an anchor) fails, retries up to 5 times before giving up —
--- each retry is a full re-draw, so the worst case is measurably more than
--- the \~1.1µs floor the @unsafe@ calls are tuned for (still bounded, just
--- not µs-scale). An @unsafe@ call pins the calling capability for however
--- long that takes, with no GC or other Haskell thread able to run on it
--- meanwhile; @safe@'s ~0.1–0.5µs release\/reacquire overhead is a much
--- better trade against that tail than against the plain draws' floor.
+-- __NOTE__ Every other draw in @$typeddraws@ is a single, bounded, RNG-consuming
+-- operation, same as the rest of @$pertestcase@, which lets us issue them as
+-- @unsafe@ FFI calls.
+--
+-- A regex-backed draw, however, is not: the engine generates a candidate from
+-- the pattern's AST and, when a deferred check fails, retries up to 5 times
+-- before giving up.
+--
+-- Each retry is a full re-draw, so the worst case is long enough that we don't
+-- want to block a GHC capability the whole time.
 foreign import ccall safe "hegel_generate_string"
   hegel_generate_string
     :: Ptr HegelContext

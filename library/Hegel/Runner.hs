@@ -226,6 +226,7 @@ applySettings mode ctx s ptr = do
   chk $ hegel_settings_set_mode ctx ptr mode
   chk $ hegel_settings_set_backend ctx ptr (Witch.into @Word32 s.backend)
   chk $ hegel_settings_set_test_cases ctx ptr (fromIntegral s.testCases)
+  chk $ hegel_settings_set_stateful_step_count ctx ptr (fromIntegral s.statefulStepCount)
   chk $ hegel_settings_set_verbosity ctx ptr (Witch.into @Word32 s.verbosity)
 
   case s.seed of

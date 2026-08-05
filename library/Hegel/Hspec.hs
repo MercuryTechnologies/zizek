@@ -12,10 +12,14 @@
 --     reverse (reverse xs) 'Hegel.Property.===' xs
 -- @
 --
--- Use 'propWith' for explicit 'Settings'; @propWith def@ runs a property with
--- no persistence. The @arg ->@ 'Hspec.Example' instance composes with hspec's
--- @around@\/fixtures. For a property over a custom base monad (e.g. a
--- @ReaderT Env IO@ application stack), use 'propT'\/'propWithT'.
+-- Use 'propWith' for explicit 'Settings'; for example @propWith def@ runs a
+-- property without the replay database.
+-- 
+-- For a property over a custom base monad, use 'propT'\/'propWithT'.
+--
+-- __NOTE__: While the @arg ->@ 'Hspec.Example' instance composes with hspec's
+-- @around@\/fixtures, it's important to keep track of how stateful fixtures
+-- can interact with shrinking and replays.
 module Hegel.Hspec
   ( prop,
     propT,
@@ -178,9 +182,10 @@ propWithT ::
   Hspec.SpecWith env
 propWithT settings = keyedT callStack settings
 
--- | Shared implementation of 'propT'\/'propWithT'. Takes the 'CallStack'
--- explicitly so the public entry points capture the user's call site (for the
--- module salt) rather than this module.
+-- | Shared implementation of 'propT'\/'propWithT'.
+--
+-- Takes the 'CallStack' explicitly so the public entry points capture the
+-- user's call site for the module salt.
 keyedT ::
   CallStack ->
   Settings ->
@@ -196,8 +201,7 @@ keyedT cs settings nat label body = do
   Hspec.it label (HegelExampleT settings' nat body)
 
 -- | Returns 'True' when ANSI color output is appropriate: the output handle
--- is a terminal AND the @NO_COLOR@ environment variable is unset (per
--- <https://no-color.org>).
+-- is a terminal AND the @NO_COLOR@ environment variable is unset.
 shouldUseColor :: IO Bool
 shouldUseColor = do
   noColor <- isJust <$> lookupEnv "NO_COLOR"

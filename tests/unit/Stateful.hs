@@ -1,6 +1,7 @@
 -- | Unit tests for 'Hegel.Pool' and 'Hegel.Stateful'.
 module Stateful (spec) where
 
+import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Default.Class (def)
 import Data.Function ((&))
@@ -14,8 +15,9 @@ import Hegel.Gen qualified as Gen
 import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, assume, forAll, forAllSilent)
-import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), Stats (..), isFailureNote, renderReportRich)
+import Hegel.Report (Abort (..), Note (..), NoteKind (..), Report (..), Result (..), isFailureNote, renderReportRich)
 import Hegel.Runner (check)
+import Hegel.Settings (Settings (..))
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
 
@@ -32,6 +34,35 @@ increment :: Stateful.Rule Counter IO
 increment =
   Stateful.Rule "increment" \(Counter n) ->
     pure (Counter (n + 1))
+
+-- | Run a single-rule machine and return the number of steps each test case
+-- took, mirroring the Rust reference's @run_step_recorder@.
+--
+-- With @failAssumption@ set the rule rejects via 'assume' on every step, so
+-- the model never advances though every dispatch still counts.
+stepRecorder :: Bool -> Settings -> IO [Int]
+stepRecorder failAssumption settings = do
+  perCase <- newIORef ([] :: [Int])
+  let bump =
+        atomicModifyIORef' perCase \case
+          (top : rest) -> (top + 1 : rest, ())
+          [] -> ([1], ())
+      recording :: Stateful.Rule Counter IO
+      recording =
+        Stateful.Rule "step" \s -> do
+          liftIO bump
+          when failAssumption (assume False)
+          pure s
+      machine =
+        Stateful.Machine
+          { initial = do
+              liftIO (atomicModifyIORef' perCase \cs -> (0 : cs, ()))
+              pure (Counter 0),
+            rules = [recording],
+            invariants = []
+          }
+  _ <- check settings (Stateful.run machine)
+  readIORef perCase
 
 -- | A deliberately correct invariant.
 alwaysNonNegative :: Stateful.Invariant Counter IO
@@ -138,6 +169,25 @@ statefulSpec = describe "Machine" do
       Counterexample {} -> pure ()
       other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
+  it "a counterexample past step 50 under a higher statefulStepCount fails to reconstruct" do
+    -- This pins the replay caveat documented on
+    -- 'Hegel.Settings.statefulStepCount'. A failure past step 50 under a
+    -- higher count diverges on replay instead of reproducing.
+    let neverAbove150 :: Stateful.Invariant Counter IO
+        neverAbove150 =
+          Stateful.Invariant "never_above_150" \(Counter n) ->
+            assert (n <= 150) "counter does not exceed 150"
+        machine =
+          Stateful.Machine
+            { initial = pure (Counter 0),
+              rules = [increment],
+              invariants = [neverAbove150]
+            }
+    report <- check def {statefulStepCount = 200} (Stateful.run machine)
+    case report.result of
+      Aborted (ReplayDiverged _) -> pure ()
+      other -> expectationFailure ("expected Aborted (ReplayDiverged _), got: " <> show other)
+
   it "machinery annotations carry no source location" do
     -- The 'Step N: ...' / invariant-check annotations are emitted by
     -- 'Stateful.run' itself; a call-stack loc would point inside
@@ -227,60 +277,28 @@ statefulSpec = describe "Machine" do
       Aborted _ -> pure ()
       other -> expectationFailure ("expected Aborted, got: " <> show other)
 
-  it "precondition (assume) in a rule skips the step without failing" do
-    -- A rule that always rejects via assume; the machine should give up rather
-    -- than fail, since every step is skipped.
-    --
-    -- The engine's cap counts dispatched rules, including assume-tripping
-    -- ones, toward its ~50-step ceiling. An always-rejecting machine should
-    -- hit that ceiling on every case, well short of the 1000-attempt
-    -- livelock backstop; a regression that let the backstop take over
-    -- instead would multiply the dispatch count by roughly 20x.
-    dispatches <- newIORef (0 :: Int)
-    let alwaysRejects :: Stateful.Rule Counter IO
-        alwaysRejects =
-          Stateful.Rule "always_rejects" \s -> do
-            liftIO (atomicModifyIORef' dispatches \c -> (c + 1, ()))
-            assume False
-            pure s
-        machine =
-          Stateful.Machine
-            { initial = pure (Counter 0),
-              rules = [alwaysRejects],
-              invariants = []
-            }
-    report <- check def (Stateful.run machine)
-    case report.result of
-      Ok -> pure () -- livelock guard may allow the machine to "succeed" with 0 steps
-      GaveUp _ -> pure ()
-      Counterexample {} -> expectationFailure "a rule with assume False should not produce a counterexample"
-      other -> expectationFailure ("unexpected result: " <> show other)
-    total <- readIORef dispatches
-    total `shouldSatisfy` (<= report.stats.valid * 60)
+  it "the default statefulStepCount bounds steps, and most cases hit it exactly" do
+    -- Analogue of the Rust reference's test_step_cap_is_50_most_of_the_time.
+    counts <- stepRecorder False def {testCases = 30}
+    counts `shouldSatisfy` all (\c -> c >= 1 && c <= 50)
+    length (filter (== 50) counts) `shouldSatisfy` (> length counts `div` 2)
 
-  it "an always-succeeding rule never approaches the 1000-attempt livelock backstop" do
-    -- Analogue of the Rust reference's test_step_cap_is_50_most_of_the_time:
-    -- the engine's own step cap should bound dispatched rules at ~50 per
-    -- case. An off-by-one in the Nothing (HEGEL_STATE_MACHINE_DONE) handling
-    -- would silently let this run to the 1000-attempt backstop instead.
-    dispatches <- newIORef (0 :: Int)
-    let alwaysSucceeds :: Stateful.Rule Counter IO
-        alwaysSucceeds =
-          Stateful.Rule "increment" \(Counter n) -> do
-            liftIO (atomicModifyIORef' dispatches \c -> (c + 1, ()))
-            pure (Counter (n + 1))
-        machine =
-          Stateful.Machine
-            { initial = pure (Counter 0),
-              rules = [alwaysSucceeds],
-              invariants = []
-            }
-    report <- check def (Stateful.run machine)
-    report.result `shouldSatisfy` \case
-      Ok -> True
-      _ -> False
-    total <- readIORef dispatches
-    total `shouldSatisfy` (<= report.stats.valid * 60)
+  it "an assume-rejecting rule is still bounded by the step cap" do
+    -- Analogue of the Rust reference's
+    -- test_hopeless_machine_is_bounded_by_the_step_cap. The cap counts
+    -- attempted rules rather than successful ones, so a rule that never
+    -- gets past its precondition is bounded the same as one that always
+    -- succeeds.
+    counts <- stepRecorder True def {testCases = 30}
+    counts `shouldSatisfy` all (\c -> c >= 1 && c <= 50)
+    length (filter (== 50) counts) `shouldSatisfy` (> length counts `div` 2)
+
+  it "statefulStepCount replaces the default cap" do
+    -- Analogue of the Rust reference's test_stateful_step_count_setting_bounds_steps.
+    let n = 7 :: Int
+    counts <- stepRecorder False def {testCases = 30, statefulStepCount = n}
+    counts `shouldSatisfy` all (\c -> c >= 1 && c <= n)
+    length (filter (== n) counts) `shouldSatisfy` (> length counts `div` 2)
 
 -- ---------------------------------------------------------------------------
 -- Pool + Machine integration
