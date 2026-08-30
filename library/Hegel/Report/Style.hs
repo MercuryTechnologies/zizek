@@ -102,15 +102,23 @@ subscript = T.map sub . T.pack . show
 -- The log composes its sentences exclusively from these fields plus
 -- /quoted/ user data.
 data PhraseTable = PhraseTable
-  { -- | An elision row's label: @\"2 steps elided\"@, or
-    -- @\"2 steps elided (h₂)\"@ naming the value(s) the elided run touched.
+  { -- | An elision row's label:
+    --
+    -- e.g. @\"2 steps elided\"@ or @\"2 steps elided (h₂)\"@.
     elidedSteps :: Int -> Maybe Text -> Text,
     -- | A concurrent combinator's summary line for the branches hidden past
-    -- the splice threshold, all of which passed: @\"9 branches passed\"@.
+    -- the splice threshold, all of which passed:
+    --
+    -- e.g. @\"9 branches passed\"@.
     elidedBranches :: Int -> Text,
     -- | The reproduction footer, given the database key:
+    -- 
     -- @\"stored under k and replays automatically next run\"@.
-    stored :: Text -> Text
+    stored :: Text -> Text,
+    -- | The footer for a failure with nothing to replay:
+    --
+    -- e.g. @\"this failure came from a concurrent run, so there is no stored example to replay\"@.
+    unreproducible :: Text
   }
 
 -- | The default phrase table (English wording).
@@ -120,7 +128,8 @@ english =
     { elidedSteps = \n mConcerns ->
         counted n "step" <> " elided" <> maybe "" (\c -> " (" <> c <> ")") mConcerns,
       elidedBranches = \k -> T.pack (show k) <> (if k == 1 then " branch passed" else " branches passed"),
-      stored = \key -> "stored under " <> key <> " and replays automatically next run"
+      stored = \key -> "stored under " <> key <> " and replays automatically next run",
+      unreproducible = "this failure came from a concurrent run, so there is no stored example to replay"
     }
   where
     counted :: Int -> Text -> Text

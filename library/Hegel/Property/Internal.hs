@@ -4,6 +4,7 @@ module Hegel.Property.Internal
     Property,
     Env (..),
     Journal (..),
+    newRecordingJournal,
     Scope (..),
     withScope,
     hoist,
@@ -93,15 +94,16 @@ import UnliftIO (MonadUnliftIO, withRunInIO)
 import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 
 -- | Whether the current run records its journal.
---
--- Ordinary cases (including every shrink replay) run 'Silent'; only the
--- final reconstruction replay ('observeProperty') runs 'Recording'. Under
--- 'Silent', 'journalNote' never constructs the 'Note' at all, so its 'Text'
--- and 'SrcLoc' arguments stay unevaluated thunks. Rendering work for the
--- journal is then paid once per failure, not once per step of every case.
 data Journal
   = Silent
   | Recording !(Note -> IO ())
+
+-- | A fresh 'Recording' journal backed by its own private buffer, and a
+-- matching action draining its contents in append order.
+newRecordingJournal :: IO (Journal, IO [Note])
+newRecordingJournal = do
+  ref <- newIORef Seq.empty
+  pure (Recording \n -> modifyIORef' ref (|> n), toList <$> readIORef ref)
 
 -- | How restricted the ambient context is for primitives like 'resource'
 -- whose release is deferred to the case boundary.
@@ -249,12 +251,7 @@ forAllWith render gen = do
   pure a
 {-# INLINEABLE forAllWith #-}
 
--- | 'forAll' with a display label, for rule draws whose bare value reads as
--- noise in the report. @qty <- forAllWithLabel \"qty\" g@ journals @qty=5@, so
--- the event log renders @restock item=\"apple\" qty=5@ rather than
--- @restock \"apple\" 5@. A specialization of 'forAllWith' whose renderer
--- prefixes the label; the label lives in the journal text, not the source (no
--- source parsing).
+-- | 'forAll' with a display label.
 forAllWithLabel :: (HasCallStack, MonadIO m, Show a) => Text -> Gen a -> PropertyT m a
 forAllWithLabel label = withFrozenCallStack (forAllWith (\v -> label <> "=" <> renderValue v))
 {-# INLINEABLE forAllWithLabel #-}
@@ -399,21 +396,10 @@ registerFinalizer act = do
 {-# INLINEABLE registerFinalizer #-}
 
 -- | Acquire a resource and register its release as a per-case finalizer in
--- one step, so no draw can slip in between acquisition and registration.
---
--- Release runs at the end of the enclosing scope: the case boundary on the
--- live run, every shrink probe, and the reconstruction replay, or a branch's
--- own exit when called inside 'Hegel.Property.Branch.concurrently' or
--- 'Hegel.Property.Fork.spawn'. That is what gives a resource like a database
--- transaction its per-case isolation.
+-- one step.
 --
 -- Throws 'MalformedTest' when called from a stateful rule's @apply@ or an
--- invariant's @check@. Either may run any number of times in one case, so a
--- release deferred to scope end would never fire between applications;
--- acquire case-scoped resources in a stateful 'Hegel.Stateful.Machine'\'s
--- @initial@ instead, or use
--- 'Control.Exception.bracket'\/'Control.Exception.finally' for cleanup
--- scoped to one step.
+-- invariant's @check@.
 resource :: (MonadIO m) => IO a -> (a -> IO ()) -> PropertyT m a
 resource open close = do
   env <- askEnv
@@ -572,23 +558,6 @@ foldBranchNotes env branchNotes =
 
 -- | Run one branch of a concurrent combinator or fork body against its own
 -- clone, in a fresh 'Env' nested one level deeper than the parent's.
---
--- Neither a control signal nor an 'Hegel.Assertion.AssertionFailure' escapes
--- as an exception: each comes back as 'Left' so a caller running several
--- branches at once (as 'Hegel.Property.Branch.concurrently' does) can let
--- every branch run to completion regardless of a sibling's fate, and decide
--- deterministically which failure, if any, to report as the case's shrink
--- target.
---
--- A real failure additionally gets journaled in-band as a 'BranchFailure', so
--- a branch that does not win the shrink target still shows its own message,
--- location, and diff in the report. A discard or budget stop does not, since
--- neither is a failure to explain.
---
--- A finalizer registered inside the branch is drained at the branch's own
--- exit, and any fork spawned inside it is settled there too; a teardown
--- failure or a leaked fork propagates immediately, the same severity a
--- top-level occurrence of either carries.
 runBranch ::
   (forall x. m x -> IO x) ->
   Env ->
@@ -637,16 +606,11 @@ runPropertyT :: Env -> PropertyT m a -> m a
 runPropertyT env (PropertyT r) = runReaderT r env
 {-# INLINE runPropertyT #-}
 
--- | Lower a property to a per-case run loop, against a caller-owned finalizer
--- registry and fork registry, checking fork/branch nesting against the given
--- clone-depth ceiling.
---
--- Ordinary cases run with a no-op journal; failing cases are journaled later
--- via 'observeProperty' on the engine's minimal counterexample.
-propertyAction :: Int -> Property () -> Finalizers -> OpenForks -> TestCase -> IO ()
-propertyAction cloneDepthLimit prop finalizers openForks testCase =
+-- | Lower a property to a per-case run loop.
+propertyAction :: Journal -> Int -> Property () -> Finalizers -> OpenForks -> TestCase -> IO ()
+propertyAction journal cloneDepthLimit prop finalizers openForks testCase =
   runPropertyT
-    Env {testCase, journal = Silent, noteDepth = 0, finalizers, openForks, cloneDepth = 0, cloneDepthLimit, scope = Unrestricted}
+    Env {testCase, journal, noteDepth = 0, finalizers, openForks, cloneDepth = 0, cloneDepthLimit, scope = Unrestricted}
     prop
 
 -- | Run every registered finalizer, LIFO, capturing each one's exception so a
@@ -669,18 +633,19 @@ drainFinalizers (Finalizers ref) = E.uninterruptibleMask_ do
 
 -- | Run a property against a test case with a recording journal, returning
 -- how the run ended together with the journal contents and the test case's
--- event stream (empty unless @tc@ was built with a recording
--- 'Hegel.Internal.Tick.Recording').
+-- event stream.
 observeProperty :: Int -> TestCase -> Property () -> IO (Either SomeException (), [Note], [Event.Event])
 observeProperty cloneDepthLimit testCase prop = do
-  j <- newIORef Seq.empty
+  (journal, drainNotes) <- newRecordingJournal
+  let record n = case journal of
+        Recording sink -> sink n
+        Silent -> pure ()
   finalizers <- newFinalizers
   openForks <- newOpenForks
-  let record n = modifyIORef' j (|> n)
   eRes <-
     tryProperty
       ( runPropertyT
-          Env {testCase, journal = Recording record, noteDepth = 0, finalizers, openForks, cloneDepth = 0, cloneDepthLimit, scope = Unrestricted}
+          Env {testCase, journal, noteDepth = 0, finalizers, openForks, cloneDepth = 0, cloneDepthLimit, scope = Unrestricted}
           prop
       )
       `E.onException` (drainFinalizers finalizers *> void (collectLeaks openForks))
@@ -700,14 +665,12 @@ observeProperty cloneDepthLimit testCase prop = do
   -- A leak here should never actually happen: if the original run had left a
   -- fork unjoined, it would have aborted the whole run as a 'MalformedTest'
   -- before ever reaching a stored reproduction blob for this replay to
-  -- reconstruct. Settle unconditionally regardless, for the same resource
-  -- safety 'closeOpenForks' provides elsewhere, and note it rather than
-  -- override the counterexample already captured in 'eRes'.
+  -- reconstruct.
   mLeak <- collectLeaks openForks
   for_ mLeak \msg -> do
     clock <- Tick.next testCase.recording
     record Note {kind = Footnote, text = "fork leak during replay: " <> msg, loc = Nothing, depth = 0, clock}
-  notes <- toList <$> readIORef j
+  notes <- drainNotes
   events <- Tick.drain testCase.events
   pure (eRes, notes, events)
 

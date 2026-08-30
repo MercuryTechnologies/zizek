@@ -26,11 +26,12 @@ import Hegel.HealthCheck (HealthCheck)
 import Hegel.Internal.Control (ControlSignal (..), FinalizerFailed (..), MalformedTest, NoBacktrace (..), catchControl, isControlSignal)
 import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
-import Hegel.Internal.TestCase (Handle (..), Status (..), TestCase, markComplete, mkTestCase)
+import Hegel.Internal.TestCase (Handle (..), Status (..), TestCase (..), markComplete, mkTestCase)
 import Hegel.Internal.Tick qualified as Tick
 import Hegel.Phase (Phase (Generate))
 import Hegel.Property.Internal
   ( Finalizers,
+    Journal (..),
     OpenForks,
     Property,
     closeOpenForks,
@@ -39,10 +40,11 @@ import Hegel.Property.Internal
     failureDetails,
     newFinalizers,
     newOpenForks,
+    newRecordingJournal,
     observeProperty,
     propertyAction,
   )
-import Hegel.Report (Abort (..), Note (..), NoteKind (Footnote), Report (..), Result (..), Stats (..), Tick (..), aborted)
+import Hegel.Report (Abort (..), Event (..), Note (..), Report (..), Reproduction (..), Result (..), Stats (..), aborted)
 import Hegel.Settings (Settings (..))
 import UnliftIO.Exception (catch, catchAny, throwIO)
 import UnliftIO.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
@@ -56,16 +58,6 @@ import Witch qualified
 -- abort; otherwise the tally decides between 'GaveUp' and 'Ok'.
 check :: Settings -> Property () -> IO Report
 check settings prop =
-  -- Note: 'safe' blocking FFI calls (notably 'hegel_next_test_case') cannot
-  -- be interrupted by async exceptions; a cancellation signal is deferred
-  -- until that call returns.
-  --
-  -- A @libhegel@ call outside the per-case try (e.g. engine startup, blob
-  -- replay, markComplete) can fail with a HegelError; surface it as
-  -- Errored rather than letting it escape the runner.
-  --
-  -- A MalformedTest (e.g. a state-machine test with no rules) is likewise a
-  -- run-level abort, not a counterexample.
   withAsyncBound go wait
     `catch` (\(e :: MalformedTest) -> pure . aborted . Errored $ toException e)
     `catch` (\(e :: HegelError) -> pure . aborted . Errored $ toException e)
@@ -81,8 +73,9 @@ check settings prop =
         applySettings HEGEL_MODE_TEST_RUN ctx settings s
         -- Read and copy everything out of the run handle before withRun frees
         -- it on bracket exit (see 'readRunOutcome').
+        lastFailure <- newIORef Nothing
         (nValid, nInvalid, outcome) <- withRun ctx s \run -> do
-          (nv, ni) <- driveLoop ctx (propertyAction settings.maxCloneDepth prop) run
+          (nv, ni) <- driveLoop ctx (\journal -> propertyAction journal settings.maxCloneDepth prop) run lastFailure
           o <- readRunOutcome ctx run
           pure (nv, ni, o)
         result <- case outcome.status of
@@ -99,7 +92,9 @@ check settings prop =
           -- produced no verdict on the property.
           RunErrored -> pure (Aborted (UnhealthyInput (fromMaybe "the run failed" outcome.runError)))
           RunNondeterministic -> case outcome.failure of
-            Just f -> pure (unreproducibleCounterexample f.origin)
+            Just f -> do
+              mCapture <- readIORef lastFailure
+              pure (unreproducibleCounterexample mCapture f.origin)
             Nothing ->
               pure . Aborted . Errored . toException $
                 userError "the run reported a nondeterministic failure but exposed no counterexample"
@@ -107,36 +102,35 @@ check settings prop =
           Report
             { result,
               stats = Stats {valid = nValid, invalid = nInvalid},
-              -- The reproduction surface, for the failure footer: only a
-              -- persisted key is honest to point at. A nondeterministic run
-              -- never persists, regardless of what the caller configured.
-              databaseKey = case (outcome.status, settings.database) of
-                (RunNondeterministic, _) -> Nothing
-                (_, DatabaseDisabled) -> Nothing
-                _ -> settings.databaseKey
+              reproduction = case result of
+                Counterexample {} -> case (outcome.status, settings.database, settings.databaseKey) of
+                  (RunNondeterministic, _, _) -> Unreproducible
+                  (_, DatabaseDisabled, _) -> Unstored
+                  (_, _, Just key) -> Stored key
+                  _ -> Unstored
+                _ -> Unstored
             }
 
+-- | A test case 'runTestCase' itself classified 'Interesting'.
+data LiveFailure = LiveFailure
+  { exception :: !SomeException,
+    notes :: [Note],
+    events :: [Event]
+  }
+
 -- | Describe a failure from a run a concurrent state machine declared
--- nondeterministic: the engine skips shrinking and reproduce-blob emission
--- for such a run, so @origin@, a stable dedup key rather than the failing
--- assertion's own message, is all there is to report.
-unreproducibleCounterexample :: Text -> Result
-unreproducibleCounterexample origin =
+-- nondeterministic.
+unreproducibleCounterexample :: Maybe LiveFailure -> Text -> Result
+unreproducibleCounterexample mCapture origin =
   Counterexample
-    { message = origin,
-      notes =
-        [ Note
-            { kind = Footnote,
-              text = "this failure came from a concurrent run, so there is no stored example to replay",
-              loc = Nothing,
-              depth = 0,
-              clock = Tick 0
-            }
-        ],
-      events = [],
-      loc = Nothing,
-      diff = Nothing
+    { message,
+      notes = maybe [] (.notes) mCapture,
+      events = maybe [] (.events) mCapture,
+      loc,
+      diff
     }
+  where
+    (message, loc, diff) = maybe (origin, Nothing, Nothing) (failureDetails . (.exception)) mCapture
 
 -- * Sampling
 
@@ -423,10 +417,11 @@ reconstructProperty ctx prop s cloneDepthLimit blob =
 
 driveLoop ::
   Ptr HegelContext ->
-  (Finalizers -> OpenForks -> TestCase -> IO ()) ->
+  (Journal -> Finalizers -> OpenForks -> TestCase -> IO ()) ->
   Ptr HegelRun ->
+  IORef (Maybe LiveFailure) ->
   IO (Int, Int)
-driveLoop ctx action run = loop 0 0
+driveLoop ctx action run lastFailure = loop 0 0
   where
     loop !nValid !nInvalid = do
       tcPtr <- alloca \out -> do
@@ -435,7 +430,7 @@ driveLoop ctx action run = loop 0 0
       if tcPtr == nullPtr
         then pure (nValid, nInvalid)
         else do
-          status <- runTestCase ctx action tcPtr `finally` void (hegel_test_case_free ctx tcPtr)
+          status <- runTestCase ctx action tcPtr lastFailure `finally` void (hegel_test_case_free ctx tcPtr)
           case status of
             Valid -> loop (nValid + 1) nInvalid
             Invalid -> loop nValid (nInvalid + 1)
@@ -448,26 +443,13 @@ driveLoop ctx action run = loop 0 0
 -- | Run one engine-produced test case: execute the per-case action against a
 -- live 'TestCase', classify how it finished, and report that 'Status' to the
 -- engine.
---
--- The classification covers the whole action, draw and body alike, so a
--- discard ('AssumeRejected') or budget stop ('TestStopped') raised at any
--- point is honored — this is what lets a property body interleave its own
--- draws with test logic.
---
--- The handlers only classify; 'markComplete' runs once, outside the 'catches'
--- scope, so an engine error raised while reporting (a 'HegelError') propagates
--- to 'check''s outer handler instead of being misread as a test failure.
---
--- Finalizers registered during the case ('Hegel.Property.registerFinalizer')
--- are drained under 'mask' after the run returns so a finalizer that throws
--- will result in an 'Errored' result rather than being misclassified as a
--- counterexample.
 runTestCase ::
   Ptr HegelContext ->
-  (Finalizers -> OpenForks -> TestCase -> IO ()) ->
+  (Journal -> Finalizers -> OpenForks -> TestCase -> IO ()) ->
   Ptr HegelTestCase ->
+  IORef (Maybe LiveFailure) ->
   IO Status
-runTestCase ctx action tcPtr = do
+runTestCase ctx action tcPtr lastFailure = do
   finalizers <- newFinalizers
   forks <- newOpenForks
   -- The case's own failure origin, if it failed before teardown ran; carried
@@ -498,13 +480,21 @@ runTestCase ctx action tcPtr = do
           throwIO $ FinalizerFailed origin es
   where
     run finalizers forks caseOrigin = do
-      tc <- mkTestCase Tick.Silent Handle {ctx, ptr = tcPtr}
+      nondeterministic <- isNondeterministic ctx tcPtr
+      (recording, journal, drainNotes) <-
+        if nondeterministic
+          then do
+            recording <- Tick.newRecording
+            (journal, drainNotes) <- newRecordingJournal
+            pure (recording, journal, drainNotes)
+          else pure (Tick.Silent, Silent, pure [])
+      tc <- mkTestCase recording Handle {ctx, ptr = tcPtr}
       status <-
         -- 'catchControl' catches only Hegel's async control signals via base
         -- 'E.catches'; 'catchAny' (unliftio) then catches all remaining
         -- synchronous exceptions and marks them as failures /except/ for
         -- 'MalformedTest', which is re-thrown so 'check' can abort the run.
-        (action finalizers forks tc $> Valid)
+        (action journal finalizers forks tc $> Valid)
           `catchControl` \case
             Assume -> pure Invalid
             -- @libhegel@ owns the choice budget but does not observe that we
@@ -512,7 +502,16 @@ runTestCase ctx action tcPtr = do
             Stop -> pure Overrun
           `catchAny` \e -> case fromException e of
             Just malformed -> throwIO (malformed :: MalformedTest)
-            Nothing -> pure . Interesting $ originOf e
+            Nothing -> do
+              -- Stashed for 'check''s 'RunNondeterministic' arm, which has no
+              -- reproduction blob to replay for its own failure content.
+              case recording of
+                Tick.Silent -> pure ()
+                Tick.Active _ -> do
+                  notes <- drainNotes
+                  events <- Tick.drain tc.events
+                  writeIORef lastFailure (Just LiveFailure {exception = e, notes, events})
+              pure . Interesting $ originOf e
       -- Must settle every fork before markComplete: one still drawing
       -- against its clone when the family completes fails with an engine
       -- error of its own, rather than the well-formed 'MalformedTest'
@@ -523,3 +522,10 @@ runTestCase ctx action tcPtr = do
         _ -> pure ()
       markComplete tc status
       pure status
+
+-- | Whether the engine has already flagged this test case as belonging to a
+-- run declared nondeterministic (see 'HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC').
+isNondeterministic :: Ptr HegelContext -> Ptr HegelTestCase -> IO Bool
+isNondeterministic ctx tcPtr = alloca \out -> do
+  throwOnError ctx =<< hegel_test_case_is_nondeterministic ctx tcPtr out
+  (\(CBool b) -> b /= 0) <$> peek out

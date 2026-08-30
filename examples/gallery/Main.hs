@@ -104,8 +104,10 @@ showReport title report = do
   T.putStrLn =<< renderReportRichAnsi report
 
 -- | The trace scenarios through the /wired/ path — 'renderReportRichAnsi'
--- composes the event log, the failing step's splice, and the footer
--- itself — plus the ascii table via the options variant.
+-- composes the event log and the failing step's splice itself — plus the
+-- ascii table via the options variant. No scenario here persists, so the
+-- reproduction footer never renders; a scenario demonstrating it is future
+-- work.
 runTraceScenario :: Bool -> Text -> Property () -> IO ()
 runTraceScenario withAscii title prop = do
   report <- check def prop

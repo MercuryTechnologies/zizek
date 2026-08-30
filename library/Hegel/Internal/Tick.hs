@@ -18,6 +18,7 @@ module Hegel.Internal.Tick
     next,
     record,
     drain,
+    drainAndReset,
   )
 where
 
@@ -34,9 +35,6 @@ newtype Tick = Tick Int
 -- * Recording
 
 -- | Whether the current test case is recording.
---
--- Ordinary cases are 'Silent', and only the final reconstruction replay
--- carries the monotonic sequence stamp under 'Active'.
 data Recording
   = Silent
   | Active !(IORef Tick)
@@ -67,3 +65,7 @@ record rec ref mk = do
 -- | Read back a buffer's entries, in append order.
 drain :: IORef (Seq a) -> IO [a]
 drain ref = toList <$> readIORef ref
+
+-- | 'drain' and clear the buffer in the same atomic step.
+drainAndReset :: IORef (Seq a) -> IO [a]
+drainAndReset ref = toList <$> atomicModifyIORef' ref \s -> (mempty, s)

@@ -7,7 +7,7 @@ import Hegel.Database (Database (..))
 import Hegel.Gen qualified as Gen
 import Hegel.Phase (Phase (..))
 import Hegel.Property (Property, assert, assume, forAll)
-import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..))
+import Hegel.Report (Abort (..), Report (..), Reproduction (..), Result (..), Stats (..))
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..), defaultSettings)
 import Test.Hspec
@@ -55,6 +55,21 @@ spec = do
     case r.result of
       Aborted (ReplayDiverged _) -> pure ()
       other -> expectationFailure ("expected ReplayDiverged, got: " <> show other)
+
+  it "a passing run reports Unstored even with persistence configured" $
+    withSystemTempDirectory "zizek-replay-passing" \dbDir -> do
+      let settings =
+            defaultSettings
+              { database = DatabaseDirectory dbDir,
+                databaseKey = Just "database-replay-passing-spec"
+              }
+          passing :: Property ()
+          passing = do
+            x <- forAll (intR (0, 10))
+            assert (x >= 0) "non-negative"
+      r <- check settings passing
+      r.result `shouldSatisfy` \case Ok -> True; _ -> False
+      r.reproduction `shouldBe` Unstored
 
   it "derandomize makes keyed runs deterministic" $ do
     let settings =

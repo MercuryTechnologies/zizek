@@ -18,6 +18,7 @@ import Hegel.Report
     NoteKind (..),
     Operation (..),
     Report (..),
+    Reproduction (..),
     Result (..),
     Stats (..),
     Tick (..),
@@ -214,7 +215,7 @@ spec = do
 
     it "composed trace: pool context composes event log, splice, and footer" do
       let (notes, events) = handoffFixture
-          report = (reportOf events notes) {databaseKey = Just "some-key"}
+          report = (reportOf events notes) {reproduction = Stored "some-key"}
       out <- renderReportRich report
       -- The handoff (close) renders as an ordinary kept row (no lifecycle glyph).
       out `shouldSatisfy` T.isInfixOf "  Step 5: close v₁"
@@ -228,7 +229,7 @@ spec = do
     it "footnotes keep their after-the-body position on the composed form" do
       let (notes, events) = handoffFixture
           withFootnote = notes <> [noteAt (Tick 20) 0 Footnote "handle table dump: {}"]
-      out <- renderReportRich ((reportOf events withFootnote) {databaseKey = Just "k"})
+      out <- renderReportRich ((reportOf events withFootnote) {reproduction = Stored "k"})
       out `shouldSatisfy` T.isInfixOf "handle table dump: {}"
       -- After the splice, before the reproduction line.
       T.breakOn "handle table dump" out `shouldSatisfy` \(pre, rest) ->
@@ -277,7 +278,7 @@ spec = do
       -- glyphs, phrase typography — everything a real report emits must map
       -- to ascii, with \\x escapes reserved for genuinely foreign user text.
       report <- check def (Stateful.run transferMachine)
-      out <- renderReportRich (report {databaseKey = Just "k"} :: Report)
+      out <- renderReportRich (report {reproduction = Stored "k"} :: Report)
       Style.sevenBitClean out `shouldNotSatisfy` T.isInfixOf "\\x"
 
     it "a flat single-value report survives sevenBitClean" do
@@ -319,7 +320,7 @@ reportOf events notes =
             diff = Nothing
           },
       stats = Stats {valid = 1, invalid = 0},
-      databaseKey = Nothing
+      reproduction = Unstored
     }
 
 -- | A two-pool transfer machine: read_closed fails on any transferred

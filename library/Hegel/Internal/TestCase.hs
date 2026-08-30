@@ -49,12 +49,6 @@ import Witch qualified
 -- 'hegel_next_test_case' is freed once its 'markComplete' has run, and one
 -- replayed from a blob is freed by its bracket.
 --
--- The 'Tick.Recording' selects whether this case records: ordinary cases (and
--- every shrink replay) pass 'Hegel.Internal.Tick.Silent'; only the final
--- reconstruction replay passes a recording toggle
--- ('Hegel.Internal.Tick.newRecording') — the same once-per-failure discipline
--- as the note journal.
---
 -- In 'IO' to allocate the case's reusable draw 'Slot' and its event buffer.
 mkTestCase :: Tick.Recording -> Handle -> IO TestCase
 mkTestCase recording handle = do

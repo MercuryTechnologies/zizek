@@ -5,6 +5,7 @@ module Hegel.Report
     Result (..),
     Abort (..),
     Stats (..),
+    Reproduction (..),
     aborted,
     throwOnFailure,
 
@@ -94,11 +95,21 @@ data Report = Report
     -- | Tallies for the run. Zero when the run aborted before any test case
     -- could run.
     stats :: Stats,
-    -- | The example-database key the run persisted under, when persistence
-    -- was on — the reproduction surface the failure footer points at.
-    databaseKey :: !(Maybe Text)
+    -- | Where a failure from this run can be found again.
+    reproduction :: !Reproduction
   }
   deriving stock (Show)
+
+-- | Where a failure from this run can be found again.
+data Reproduction
+  = -- | Filed in the example database under this key, which the
+    -- 'Hegel.Phase.Reuse' phase replays on the next run.
+    Stored !Text
+  | -- | Nothing was filed.
+    Unstored
+  | -- | The run was identified as unreproducible by @libhegel@.
+    Unreproducible
+  deriving stock (Show, Eq)
 
 -- | The verdict of a property run.
 data Result
@@ -143,7 +154,7 @@ data Abort
 
 -- | A report for a run that stopped before any test case could run.
 aborted :: Abort -> Report
-aborted a = Report {result = Aborted a, stats = Stats {valid = 0, invalid = 0}, databaseKey = Nothing}
+aborted a = Report {result = Aborted a, stats = Stats {valid = 0, invalid = 0}, reproduction = Unstored}
 
 -- | Throw on anything other than 'Ok': 'PropertyFailed' on a counterexample,
 -- the original exception on 'Errored', and 'fail' otherwise.
@@ -151,7 +162,7 @@ throwOnFailure :: Report -> IO ()
 throwOnFailure report = case report.result of
   Ok -> pure ()
   Counterexample {message, notes, loc, diff} ->
-    throwIO PropertyFailed {message, notes, loc, diff}
+    throwIO PropertyFailed {message, notes, loc, diff, reproduction = report.reproduction}
   GaveUp msg -> fail ("Property rejected all inputs: " <> show msg)
   Aborted (Errored exc) -> throwIO exc
   Aborted (UnhealthyInput msg) -> fail ("Health check failed: " <> show msg)
@@ -168,10 +179,9 @@ renderReport = docToText . reportDoc
 renderReportAnsi :: Report -> Text
 renderReportAnsi = docToAnsi . reportDoc
 
--- | Render the failure section alone (headline message, diff, location,
--- journal). 'PropertyFailed' and 'renderReport' share this layout.
-renderFailure :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Text
-renderFailure message notes loc diff = docToText body
+-- | Render the failure section alone
+renderFailure :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Reproduction -> Text
+renderFailure message notes loc diff reproduction = docToText (withFooter Style.english reproduction body)
   where
     -- In-band journals suppress the headline in 'failureDoc'; the report
     -- renderers substitute @"failed after N tests"@, but 'PropertyFailed''s
@@ -223,7 +233,8 @@ renderRichImpl style plain toText report = do
   mdoc <- richDoc style report
   pure case mdoc of
     Nothing -> plain report
-    Just body -> toText (PP.vsep ["failed after" <+> statsDoc report.stats, body])
+    Just body ->
+      toText (withFooter style.phrases report.reproduction (PP.vsep ["failed after" <+> statsDoc report.stats, body]))
 
 -- | Attempt to build the rich failure doc, falling back to 'Nothing' when the
 -- result is not a counterexample or no declaration could be read for any
@@ -237,20 +248,15 @@ richDoc style report = case report.result of
     StatefulShape -> do
       decls <- loadDeclarations (noteFiles notes)
       let trace = Trace.build notes events
-      pure (Just (composed style decls trace notes message loc diff report.databaseKey))
+      pure (Just (composed style decls trace notes message loc diff))
     ConcurrentShape -> do
       decls <- loadDeclarations (noteFiles notes)
       pure (composedConcurrent style.phrases decls notes message loc diff)
     PlainShape -> plainRichDoc message notes loc diff
   _ -> pure Nothing
 
--- | Assemble a step-structured (stateful) failure report from its sections,
--- rendered in order and separated by blank lines: an optional
--- headline\/diff\/location prelude, see 'preludeDoc', the event log, the
--- failing step's source splice, footnotes, and the reproduction footer.
---
--- The splice carries the diff, so the event log holds only the record of
--- events and never repeats it.
+-- | Assemble a stateful failure report from its sections, rendered in order
+-- and separated by blank lines.
 composed ::
   Style ->
   Declarations ->
@@ -259,25 +265,18 @@ composed ::
   Text ->
   Maybe SrcLoc ->
   Maybe Diff ->
-  Maybe Text ->
   Doc Ann
-composed style decls trace notes message loc diff databaseKey =
+composed style decls trace notes message loc diff =
   PP.vsep (PP.punctuate PP.line (catMaybes sections))
   where
     sections =
       [ preludeDoc notes message loc diff,
         Just $ Layout.logDoc style trace,
         failingGroupDoc decls notes,
-        footnotesDoc notes,
-        footerDoc style.phrases databaseKey
+        footnotesDoc notes
       ]
 
--- | Assemble a concurrent-combinator failure report: an optional headline
--- prelude, the branch splice, every branch below the splice threshold, only
--- failing branches plus a summary above it, then footnotes.
---
--- 'Nothing' when 'concurrentGroupsDoc' found nothing to splice, degrading to
--- the plain renderer the same way 'plainRichDoc' does.
+-- | Assemble a concurrent-combinator failure report.
 composedConcurrent :: PhraseTable -> Declarations -> [Note] -> Text -> Maybe SrcLoc -> Maybe Diff -> Maybe (Doc Ann)
 composedConcurrent phrases decls notes message loc diff = do
   body <- concurrentGroupsDoc phrases decls notes
@@ -303,11 +302,21 @@ footnotesDoc notes = case footnoteDocs notes of
   [] -> Nothing
   ds -> Just (PP.vsep ds)
 
--- | The reproduction footer: present only when the run persisted under a
--- database key (replay is automatic on the next run; there is no CLI to point
--- at a key by hand yet). Words from the phrase table, like everything else.
-footerDoc :: Style.PhraseTable -> Maybe Text -> Maybe (Doc Ann)
-footerDoc phrases = fmap (PP.annotate LocAnn . PP.pretty . phrases.stored)
+-- | The reproduction footer.
+footerDoc :: Style.PhraseTable -> Reproduction -> Maybe (Doc Ann)
+footerDoc phrases = \case
+  Stored key -> Just (footerLine (phrases.stored key))
+  Unstored -> Nothing
+  Unreproducible -> Just (footerLine phrases.unreproducible)
+  where
+    footerLine :: Text -> Doc Ann
+    footerLine = PP.annotate LocAnn . PP.pretty
+
+-- | Append the reproduction footer to a rendered failure body.
+withFooter :: Style.PhraseTable -> Reproduction -> Doc Ann -> Doc Ann
+withFooter phrases reproduction body = case footerDoc phrases reproduction of
+  Nothing -> body
+  Just f -> PP.vsep [body <> PP.line, f]
 
 -- | The non-stateful rich doc: drawn values and the failure message spliced
 -- into a source listing.
@@ -352,25 +361,20 @@ reportDoc report = case report.result of
   Aborted (UnhealthyInput msg) -> "aborted: health check failed:" <+> PP.pretty msg
   Aborted (ReplayDiverged msg) -> "aborted: replay diverged:" <+> PP.pretty msg
   Counterexample {message, notes, loc, diff} ->
-    PP.vsep
-      [ "failed after" <+> statsDoc report.stats,
-        failureDoc message notes loc diff
-      ]
+    withFooter
+      Style.english
+      report.reproduction
+      ( PP.vsep
+          [ "failed after" <+> statsDoc report.stats,
+            failureDoc message notes loc diff
+          ]
+      )
 
 -- | The headline @message@ line of a failure report.
 headlineDoc :: Text -> Doc Ann
 headlineDoc = PP.annotate MessageAnn . PP.pretty
 
 -- | Render the failure body.
---
--- Ordinary reports: the headline message, then (indented) the diff (if any),
--- the source location, and the journal in order, footnotes last.
---
--- Reports whose journal contains a 'Failure' note (stateful reports): the
--- failure is rendered __in-band__ at its step and the top-level headline\/
--- diff\/location block is suppressed, since the 'Failure' note already
--- carries them. The report renderers substitute @"failed after N tests"@ as
--- the headline; 'renderFailure' restores the message.
 failureDoc :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Doc Ann
 failureDoc message notes loc diff
   | hasInBandFailure notes = PP.vsep (journalDocs notes)
@@ -395,10 +399,12 @@ data PropertyFailed = PropertyFailed
     -- | Source location of the failing assertion, when known.
     loc :: Maybe SrcLoc,
     -- | Structural or line-level diff, when the failure came from '(===)'.
-    diff :: Maybe Diff
+    diff :: Maybe Diff,
+    -- | Where this failure can be found again, if it is reproducible.
+    reproduction :: !Reproduction
   }
   deriving stock (Show)
 
 instance Exception PropertyFailed where
   displayException f =
-    T.unpack (renderFailure ("property failed: " <> f.message) f.notes f.loc f.diff)
+    T.unpack $ renderFailure ("property failed: " <> f.message) f.notes f.loc f.diff f.reproduction

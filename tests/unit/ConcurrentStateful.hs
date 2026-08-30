@@ -14,7 +14,7 @@ import Hegel.Database (Database (..))
 import Hegel.Gen qualified as Gen
 import Hegel.Internal.Control (MalformedTest (..))
 import Hegel.Property (assert, assume, forAll, resource, (===))
-import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), renderReport)
+import Hegel.Report (Abort (..), Note (..), NoteKind (StepHeader), Report (..), Reproduction (..), Result (..), Stats (..), renderReport, renderReportRich)
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..))
 import Hegel.Stateful.Concurrent qualified as Concurrent
@@ -55,15 +55,20 @@ internGroupsSpec :: Spec
 internGroupsSpec = describe "internGroups" do
   it "assigns dense ids by first appearance" do
     Concurrent.internGroups [Just "a", Just "b", Just "a"]
-      `shouldBe` (["a", "b"], [0, 1, 0])
+      `shouldBe` ([Just "a", Just "b"], [0, 1, 0])
 
-  it "normalizes Nothing to the anonymous group" do
+  it "never merges an explicit group named after anonymousGroup's own display string" do
+    -- Interning keys on the 'Maybe Text' label itself, never collapsing
+    -- 'Nothing' to a display string, so 'Nothing' (truly ungrouped) and
+    -- @Just anonymousGroup@ (a rule explicitly grouped under that exact
+    -- name) get distinct ids and stay distinguishable in the labels
+    -- returned here, not merely by id.
     Concurrent.internGroups [Nothing, Just Concurrent.anonymousGroup]
-      `shouldBe` ([Concurrent.anonymousGroup], [0, 0])
+      `shouldBe` ([Nothing, Just Concurrent.anonymousGroup], [0, 1])
 
   it "keeps named and anonymous groups distinct" do
     Concurrent.internGroups [Just "w", Nothing, Just "w", Just "r"]
-      `shouldBe` (["w", Concurrent.anonymousGroup, "r"], [0, 1, 0, 2])
+      `shouldBe` ([Just "w", Nothing, Just "r"], [0, 1, 0, 2])
 
 -- ---------------------------------------------------------------------------
 -- Machine validation
@@ -215,7 +220,7 @@ behaviorSpec = describe "run (behavior)" do
     report <- check def {testCases = 20, statefulStepCount = 30} (Concurrent.run (Concurrent.fixed 4) machine)
     report.result `shouldSatisfy` isCounterexample
 
-  it "a failure reports its origin and no reproducer" $
+  it "a failure reports its own assertion message and no reproducer" $
     withSystemTempDirectory "zizek-concurrent-stateful" \dbDir -> do
       let failing :: Concurrent.Rule Counter IO
           failing = Concurrent.rule "boom" \_ -> assert False "always fails"
@@ -228,10 +233,38 @@ behaviorSpec = describe "run (behavior)" do
               }
       report <- check settings (Concurrent.run (Concurrent.upTo 2) machine)
       report.result `shouldSatisfy` isCounterexample
-      report.databaseKey `shouldBe` Nothing
+      report.reproduction `shouldBe` Unreproducible
+      case report.result of
+        Counterexample {message} -> message `shouldBe` "always fails"
+        _ -> expectationFailure "expected a Counterexample"
       let rendered = renderReport report
       ("no stored example to replay" `T.isInfixOf` rendered) `shouldBe` True
       ("stored under" `T.isInfixOf` rendered) `shouldBe` False
+      richRendered <- renderReportRich report
+      ("no stored example to replay" `T.isInfixOf` richRendered) `shouldBe` True
+      ("stored under" `T.isInfixOf` richRendered) `shouldBe` False
+
+  it "captures the failing rule's own step, live, in a nondeterministic report" do
+    let failing :: Concurrent.Rule Counter IO
+        failing = Concurrent.rule "boom" \_ -> assert False "always fails"
+        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [failing], invariants = []}
+    report <- check def {testCases = 5} (Concurrent.run (Concurrent.fixed 2) machine)
+    report.result `shouldSatisfy` isCounterexample
+    case report.result of
+      Counterexample {notes} -> do
+        let isBoomStep :: Note -> Bool
+            isBoomStep n = case n.kind of
+              StepHeader _ label -> label == "boom"
+              _ -> False
+        notes `shouldSatisfy` any isBoomStep
+        let headerText = [n.text | n <- notes, isBoomStep n]
+        headerText `shouldSatisfy` any ("round" `T.isInfixOf`)
+        headerText `shouldSatisfy` any ("worker" `T.isInfixOf`)
+      _ -> expectationFailure "expected a Counterexample"
+    -- The richer, source-splicing renderer must not choke on a folded,
+    -- multi-worker journal either.
+    rendered <- renderReportRich report
+    ("boom" `T.isInfixOf` rendered) `shouldBe` True
 
 -- | A model carrying both the racy shared counter and the ground-truth
 -- attempt count, for 'behaviorSpec's lost-update race.

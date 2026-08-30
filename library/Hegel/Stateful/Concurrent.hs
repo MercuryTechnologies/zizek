@@ -4,17 +4,8 @@
 -- Define a 'Machine' and run it with 'run', choosing how many workers the
 -- engine may use via 'fixed', 'upTo', or 'between'.
 --
--- Every rule declares which other rules it may run alongside through its
--- 'Rule.group': two rules in the same group may execute concurrently, rules
--- in different groups never do, and an ungrouped rule belongs to a group shared
--- only by other ungrouped rules.
---
 -- Build a 'Rule' with 'rule', or 'grouped' to place it in a named concurrency
 -- group.
---
--- A rule abandoned mid-'apply' by a rejected assumption or a failed draw can
--- leave a lock it took on the model held forever, so perform every draw a
--- rule needs before taking any lock, rather than interleaving the two.
 module Hegel.Stateful.Concurrent
   ( -- * Specification
     Rule (..),
@@ -40,51 +31,66 @@ where
 
 import Control.Exception (mask_)
 import Control.Exception qualified as E
-import Control.Monad (forM_, when)
+import Control.Monad (void, when)
 import Control.Monad.IO.Class (liftIO)
+import Data.Foldable (for_)
 import Data.Int (Int64)
+import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
+import Data.Sequence ((|>))
 import Data.Text (Text)
-import Hegel.Internal.Control (MalformedTest (..))
+import Data.Text qualified as T
+import Hegel.Internal.Control (MalformedTest (..), onFailure)
 import Hegel.Internal.DataSource (freeStateMachine, newConcurrentStateMachine, stateMachineNextGroup)
+import Hegel.Internal.Event (Event (..))
 import Hegel.Internal.StatefulRound (RoundVerdict (..), Worker (..), runRound)
-import Hegel.Internal.TestCase (withClones)
+import Hegel.Internal.TestCase (TestCase (..), withClones)
+import Hegel.Internal.Tick (Tick)
+import Hegel.Internal.Tick qualified as Tick
 import Hegel.Property.Internal
   ( Env (..),
-    Journal (Silent),
+    Journal (..),
     PropertyT,
     Scope (CaseSetup, InStep),
     askEnv,
     checkCloneDepth,
     closeOpenForks,
+    collectLeaks,
+    failureDetails,
+    nested,
     newOpenForks,
+    note,
+    noteFailure,
     registerFinalizer,
     runPropertyT,
     withBaseRunInIO,
     withScope,
   )
+import Hegel.Report (Note (..), NoteKind (Annotation, StepHeader))
 import Hegel.Stateful (Invariant (..))
 import UnliftIO (MonadUnliftIO, throwIO, withRunInIO)
+import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef)
 
 -- * Specification
 
 -- | A rule applied to the shared model during a concurrent stateful test.
 data Rule s m = Rule
-  { name :: !Text,
+  { -- | The rule's name.
+    name :: !Text,
+    -- | The concurrency group this rule belongs to.
     group :: !(Maybe Text),
+    -- | The action this rule performs.
     apply :: s -> PropertyT m ()
   }
 
--- | Construct an ungrouped 'Rule': one that runs alongside every other
--- ungrouped rule, but never alongside a grouped one.
---
--- Use 'grouped' instead to place a rule in a named concurrency group.
+-- | Construct a 'Rule' not associated with any named concurrency group.
 rule :: Text -> (s -> PropertyT m ()) -> Rule s m
 rule name apply = Rule {name, group = Nothing, apply}
 
--- | Construct a 'Rule' in the given concurrency group: it may run
--- concurrently with any other rule sharing that group, and never with a
--- rule in a different one.
+-- | Construct a 'Rule' in the given concurrency group.
+--
+-- it may run concurrently with any other rule sharing that group, and never
+-- alongside a rule in a different one.
 grouped :: Text -> Text -> (s -> PropertyT m ()) -> Rule s m
 grouped name group apply = Rule {name, group = Just group, apply}
 
@@ -98,26 +104,23 @@ data Machine s m = Machine
 
 -- * Concurrency groups
 
--- | The group every ungrouped 'Rule' belongs to.
+-- | The display name used to render ungrouped rules.
 anonymousGroup :: Text
 anonymousGroup = "<anonymous>"
 
 -- | The distinct group labels of a rule list, in first-appearance order,
 -- and the dense identifier parallel to each input label that
 -- @libhegel@'s @rule_groups@ array wants.
---
--- 'Nothing' resolves to 'anonymousGroup'.
-internGroups :: [Maybe Text] -> ([Text], [Int64])
-internGroups labels = (reverse namesRev, reverse idsRev)
+internGroups :: [Maybe Text] -> ([Maybe Text], [Int64])
+internGroups labels = (reverse labelsRev, reverse idsRev)
   where
-    resolved = map (maybe anonymousGroup id) labels
-    (namesRev, idsRev, _seen) = foldl' step ([], [], Map.empty) resolved
-    step :: ([Text], [Int64], Map.Map Text Int64) -> Text -> ([Text], [Int64], Map.Map Text Int64)
-    step (names, ids, seen) name = case Map.lookup name seen of
-      Just gid -> (names, gid : ids, seen)
+    (labelsRev, idsRev, _seen) = foldl' step ([], [], Map.empty) labels
+    step :: ([Maybe Text], [Int64], Map.Map (Maybe Text) Int64) -> Maybe Text -> ([Maybe Text], [Int64], Map.Map (Maybe Text) Int64)
+    step (ls, ids, seen) label = case Map.lookup label seen of
+      Just gid -> (ls, gid : ids, seen)
       Nothing ->
         let gid = fromIntegral (Map.size seen)
-         in (name : names, gid : ids, Map.insert name gid seen)
+         in (label : ls, gid : ids, Map.insert label gid seen)
 
 -- * Concurrency
 
@@ -148,6 +151,67 @@ upTo = between 1
 between :: Int -> Int -> Concurrency
 between lo hi = Concurrency {minWorkers = lo, maxWorkers = hi}
 
+-- * Reporting
+
+-- | Journal a real failure as an in-band 'Failure' note under @journal@, then
+-- re-throw so the caller still sees the counterexample and the round\/case
+-- protocol still concludes on it.
+withFailureNoteIn :: (MonadUnliftIO m) => Journal -> PropertyT m a -> PropertyT m a
+withFailureNoteIn journal = case journal of
+  Silent -> id
+  Recording _ -> \act ->
+    withRunInIO \runInIO ->
+      runInIO act `onFailure` \e ->
+        let (message, loc, diff) = failureDetails e
+         in runInIO (noteFailure loc diff message)
+
+-- | One entry drained from a worker's round-local buffer, tagged so its
+-- local clock can be read uniformly for 'mergeByClock'.
+data WorkerEntry = EntryNote !Note | EntryEvent !Event
+
+entryClock :: WorkerEntry -> Tick
+entryClock (EntryNote n) = n.clock
+entryClock (EntryEvent e) = e.clock
+
+-- | Order a worker's own notes and pool events back into the single
+-- sequence they occurred in.
+--
+-- Both streams are stamped from the same per-worker clock, so no two entries
+-- entries ever share a clock value and the merge is unambiguous.
+mergeByClock :: [Note] -> [Event] -> [WorkerEntry]
+mergeByClock notes events = sortOn entryClock (map EntryNote notes <> map EntryEvent events)
+
+-- | Fold one worker's notes and pool events into the root journal and event
+-- buffer.
+foldWorkerRound :: TestCase -> (Note -> IO ()) -> IORef Int -> Int -> Int -> [Note] -> [Event] -> IO ()
+foldWorkerRound rootTc sink stepCounter roundIdx workerIdx notes events =
+  for_ (mergeByClock notes events) \case
+    EntryNote n -> do
+      (kind, text) <- case n.kind of
+        StepHeader _ ruleName -> do
+          idx <- atomicModifyIORef' stepCounter \i -> (i + 1, i + 1)
+          pure (StepHeader idx ruleName, stepText idx roundIdx workerIdx ruleName)
+        _ -> pure (n.kind, n.text)
+      clock <- Tick.next rootTc.recording
+      sink Note {kind, text, loc = n.loc, depth = n.depth, clock}
+    EntryEvent e -> do
+      clock <- Tick.next rootTc.recording
+      modifyIORef' rootTc.events (|> Event {clock, var = e.var, kind = e.kind})
+
+-- | The display string for a folded step's header:
+--
+-- e.g. @\"Step 4 (round 2, worker 2): restock\"@.
+stepText :: Int -> Int -> Int -> Text -> Text
+stepText idx roundIdx workerIdx ruleName =
+  "Step "
+    <> T.pack (show idx)
+    <> " (round "
+    <> T.pack (show roundIdx)
+    <> ", worker "
+    <> T.pack (show (workerIdx + 1))
+    <> "): "
+    <> ruleName
+
 -- * Execution
 
 -- | Run a concurrent stateful test.
@@ -171,7 +235,8 @@ run bounds machine = do
       -- concurrency safety a worker's env forces.
       checkInvariants :: s -> PropertyT m ()
       checkInvariants s =
-        forM_ machine.invariants \invariant -> withScope InStep (invariant.check s)
+        for_ machine.invariants \invariant ->
+          nested (withFailureNoteIn env.journal (withScope InStep (invariant.check s)))
 
   -- Acquire the state-machine handle and register its release atomically
   -- under 'mask_', the same fix 'Hegel.Property.Internal.resource' applies.
@@ -189,16 +254,24 @@ run bounds machine = do
         runInIO (registerFinalizer (freeStateMachine tc (fst acquired)))
         pure acquired
 
-  s0 <- withScope CaseSetup machine.initial
+  s0 <- withFailureNoteIn env.journal (withScope CaseSetup machine.initial)
+  note Annotation Nothing "Initial invariant check."
   checkInvariants s0
 
   withBaseRunInIO \runBase ->
     withClones concurrency tc \clones -> do
-      let mkWorker clone =
-            let workerEnv =
+      stepCounter <- newIORef (0 :: Int)
+      roundCounter <- newIORef (0 :: Int)
+      -- One private notes buffer per clone.
+      workerNotes <- traverse (const (newIORef mempty)) clones
+      let mkWorker (clone, notesRef) =
+            let workerJournal = case env.journal of
+                  Silent -> Silent
+                  Recording _ -> Recording \n -> modifyIORef' notesRef (|> n)
+                workerEnv =
                   env
                     { testCase = clone,
-                      journal = Silent,
+                      journal = workerJournal,
                       cloneDepth = env.cloneDepth + 1
                     }
                 dispatch ruleIndex = do
@@ -217,11 +290,35 @@ run bounds machine = do
                             )
                   workerForks <- newOpenForks
                   let dispatchEnv = workerEnv {openForks = workerForks}
-                  runBase (runPropertyT dispatchEnv (withScope InStep (matchedRule.apply s0)))
+                  runBase
+                    ( runPropertyT dispatchEnv do
+                        -- The index here is a placeholder: only the root
+                        -- driver, folding every worker's dispatches for the
+                        -- round once the round has run, knows this step's true
+                        -- global number (see 'foldWorkerRound').
+                        note (StepHeader 0 matchedRule.name) Nothing matchedRule.name
+                        nested (withFailureNoteIn workerJournal (withScope InStep (matchedRule.apply s0)))
+                    )
+                    `E.onException` void (collectLeaks workerForks)
                   closeOpenForks workerForks
-             in Worker {testCase = clone, dispatch, onRejected = pure ()}
 
-          workers = map mkWorker clones
+                onRejected =
+                  runBase (runPropertyT workerEnv (note Annotation Nothing "Rule stopped early due to violated assumption."))
+             in Worker {testCase = clone, dispatch, onRejected}
+
+          workers = map mkWorker (zip clones workerNotes)
+
+          -- Drain every worker's per-round notes and pool events, in
+          -- ascending worker order, and fold them into the root's journal
+          -- and event buffer.
+          foldRound = case env.journal of
+            Silent -> pure ()
+            Recording sink -> do
+              roundIdx <- atomicModifyIORef' roundCounter \r -> (r + 1, r + 1)
+              for_ (zip3 [0 :: Int ..] clones workerNotes) \(workerIdx, clone, notesRef) -> do
+                notes <- Tick.drainAndReset notesRef
+                events <- Tick.drainAndReset clone.events
+                foldWorkerRound tc sink stepCounter roundIdx workerIdx notes events
 
           roundLoop = do
             mGroupId <- stateMachineNextGroup tc sm
@@ -229,14 +326,8 @@ run bounds machine = do
               -- HEGEL_STATE_MACHINE_DONE: the whole machine is done stepping.
               Nothing -> pure ()
               Just _groupId -> do
-                -- The dropped-panics list can never render today: it is
-                -- non-empty only when some other worker's overrun, invalid
-                -- conclusion, or control error outranked a panic, which
-                -- needs at least two workers, and every worker's journal is
-                -- 'Silent' whenever there is more than one. Surfacing it is
-                -- deferred to the reporter follow-up that gives this module
-                -- a journal to surface it into.
                 (verdict, _dropped) <- runRound sm workers
+                foldRound
                 case verdict of
                   ContinueRound -> do
                     runBase (runPropertyT env (checkInvariants s0))
