@@ -20,6 +20,7 @@ import Sampling qualified
 import SourceRendering qualified
 import StandardGenerators qualified
 import Stateful qualified
+import StatefulRoundInternal qualified
 import Test.Tasty (defaultMain, testGroup)
 import Test.Tasty.Hspec (testSpec)
 import TestCaseClone qualified
@@ -39,6 +40,7 @@ main = do
   replay <- testSpec "database replay" DatabaseReplay.spec
   keyed <- testSpec "keyed properties" KeyedProperties.spec
   stateful <- testSpec "stateful testing" Stateful.spec
+  statefulRoundInternal <- testSpec "stateful round (internal)" StatefulRoundInternal.spec
   finalizers <- testSpec "finalizers" Finalizers.spec
   resources <- testSpec "resources" Resources.spec
   poolEvents <- testSpec "pool events" PoolEvents.spec
@@ -66,6 +68,7 @@ main = do
           keyed,
           KeyedProperties.tastyTree,
           stateful,
+          statefulRoundInternal,
           finalizers,
           resources,
           poolEvents,

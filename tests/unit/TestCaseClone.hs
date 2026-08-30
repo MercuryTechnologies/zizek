@@ -54,6 +54,16 @@ spec = describe "TestCase.withClone" do
         (cloned.draws == env.testCase.draws) `shouldBe` False
     report.result `shouldSatisfy` isOk
 
+  it "gives the clone its own diagnostics context, not the source's" do
+    -- Regression guard: a clone used to share the source's HegelContext,
+    -- a native pointer mutated with no lock on every fallible call, so two
+    -- threads driving the source and a clone concurrently raced on it.
+    report <- check def do
+      env <- askEnv
+      liftIO $ TestCase.withClone env.testCase \cloned -> do
+        (cloned.handle.ctx == env.testCase.handle.ctx) `shouldBe` False
+    report.result `shouldSatisfy` isOk
+
   it "draws independently from the clone" do
     report <- check def do
       env <- askEnv

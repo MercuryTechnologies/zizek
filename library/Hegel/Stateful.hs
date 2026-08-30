@@ -62,24 +62,24 @@ module Hegel.Stateful
   )
 where
 
-import Control.Exception (mask_, onException)
+import Control.Exception (mask_)
+import Control.Exception qualified
 import Control.Monad (forM_, when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Assertion (callSite)
-import Hegel.Internal.Control (ControlSignal (..), MalformedTest (..), TestStopped (..), catchControl, onFailure)
+import Hegel.Internal.Control (MalformedTest (..), onFailure)
 import Hegel.Internal.DataSource
   ( Label (LabelStatefulRule),
     freeStateMachine,
     newStateMachine,
     startSpan,
     stateMachineNextGroup,
-    stateMachineNextRule,
-    stateMachineRuleRejected,
     stopSpan,
   )
+import Hegel.Internal.StatefulRound (RoundVerdict (..), Worker (..), runRound)
 import Hegel.Property.Internal
   ( Env (..),
     Journal (..),
@@ -95,6 +95,7 @@ import Hegel.Property.Internal
   )
 import Hegel.Report (NoteKind (Annotation, Response, StepHeader), renderValue)
 import UnliftIO (MonadUnliftIO, throwIO, withRunInIO)
+import UnliftIO.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 
 -- | A rule applied to the model during a stateful test.
 --
@@ -218,81 +219,83 @@ run machine = do
   stepNote "Initial invariant check."
   checkInvariants s0
 
+  -- The current model, threaded by 'Hegel.Internal.StatefulRound.Worker's
+  -- IO-shaped dispatch rather than by return value: the generic round driver
+  -- underneath knows nothing of a rule's state-by-value shape, since a
+  -- genuinely concurrent worker couldn't thread state that way at all. The
+  -- sequential 'Machine' here is the one-worker case, so bridging its
+  -- by-value 'Rule.apply' onto that dispatch shape via a mutable cell costs
+  -- nothing observable: only this one worker ever touches it.
+  stateRef <- liftIO (newIORef s0)
+  -- Total rule dispatches so far this case, for 'StepHeader' numbering;
+  -- counts a rejected dispatch the same as a successful one, matching
+  -- 'Hegel.Settings.statefulStepCount'\'s own accounting.
+  attemptsRef <- liftIO (newIORef (0 :: Int))
+  -- Whether any rule this round was rejected, so the round's span closes
+  -- discarded and the shrinker can delete the whole round at once.
+  rejectedRef <- liftIO (newIORef False)
+
   -- The engine halts the loop once it has handed out 'Hegel.Settings.statefulStepCount'
   -- steps, inclusive of steps with an 'assume'.
   --
   -- On the root handle, it asks the engine whether another round should run,
-  -- then lets 'ruleLoop' pull this round's rules until its own budget is exhausted.
-  --
-  -- A round's draws share one 'LabelStatefulRule' span, discarded when any of
-  -- its rules was rejected, so the shrinker can delete a whole round at once.
-  let roundLoop :: s -> Int -> PropertyT m ()
-      roundLoop s attempts = do
-        outcome <-
-          withRunInIO \runInIO -> do
-            startSpan tc LabelStatefulRule
-            mGroupId <- stateMachineNextGroup tc sm
-            case mGroupId of
-              -- HEGEL_STATE_MACHINE_DONE: the whole machine is done stepping.
-              Nothing -> do
-                stopSpan tc False
-                pure Nothing
-              Just _groupId ->
-                ( do
-                    (s', attempts', rejected) <- runInIO (ruleLoop s attempts False)
-                    stopSpan tc rejected
-                    pure (Just (s', attempts'))
-                )
-                  `onException` stopSpan tc False
-        case outcome of
-          Nothing -> pure ()
-          Just (s', attempts') -> do
-            checkInvariants s'
-            roundLoop s' attempts'
-
-      -- Pull rules for the current round until the engine signals the
-      -- round's join point, applying each in turn.
-      ruleLoop :: s -> Int -> Bool -> PropertyT m (s, Int, Bool)
-      ruleLoop s attempts rejected = do
-        mRuleIndex <- liftIO (stateMachineNextRule tc sm 0)
-        case mRuleIndex of
-          -- HEGEL_STATE_MACHINE_DONE: the round's budget is exhausted.
-          Nothing -> pure (s, attempts, rejected)
-          Just ruleIndex -> do
-            let rule = case lookup ruleIndex (zip [0 ..] machine.rules) of
-                  Just r -> r
-                  -- @libhegel@ guarantees indices in @[0, num_rules)@, so
-                  -- this is unreachable unless the engine itself is
-                  -- misbehaving.
-                  Nothing ->
-                    error
-                      ( "Hegel.Stateful.run: libhegel returned rule index "
-                          <> show ruleIndex
-                          <> " for a machine with "
-                          <> show (length machine.rules)
-                          <> " rules. This should be impossible; please report it as a libhegel bug."
-                      )
-            let stepIndex = attempts + 1
+  -- then lets 'Hegel.Internal.StatefulRound.runRound' pull this round's rules
+  -- until the one worker's own budget is exhausted.
+  withRunInIO \runInIO -> do
+    let dispatch ruleIndex = do
+          let rule = case lookup ruleIndex (zip [0 ..] machine.rules) of
+                Just r -> r
+                -- @libhegel@ guarantees indices in @[0, num_rules)@, so
+                -- this is unreachable unless the engine itself is
+                -- misbehaving.
+                Nothing ->
+                  error
+                    ( "Hegel.Stateful.run: libhegel returned rule index "
+                        <> show ruleIndex
+                        <> " for a machine with "
+                        <> show (length machine.rules)
+                        <> " rules. This should be impossible; please report it as a libhegel bug."
+                    )
+          stepIndex <- atomicModifyIORef' attemptsRef \a -> (a + 1, a + 1)
+          runInIO $
             note
               (StepHeader stepIndex rule.name)
               Nothing
               ("Step " <> T.pack (show stepIndex) <> ": " <> rule.name)
-            -- Only 'Assume' is handled here; 'Stop' is re-raised so the
-            -- enclosing round's span closes discarded and the choice-budget
-            -- exhaustion propagates to the runner as an overrun, same as a
-            -- real failure.
-            verdict <-
-              withRunInIO \runInIO ->
-                (Right <$> runInIO (nested (withFailureNote (withScope InStep (rule.apply s)))))
-                  `catchControl` (pure . Left)
-            case verdict of
-              Right s' -> ruleLoop s' (attempts + 1) rejected
-              Left Stop -> throwIO TestStopped
-              Left Assume -> do
-                liftIO (stateMachineRuleRejected tc sm 0)
-                stepNote "Rule stopped early due to violated assumption."
-                ruleLoop s (attempts + 1) True
+          s <- readIORef stateRef
+          s' <- runInIO (nested (withFailureNote (withScope InStep (rule.apply s))))
+          writeIORef stateRef s'
 
-  roundLoop s0 0
+        onRejected = do
+          writeIORef rejectedRef True
+          runInIO (stepNote "Rule stopped early due to violated assumption.")
+
+        worker = Worker {testCase = tc, dispatch, onRejected}
+
+        -- A round's draws share one 'LabelStatefulRule' span. On
+        -- 'ContinueRound' it closes discarded exactly when some rule this
+        -- round was rejected, so the shrinker can delete the whole round.
+        roundLoop = do
+          startSpan tc LabelStatefulRule
+          mGroupId <- stateMachineNextGroup tc sm
+          case mGroupId of
+            -- HEGEL_STATE_MACHINE_DONE: the whole machine is done stepping.
+            Nothing -> stopSpan tc False
+            Just _groupId -> do
+              writeIORef rejectedRef False
+              (verdict, _dropped) <- runRound sm [worker]
+              case verdict of
+                ContinueRound -> do
+                  rejected <- readIORef rejectedRef
+                  stopSpan tc rejected
+                  s' <- readIORef stateRef
+                  runInIO (checkInvariants s')
+                  roundLoop
+                -- NOTE: This /must/ be 'Control.Exception.throwIO', as
+                -- 'UnliftIO.throwIO' applies a synchronous exception wrapper,
+                -- which can mess up our async control signals.
+                Conclude e -> Control.Exception.throwIO e
+
+    roundLoop
 {-# INLINEABLE run #-}
 {-# SPECIALIZE run :: Machine s IO -> PropertyT IO () #-}

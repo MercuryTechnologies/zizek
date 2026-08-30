@@ -64,6 +64,7 @@ module Hegel.Internal.DataSource
 
     -- * State machines
     newStateMachine,
+    newConcurrentStateMachine,
     stateMachineNextGroup,
     stateMachineNextRule,
     stateMachineRuleRejected,
@@ -769,6 +770,40 @@ newStateMachine tc ruleNames invariantNames =
                   outConcurrency
                   >>= handleReturnCode tc
                 peek outHandle
+
+-- | A generalization of 'newStateMachine' that supports the @libhegel@ round
+-- protocol.
+--
+-- @ruleGroups@ is a parallel array to @ruleNames@; @ruleNames@ must be
+-- non-empty.
+--
+-- Throws 'TestStopped' on exhaustion, 'AssumeRejected' for the run's first
+-- @maxConcurrency > 1@ creation.
+newConcurrentStateMachine :: TestCase -> [Text] -> [Int64] -> [Text] -> Int64 -> Int64 -> IO (Ptr HegelStateMachine, Int)
+newConcurrentStateMachine tc ruleNames ruleGroups invariantNames minConcurrency maxConcurrency =
+  withMany CString.withText ruleNames \rulePtrs ->
+    withMany CString.withText invariantNames \invPtrs ->
+      withArray rulePtrs \rulesArr ->
+        withArray invPtrs \invArr ->
+          withArray ruleGroups \groupsArr ->
+            withSlotOf tc.slot \outHandle ->
+              alloca \outConcurrency -> do
+                hegel_new_state_machine
+                  tc.handle.ctx
+                  tc.handle.ptr
+                  rulesArr
+                  groupsArr
+                  (fromIntegral (length ruleNames))
+                  invArr
+                  (fromIntegral (length invariantNames))
+                  minConcurrency
+                  maxConcurrency
+                  outHandle
+                  outConcurrency
+                  >>= handleReturnCode tc
+                handle <- peek outHandle
+                concurrency <- fromIntegral <$> (peek outConcurrency :: IO Int64)
+                pure (handle, concurrency)
 
 -- | Start the machine's next round, or 'Nothing' once the engine has
 -- decided the whole state machine is done stepping.

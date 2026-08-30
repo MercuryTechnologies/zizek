@@ -36,8 +36,7 @@ import Control.Exception qualified as E
 import Control.Monad (void)
 import Control.Monad.IO.Class (liftIO)
 import Data.Either (partitionEithers)
-import Hegel.Internal.TestCase (TestCase)
-import Hegel.Internal.TestCase qualified as TestCase
+import Hegel.Internal.TestCase (withClonePair, withClones)
 import Hegel.Property.Internal
   ( Env (testCase),
     PropertyT,
@@ -111,20 +110,6 @@ replicateConcurrentlyBounded :: (MonadUnliftIO m) => Int -> Int -> PropertyT m a
 replicateConcurrentlyBounded cap n act = runBranches (Async.pooledMapConcurrentlyN cap) (replicate n act)
 
 -- * Mechanics
-
--- | Acquire two clones of @tc@ in a fixed order, against @tc@ itself rather
--- than each other, so both fork positions are direct children at clone depth
--- one and consume their choice positions in the same order on every replay.
-withClonePair :: TestCase -> (TestCase -> TestCase -> IO r) -> IO r
-withClonePair tc k = TestCase.withClone tc \c1 -> TestCase.withClone tc \c2 -> k c1 c2
-
--- | Acquire @n@ clones of @tc@ sequentially, in a fixed order, for the same
--- reason 'withClonePair' does.
-withClones :: Int -> TestCase -> ([TestCase] -> IO r) -> IO r
-withClones n0 tc k = go n0 []
-  where
-    go 0 acc = k (reverse acc)
-    go n acc = TestCase.withClone tc \c -> go (n - 1) (c : acc)
 
 -- | Run every branch of a homogeneous fan-out, given the concurrency strategy
 -- ('UnliftIO.Async.mapConcurrently' for unbounded fan-out, or a pooled

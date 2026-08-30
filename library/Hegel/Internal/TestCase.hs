@@ -10,6 +10,8 @@ module Hegel.Internal.TestCase
   ( -- * Construction
     mkTestCase,
     withClone,
+    withClonePair,
+    withClones,
 
     -- * Test case
     Handle (..),
@@ -66,11 +68,7 @@ mkTestCase recording handle = do
 --
 -- The clone draws from its own independent choice stream but shares @src@'s
 -- outcome and budget, so it can be driven concurrently from another thread
--- without perturbing @src@. It gets its own 'Slot' and event\/draw buffers
--- from 'mkTestCase' the same way every other 'TestCase' does, and its own
--- recording clock when @src@ is 'Tick.Active' rather than @src@'s: nothing
--- about a clone is shared Haskell-side mutable state with the case it came
--- from.
+-- without perturbing @src@.
 --
 -- __NOTE__: the clone must not escape @action@. A clone that outlives
 -- 'withClone' without ever being completed or freed wedges the whole run
@@ -78,19 +76,35 @@ mkTestCase recording handle = do
 -- prevents that, so do not call 'hegel_test_case_free' on the clone
 -- yourself, and do not return it out of @action@.
 withClone :: TestCase -> (TestCase -> IO a) -> IO a
-withClone src = bracket acquire release
+withClone src action =
+  bracket hegel_context_new (void . hegel_context_free) \ctx ->
+    bracket (acquire ctx) release action
   where
-    acquire :: IO TestCase
-    acquire = do
+    acquire :: Ptr HegelContext -> IO TestCase
+    acquire ctx = do
       ptr <- alloca \out -> do
         throwOnError src.handle.ctx =<< hegel_test_case_clone src.handle.ctx src.handle.ptr out
         peek out
       recording <- case src.recording of
         Tick.Silent -> pure Tick.Silent
         Tick.Active _ -> Tick.newRecording
-      mkTestCase recording Handle {ctx = src.handle.ctx, ptr}
+      mkTestCase recording Handle {ctx, ptr}
     release :: TestCase -> IO ()
     release clone = void (hegel_test_case_free clone.handle.ctx clone.handle.ptr)
+
+-- | Acquire two clones of @tc@ in a fixed order, against @tc@ itself rather
+-- than each other, so both fork positions are direct children at clone depth
+-- one and consume their choice positions in the same order on every replay.
+withClonePair :: TestCase -> (TestCase -> TestCase -> IO r) -> IO r
+withClonePair tc k = withClone tc \c1 -> withClone tc \c2 -> k c1 c2
+
+-- | Acquire @n@ clones of @tc@ sequentially, in a fixed order, for the same
+-- reason 'withClonePair' does.
+withClones :: Int -> TestCase -> ([TestCase] -> IO r) -> IO r
+withClones n0 tc k = go n0 []
+  where
+    go 0 acc = k (reverse acc)
+    go n acc = withClone tc \c -> go (n - 1) (c : acc)
 
 -- * Test case
 

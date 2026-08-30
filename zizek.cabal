@@ -132,6 +132,7 @@ library
     Hegel.Internal.Event
     Hegel.Internal.Foreign.CString
     Hegel.Internal.Foreign.Raw
+    Hegel.Internal.StatefulRound
     Hegel.Internal.TestCase
     Hegel.Internal.Tick
     Hegel.Phase
@@ -232,6 +233,7 @@ test-suite unit
     SourceRendering
     StandardGenerators
     Stateful
+    StatefulRoundInternal
     TestCaseClone
     TraceFixtures
     TraceModel

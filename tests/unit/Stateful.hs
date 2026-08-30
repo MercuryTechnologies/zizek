@@ -1,7 +1,7 @@
 -- | Unit tests for 'Hegel.Pool' and 'Hegel.Stateful'.
 module Stateful (spec) where
 
-import Control.Monad (when)
+import Control.Monad (forever, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Default.Class (def)
 import Data.Function ((&))
@@ -12,6 +12,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Hegel (Gen)
 import Hegel.Gen qualified as Gen
+import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, assume, forAll, forAllSilent)
@@ -276,6 +277,26 @@ statefulSpec = describe "Machine" do
     case report.result of
       Aborted _ -> pure ()
       other -> expectationFailure ("expected Aborted, got: " <> show other)
+
+  it "an overrun inside a rule's draw is reported as GaveUp, not a fabricated counterexample" do
+    let overrunning :: Stateful.Rule Counter IO
+        overrunning =
+          Stateful.Rule "overrun" \s -> do
+            _ <- forever (forAll intGen >> pure ())
+            pure s
+        machine =
+          Stateful.Machine
+            { initial = pure (Counter 0),
+              rules = [overrunning],
+              invariants = []
+            }
+    report <-
+      check
+        def {testCases = 5, suppressHealthCheck = [LargeInitialTestCase, TestCasesTooLarge]}
+        (Stateful.run machine)
+    case report.result of
+      GaveUp _ -> pure ()
+      other -> expectationFailure ("expected GaveUp, got: " <> show other)
 
   it "the default statefulStepCount bounds steps, and most cases hit it exactly" do
     -- Analogue of the Rust reference's test_step_cap_is_50_most_of_the_time.
