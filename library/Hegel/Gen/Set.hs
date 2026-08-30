@@ -39,17 +39,17 @@ instance (Ord a) => Build (SetBuilder a) (Set a) where
     let poolMax = case b.sMaxSize of
           Nothing -> Nothing
           Just mx -> Just (Prelude.max (b.sMinSize + 1) mx)
-    coll <- Collection.new tc b.sMinSize poolMax
-    let loop acc = do
-          keepGoing <- Collection.more coll
-          if not keepGoing
-            then pure acc
-            else do
-              x <- draw tc b.sElement
-              if Set.member x acc
-                then Collection.reject coll (Just "duplicate element") *> loop acc
-                else loop (Set.insert x acc)
-    result <- loop Set.empty
+    result <- Collection.with tc b.sMinSize poolMax \coll -> do
+      let loop acc = do
+            keepGoing <- Collection.more coll
+            if not keepGoing
+              then pure acc
+              else do
+                x <- draw tc b.sElement
+                if Set.member x acc
+                  then Collection.reject coll (Just "duplicate element") *> loop acc
+                  else loop (Set.insert x acc)
+      loop Set.empty
     let trimmed = case b.sMaxSize of
           Just mx | Set.size result > mx -> Set.take mx result
           _ -> result

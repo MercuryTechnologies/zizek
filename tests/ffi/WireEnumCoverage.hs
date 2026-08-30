@@ -71,7 +71,8 @@ wireEnumCoverageSpec = describe "wire enum coverage (conversion values vs hegel.
                 LabelMapped,
                 LabelSampledFrom,
                 LabelEnumVariant,
-                LabelFeatureFlag
+                LabelFeatureFlag,
+                LabelStatefulRule
               ]
       )
   it "Status" $

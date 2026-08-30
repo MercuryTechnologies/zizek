@@ -39,17 +39,17 @@ instance Build IntSetBuilder IntSet where
     let poolMax = case b.sMaxSize of
           Nothing -> Nothing
           Just mx -> Just (Prelude.max (b.sMinSize + 1) mx)
-    coll <- Collection.new tc b.sMinSize poolMax
-    let loop acc = do
-          keepGoing <- Collection.more coll
-          if not keepGoing
-            then pure acc
-            else do
-              x <- draw tc b.sElement
-              if IntSet.member x acc
-                then Collection.reject coll (Just "duplicate element") *> loop acc
-                else loop (IntSet.insert x acc)
-    result <- loop IntSet.empty
+    result <- Collection.with tc b.sMinSize poolMax \coll -> do
+      let loop acc = do
+            keepGoing <- Collection.more coll
+            if not keepGoing
+              then pure acc
+              else do
+                x <- draw tc b.sElement
+                if IntSet.member x acc
+                  then Collection.reject coll (Just "duplicate element") *> loop acc
+                  else loop (IntSet.insert x acc)
+      loop IntSet.empty
     let trimmed = case b.sMaxSize of
           Just mx | IntSet.size result > mx -> IntSet.fromAscList (take mx (IntSet.toAscList result))
           _ -> result

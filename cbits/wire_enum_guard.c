@@ -101,6 +101,10 @@ int hegel_guard_label(uint64_t x) {
     case HEGEL_LABEL_BYTES:
     case HEGEL_LABEL_STRING:
     case HEGEL_LABEL_STATEFUL_RULE:
+    case HEGEL_LABEL_FRESH_ID:
+    case HEGEL_LABEL_SET_CHOICE:
+    case HEGEL_LABEL_CONCURRENCY:
+    case HEGEL_LABEL_RECURSIVE:
       return 0;
   }
   return -1;
@@ -122,6 +126,7 @@ int hegel_guard_run_status(int x) {
     case HEGEL_RUN_STATUS_PASSED:
     case HEGEL_RUN_STATUS_FAILED:
     case HEGEL_RUN_STATUS_ERROR:
+    case HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC:
       return 0;
   }
   return -1;
@@ -139,6 +144,7 @@ int hegel_guard_result(int x) {
     case HEGEL_E_NOT_COMPLETE:
     case HEGEL_E_INTERNAL:
     case HEGEL_E_CONCURRENT_USE:
+    case HEGEL_E_RETRY:
       return 0;
   }
   return -1;

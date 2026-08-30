@@ -95,9 +95,14 @@ check settings prop =
               | otherwise -> pure (Aborted (UnhealthyInput f.origin))
             Nothing ->
               pure (Aborted (Errored (toException (userError "run reported a failure but exposed no counterexample"))))
-          -- The run itself failed (a health check, a nondeterministic test, an
-          -- engine panic) and produced no verdict on the property.
+          -- The run itself failed (a health check, an engine panic) and
+          -- produced no verdict on the property.
           RunErrored -> pure (Aborted (UnhealthyInput (fromMaybe "the run failed" outcome.runError)))
+          -- Unreachable until a caller can create a concurrent state machine;
+          -- see 'RunNondeterministic'.
+          RunNondeterministic ->
+            pure . Aborted . Errored . toException $
+              userError "the run failed on a nondeterministic concurrent state machine, which Hegel.Stateful cannot yet report"
         pure
           Report
             { result,
@@ -280,6 +285,9 @@ data RunStatus
     RunFailed
   | -- | The run itself failed and produced no verdict on the property.
     RunErrored
+  | -- | The property failed on a run a concurrent state machine declared
+    -- nondeterministic; the failure carries no reproduce blob.
+    RunNondeterministic
   deriving stock (Show, Eq)
 
 -- | Decode the @hegel_run_status_t@ wire code; an unrecognized code is treated
@@ -289,6 +297,7 @@ instance Witch.TryFrom CInt RunStatus where
     HEGEL_RUN_STATUS_PASSED -> Just RunPassed
     HEGEL_RUN_STATUS_FAILED -> Just RunFailed
     HEGEL_RUN_STATUS_ERROR -> Just RunErrored
+    HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC -> Just RunNondeterministic
     _ -> Nothing
 
 -- | The aggregated verdict of a finished run.

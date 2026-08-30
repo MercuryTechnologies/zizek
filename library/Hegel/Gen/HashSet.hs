@@ -40,17 +40,17 @@ instance (Hashable a) => Build (HashSetBuilder a) (HashSet a) where
     let poolMax = case b.sMaxSize of
           Nothing -> Nothing
           Just mx -> Just (Prelude.max (b.sMinSize + 1) mx)
-    coll <- Collection.new tc b.sMinSize poolMax
-    let loop acc = do
-          keepGoing <- Collection.more coll
-          if not keepGoing
-            then pure acc
-            else do
-              x <- draw tc b.sElement
-              if HashSet.member x acc
-                then Collection.reject coll (Just "duplicate element") *> loop acc
-                else loop (HashSet.insert x acc)
-    result <- loop HashSet.empty
+    result <- Collection.with tc b.sMinSize poolMax \coll -> do
+      let loop acc = do
+            keepGoing <- Collection.more coll
+            if not keepGoing
+              then pure acc
+              else do
+                x <- draw tc b.sElement
+                if HashSet.member x acc
+                  then Collection.reject coll (Just "duplicate element") *> loop acc
+                  else loop (HashSet.insert x acc)
+      loop HashSet.empty
     let trimmed = case b.sMaxSize of
           Just mx | HashSet.size result > mx -> HashSet.fromList (take mx (HashSet.toList result))
           _ -> result

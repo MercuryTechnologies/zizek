@@ -50,20 +50,20 @@ instance Build (ListBuilder a) [a] where
     let poolMax = case (b.lUnique, b.lMaxSize) of
           (Just _, Just mx) -> Just (Prelude.max (b.lMinSize + 1) mx)
           _ -> b.lMaxSize
-    coll <- Collection.new tc b.lMinSize poolMax
-    let dup = case b.lUnique of
-          Just eq -> \x xs -> any (eq x) xs
-          Nothing -> \_ _ -> False
-        loop acc = do
-          keepGoing <- Collection.more coll
-          if not keepGoing
-            then pure (reverse acc)
-            else do
-              x <- draw tc b.lElement
-              if dup x acc
-                then Collection.reject coll (Just "duplicate element") *> loop acc
-                else loop (x : acc)
-    result <- loop []
+    result <- Collection.with tc b.lMinSize poolMax \coll -> do
+      let dup = case b.lUnique of
+            Just eq -> \x xs -> any (eq x) xs
+            Nothing -> \_ _ -> False
+          loop acc = do
+            keepGoing <- Collection.more coll
+            if not keepGoing
+              then pure (reverse acc)
+              else do
+                x <- draw tc b.lElement
+                if dup x acc
+                  then Collection.reject coll (Just "duplicate element") *> loop acc
+                  else loop (x : acc)
+      loop []
     let trimmed = case b.lMaxSize of
           Just mx | length result > mx -> take mx result
           _ -> result

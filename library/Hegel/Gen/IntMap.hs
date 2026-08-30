@@ -43,19 +43,19 @@ instance Build (IntMapBuilder v) (IntMap v) where
     let poolMax = case b.mMaxSize of
           Nothing -> Nothing
           Just mx -> Just (Prelude.max (b.mMinSize + 1) mx)
-    coll <- Collection.new tc b.mMinSize poolMax
-    let loop acc = do
-          keepGoing <- Collection.more coll
-          if not keepGoing
-            then pure acc
-            else do
-              k <- draw tc b.mKeys
-              if IntMap.member k acc
-                then Collection.reject coll (Just "duplicate key") *> loop acc
-                else do
-                  v <- draw tc b.mValues
-                  loop (IntMap.insert k v acc)
-    result <- loop IntMap.empty
+    result <- Collection.with tc b.mMinSize poolMax \coll -> do
+      let loop acc = do
+            keepGoing <- Collection.more coll
+            if not keepGoing
+              then pure acc
+              else do
+                k <- draw tc b.mKeys
+                if IntMap.member k acc
+                  then Collection.reject coll (Just "duplicate key") *> loop acc
+                  else do
+                    v <- draw tc b.mValues
+                    loop (IntMap.insert k v acc)
+      loop IntMap.empty
     let trimmed = case b.mMaxSize of
           Just mx | IntMap.size result > mx -> IntMap.fromAscList (take mx (IntMap.toAscList result))
           _ -> result

@@ -362,11 +362,16 @@ newFinalizers = Finalizers <$> newIORef []
 -- * __LIFO__: last registered, first run, so nested resources release in
 --   reverse acquisition order.
 --
--- * __Must not draw, and must not touch the 'TestCase'\/engine__: registration
---   is a plain list push that replays identically, and a finalizer that drew
+-- * __Must not draw against the test case's choice stream__: registration is
+--   a plain list push that replays identically, and a finalizer that drew
 --   ('forAll') would misalign the choice sequence. Finalizers also run after
---   the case has been reported to the engine, so the borrowed test-case handle
---   is stale — do not call back into generation or the FFI from one.
+--   the case has been reported to the engine, so the borrowed test-case
+--   handle is stale for that purpose — do not call back into generation or
+--   span\/completion primitives from one. Releasing an independent
+--   caller-owned handle that outlives the test case, such as
+--   'Hegel.Pool.Pool'\'s own native handle, is fine: its free function only
+--   ever needs the run-scoped @HegelContext@ for diagnostics, never the
+--   test case's own choice stream.
 --
 -- * __Acquire, then register, with no draw in between__: a draw ('forAll') can
 --   discard or stop the case, so acquiring a resource and then drawing before

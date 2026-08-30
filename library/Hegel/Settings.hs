@@ -24,10 +24,6 @@ data Settings = Settings
     -- where in that range to stop.
     --
     -- Must be at least 1.
-    --
-    -- __NOTE__: There is an upstream bug that can cause the underlying
-    -- @libhegel@ engine to produce a 'Hegel.Report.ReplayDiverged' error when
-    -- this is set above the default value of @50@.
     statefulStepCount :: !Int,
     -- | RNG seed. 'Nothing' picks a fresh seed each run.
     seed :: !(Maybe Word64),

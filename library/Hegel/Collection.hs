@@ -1,23 +1,25 @@
--- | Build a 'Collection' with 'new', then iterate with 'more' and optionally
--- reject elements with 'reject'.
+-- | Run an action against a fresh 'Collection' with 'with', then iterate
+-- with 'more' and optionally reject elements with 'reject'.
 --
 -- Usage:
 --
--- > coll <- Collection.new tc minSize maxSize
--- > let loop acc = do
--- >       keepGoing <- Collection.more coll
--- >       if not keepGoing
--- >         then pure (reverse acc)
--- >         else do
--- >           x <- draw tc elemGen
--- >           loop (x : acc)
--- > loop []
+-- > Collection.with tc minSize maxSize \coll -> do
+-- >   let loop acc = do
+-- >         keepGoing <- Collection.more coll
+-- >         if not keepGoing
+-- >           then pure (reverse acc)
+-- >           else do
+-- >             x <- draw tc elemGen
+-- >             loop (x : acc)
+-- >   loop []
 module Hegel.Collection
   ( -- * Handle
     Collection,
 
+    -- * Scope
+    with,
+
     -- * Operations
-    new,
     more,
     reject,
   )
@@ -47,27 +49,34 @@ to at least min_size + 1 and trimming any overshoot from the final result.
 The trim only fires when @libhegel@ actually overshoots the declared maximum.
 -}
 
+import Control.Exception (bracket)
 import Data.Text (Text)
-import Hegel.Internal.DataSource (collectionMore, collectionReject, newCollection)
+import Foreign (Ptr)
+import Hegel.Internal.DataSource (HegelCollection, collectionMore, collectionReject, freeCollection, newCollection)
 import Hegel.Internal.TestCase (TestCase)
 import UnliftIO.IORef (IORef, newIORef, readIORef, writeIORef)
 
--- | Opaque handle to a @libhegel@-managed collection.
+-- | Handle to a @libhegel@-managed collection, live only for the duration of
+-- 'with'.
 data Collection = Collection
   { tc :: !TestCase,
-    minSize :: !Int,
-    maxSize :: !(Maybe Int),
-    -- | Populated lazily on the first 'more'\/'reject' call.
-    handle :: !(IORef (Maybe Int)),
+    handle :: !(Ptr HegelCollection),
     finished :: !(IORef Bool)
   }
 
--- | Create a new collection handle.
-new :: TestCase -> Int -> Maybe Int -> IO Collection
-new tc minSz maxSz = do
-  h <- newIORef Nothing
-  f <- newIORef False
-  pure Collection {tc, minSize = minSz, maxSize = maxSz, handle = h, finished = f}
+-- | Create a collection scoped to @action@, freeing the native handle on
+-- every exit, including an exception.
+with :: TestCase -> Int -> Maybe Int -> (Collection -> IO a) -> IO a
+with tc minSz maxSz action =
+  bracket acquire release action
+  where
+    acquire :: IO Collection
+    acquire = do
+      h <- newCollection tc minSz maxSz
+      f <- newIORef False
+      pure Collection {tc, handle = h, finished = f}
+    release :: Collection -> IO ()
+    release coll = freeCollection coll.tc coll.handle
 
 -- | Ask @libhegel@ whether it can produce another element.
 --
@@ -81,8 +90,7 @@ more coll = do
   if done
     then pure False
     else do
-      cid <- ensureHandle coll
-      result <- collectionMore coll.tc cid
+      result <- collectionMore coll.tc coll.handle
       if result
         then pure True
         else do
@@ -98,16 +106,4 @@ reject coll why = do
   done <- readIORef coll.finished
   if done
     then pure ()
-    else do
-      cid <- ensureHandle coll
-      collectionReject coll.tc cid why
-
-ensureHandle :: Collection -> IO Int
-ensureHandle coll = do
-  mh <- readIORef coll.handle
-  case mh of
-    Just cid -> pure cid
-    Nothing -> do
-      cid <- newCollection coll.tc coll.minSize coll.maxSize
-      writeIORef coll.handle (Just cid)
-      pure cid
+    else collectionReject coll.tc coll.handle why

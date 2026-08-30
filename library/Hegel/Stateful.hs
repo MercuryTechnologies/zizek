@@ -38,7 +38,7 @@
 --
 -- * Preconditions are expressed with 'assume'\/'discard' at the head of a
 --   rule's 'apply'; a rejected precondition skips the step without discarding
---   the entire sequence, however the skipped step still counts toward
+--   the entire sequence, and the skipped step does not count toward
 --   'Hegel.Settings.statefulStepCount'.
 --
 -- * @StateT s (PropertyT m)@ rules adapt with
@@ -62,14 +62,24 @@ module Hegel.Stateful
   )
 where
 
+import Control.Exception (mask_, onException)
 import Control.Monad (forM_, when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Assertion (callSite)
-import Hegel.Internal.Control (ControlSignal (..), MalformedTest (..), catchControl, onFailure)
-import Hegel.Internal.DataSource (newStateMachine, stateMachineNextRule)
+import Hegel.Internal.Control (ControlSignal (..), MalformedTest (..), TestStopped (..), catchControl, onFailure)
+import Hegel.Internal.DataSource
+  ( Label (LabelStatefulRule),
+    freeStateMachine,
+    newStateMachine,
+    startSpan,
+    stateMachineNextGroup,
+    stateMachineNextRule,
+    stateMachineRuleRejected,
+    stopSpan,
+  )
 import Hegel.Property.Internal
   ( Env (..),
     Journal (..),
@@ -80,6 +90,7 @@ import Hegel.Property.Internal
     nested,
     note,
     noteFailure,
+    registerFinalizer,
     withScope,
   )
 import Hegel.Report (NoteKind (Annotation, Response, StepHeader), renderValue)
@@ -148,16 +159,14 @@ data Machine s m = Machine
 -- | Run a stateful test.
 --
 -- Registers the given 'Machine' with @libhegel@, constructs the initial state,
--- checks all invariants, then drives a rule loop until the engine reports the
--- machine is done or the choice budget is exhausted, checking invariants
--- after every successful step.
+-- checks all invariants, then drives a round loop until the engine reports the
+-- machine is done or the choice budget is exhausted.
+--
+-- Each round pulls rules from the engine until its own budget is exhausted,
+-- then invariants are checked once at the round's join point.
 --
 -- The engine owns the step cap and bounds every case to at most
 -- 'Hegel.Settings.statefulStepCount' steps.
---
--- This only polls for the next rule to run; the poll happens unconditionally,
--- including on replay, as it is part of the choice sequence, so skipping one
--- would misalign every later draw and the counterexample would not reproduce.
 run :: forall s m. (MonadUnliftIO m) => Machine s m -> PropertyT m ()
 run machine = do
   when (null machine.rules) $
@@ -192,25 +201,63 @@ run machine = do
         forM_ machine.invariants \invariant ->
           nested (withFailureNote (withScope InStep (invariant.check s)))
 
-  machineId <- liftIO (newStateMachine tc (map (.name) machine.rules) (map (.name) machine.invariants))
+  -- Acquire the state-machine handle and register its release atomically
+  -- under 'mask_', the same fix 'Hegel.Property.Internal.resource' applies,
+  -- but without its 'InStep' rejection: unlike a pool, a nested state
+  -- machine's own bookkeeping is fine to acquire from inside a rule's
+  -- @apply@ (see the "nested Stateful.run inside a Rule's apply" test),
+  -- and 'registerFinalizer' carries no such restriction on its own.
+  sm <-
+    withRunInIO \runInIO ->
+      mask_ do
+        sm <- newStateMachine tc (map (.name) machine.rules) (map (.name) machine.invariants)
+        runInIO (registerFinalizer (freeStateMachine tc sm))
+        pure sm
 
   s0 <- withFailureNote (withScope CaseSetup machine.initial)
   stepNote "Initial invariant check."
   checkInvariants s0
 
-  -- Ported from stateful.rs:255-274:
-  --
   -- The engine halts the loop once it has handed out 'Hegel.Settings.statefulStepCount'
-  -- steps, counting steps that trip 'assume'.
+  -- steps, inclusive of steps with an 'assume'.
   --
-  -- This loop only polls for the next rule and stops on 'Nothing'.
-  let loop :: s -> Int -> PropertyT m ()
-      loop s attempts = do
-        -- STOP_TEST from next_rule propagates to the runner; we don't catch it.
-        mRuleIndex <- liftIO (stateMachineNextRule tc machineId)
-        case mRuleIndex of
-          -- HEGEL_STATE_MACHINE_DONE: the engine says stop.
+  -- On the root handle, it asks the engine whether another round should run,
+  -- then lets 'ruleLoop' pull this round's rules until its own budget is exhausted.
+  --
+  -- A round's draws share one 'LabelStatefulRule' span, discarded when any of
+  -- its rules was rejected, so the shrinker can delete a whole round at once.
+  let roundLoop :: s -> Int -> PropertyT m ()
+      roundLoop s attempts = do
+        outcome <-
+          withRunInIO \runInIO -> do
+            startSpan tc LabelStatefulRule
+            mGroupId <- stateMachineNextGroup tc sm
+            case mGroupId of
+              -- HEGEL_STATE_MACHINE_DONE: the whole machine is done stepping.
+              Nothing -> do
+                stopSpan tc False
+                pure Nothing
+              Just _groupId ->
+                ( do
+                    (s', attempts', rejected) <- runInIO (ruleLoop s attempts False)
+                    stopSpan tc rejected
+                    pure (Just (s', attempts'))
+                )
+                  `onException` stopSpan tc False
+        case outcome of
           Nothing -> pure ()
+          Just (s', attempts') -> do
+            checkInvariants s'
+            roundLoop s' attempts'
+
+      -- Pull rules for the current round until the engine signals the
+      -- round's join point, applying each in turn.
+      ruleLoop :: s -> Int -> Bool -> PropertyT m (s, Int, Bool)
+      ruleLoop s attempts rejected = do
+        mRuleIndex <- liftIO (stateMachineNextRule tc sm 0)
+        case mRuleIndex of
+          -- HEGEL_STATE_MACHINE_DONE: the round's budget is exhausted.
+          Nothing -> pure (s, attempts, rejected)
           Just ruleIndex -> do
             let rule = case lookup ruleIndex (zip [0 ..] machine.rules) of
                   Just r -> r
@@ -230,22 +277,22 @@ run machine = do
               (StepHeader stepIndex rule.name)
               Nothing
               ("Step " <> T.pack (show stepIndex) <> ": " <> rule.name)
-            -- Only control signals are caught here; a real failure is
-            -- journaled in-band  and then propagates out to the runner as the
-            -- counterexample.
+            -- Only 'Assume' is handled here; 'Stop' is re-raised so the
+            -- enclosing round's span closes discarded and the choice-budget
+            -- exhaustion propagates to the runner as an overrun, same as a
+            -- real failure.
             verdict <-
               withRunInIO \runInIO ->
                 (Right <$> runInIO (nested (withFailureNote (withScope InStep (rule.apply s)))))
                   `catchControl` (pure . Left)
             case verdict of
-              Right s' -> do
-                checkInvariants s'
-                loop s' (attempts + 1)
-              Left Stop -> pure ()
+              Right s' -> ruleLoop s' (attempts + 1) rejected
+              Left Stop -> throwIO TestStopped
               Left Assume -> do
+                liftIO (stateMachineRuleRejected tc sm 0)
                 stepNote "Rule stopped early due to violated assumption."
-                loop s (attempts + 1)
+                ruleLoop s (attempts + 1) True
 
-  loop s0 0
+  roundLoop s0 0
 {-# INLINEABLE run #-}
 {-# SPECIALIZE run :: Machine s IO -> PropertyT IO () #-}

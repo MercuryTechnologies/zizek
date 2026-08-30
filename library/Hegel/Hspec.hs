@@ -14,7 +14,7 @@
 --
 -- Use 'propWith' for explicit 'Settings'; for example @propWith def@ runs a
 -- property without the replay database.
--- 
+--
 -- For a property over a custom base monad, use 'propT'\/'propWithT'.
 --
 -- __NOTE__: While the @arg ->@ 'Hspec.Example' instance composes with hspec's

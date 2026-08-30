@@ -44,27 +44,30 @@ import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Text (Text)
+import Foreign (Ptr)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.Control (AssumeRejected (..))
-import Hegel.Internal.DataSource (labelPool, newPool, poolAdd, poolAddFrom, poolGenerate)
+import Hegel.Internal.DataSource (HegelPool, freePool, freshPoolIdentity, labelPool, newPool, poolAdd, poolAddFrom, poolGenerate)
 import Hegel.Internal.Event (Var (..))
 import Hegel.Internal.TestCase (TestCase)
-import Hegel.Property.Internal (Env (..), PropertyT, askEnv)
+import Hegel.Property.Internal (Env (..), PropertyT, askEnv, resource)
 import UnliftIO.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 
 -- | Opaque handle to a @libhegel@-managed pool of values of type @a@.
---
--- Holds the engine-assigned pool id and a local mirror of the currently-live
--- values, keyed by engine variable id. It stores no 'TestCase'. Every
--- operation that needs one reads whichever handle is live at the point of
--- the call, so a pool can outlive the handle it was created against.
 data Pool a = Pool
-  { poolId :: !Int,
+  { handle :: !(Ptr HegelPool),
+    identity :: !Int,
     values :: !(IORef (IntMap a))
   }
 
--- | Create a new pool against the running property's test case. Allocates a
--- pool id from the engine immediately.
+-- | Create a new pool against the running property's test case. Acquires
+-- the native handle and registers its release atomically, so an async
+-- exception landing between the two (a sibling branch failing, a fork
+-- being cancelled) can't leak it; see 'resource'. Consequently, like
+-- 'resource', this throws 'Hegel.Internal.Control.MalformedTest' if called
+-- from inside a stateful rule's @apply@ or an invariant's @check@ — create
+-- pools in a 'Hegel.Stateful.Machine'\'s @initial@ or in a plain property
+-- body instead, then have rules move values in and out of them.
 --
 -- The failure report auto-names the pool's values @v₁, w₁, ...@ by birth
 -- order. Use 'named' when a semantic letter such as @h₁@ for handles reads
@@ -72,10 +75,14 @@ data Pool a = Pool
 new :: (MonadIO m) => PropertyT m (Pool a)
 new = do
   env <- askEnv
-  liftIO do
-    pid <- newPool env.testCase
-    ref <- newIORef IntMap.empty
-    pure Pool {poolId = pid, values = ref}
+  resource
+    ( do
+        handle <- newPool env.testCase
+        identity <- freshPoolIdentity
+        values <- newIORef IntMap.empty
+        pure Pool {handle, identity, values}
+    )
+    (\pool -> freePool env.testCase pool.handle)
 
 -- | 'new' with a display label for the failure report: values of a pool
 -- named @"h"@ render as @h₁, h₂, ...@ in the event log.
@@ -83,7 +90,7 @@ named :: (MonadIO m) => Text -> PropertyT m (Pool a)
 named label = do
   pool <- new
   env <- askEnv
-  liftIO (labelPool env.testCase pool.poolId label)
+  liftIO (labelPool env.testCase pool.identity label)
   pure pool
 
 -- | Add a value to the pool. The engine assigns the variable id.
@@ -95,7 +102,7 @@ add :: (MonadIO m) => Pool a -> a -> PropertyT m ()
 add pool v = do
   env <- askEnv
   liftIO do
-    vid <- poolAdd env.testCase pool.poolId
+    vid <- poolAdd env.testCase pool.handle pool.identity
     atomicModifyIORef' pool.values \m -> (IntMap.insert vid v m, ())
 
 -- | Number of values currently in the pool.
@@ -116,7 +123,7 @@ reuse pool = Draw \tc -> do
   if IntMap.null vals
     then throwIO AssumeRejected
     else do
-      vid <- poolGenerate tc pool.poolId False
+      vid <- poolGenerate tc pool.handle pool.identity False
       case IntMap.lookup vid vals of
         Just v -> pure v
         Nothing ->
@@ -141,7 +148,7 @@ drawConsuming caller pool tc = do
   if empty
     then throwIO AssumeRejected
     else do
-      vid <- poolGenerate tc pool.poolId True
+      vid <- poolGenerate tc pool.handle pool.identity True
       v <- atomicModifyIORef' pool.values \m ->
         case IntMap.updateLookupWithKey (\_ _ -> Nothing) vid m of
           (Just v, m') -> (m', v)
@@ -167,6 +174,6 @@ drawConsuming caller pool tc = do
 transfer :: Pool a -> Pool a -> Gen a
 transfer src dst = Draw \tc -> do
   (vid, v) <- drawConsuming "transfer" src tc
-  vid' <- poolAddFrom tc dst.poolId Var {pool = src.poolId, id = vid}
+  vid' <- poolAddFrom tc dst.handle dst.identity Var {pool = src.identity, id = vid}
   atomicModifyIORef' dst.values \m -> (IntMap.insert vid' v m, ())
   pure v

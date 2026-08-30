@@ -18,6 +18,9 @@
 module Hegel.Internal.DataSource
   ( -- * Generation
     HegelStringGenerator,
+    HegelCollection,
+    HegelPool,
+    HegelStateMachine,
     drawBool,
     drawInteger,
     FloatSpec (..),
@@ -47,6 +50,7 @@ module Hegel.Internal.DataSource
     newCollection,
     collectionMore,
     collectionReject,
+    freeCollection,
 
     -- * Pools
     newPool,
@@ -54,10 +58,15 @@ module Hegel.Internal.DataSource
     poolAddFrom,
     labelPool,
     poolGenerate,
+    freePool,
+    freshPoolIdentity,
 
     -- * State machines
     newStateMachine,
+    stateMachineNextGroup,
     stateMachineNextRule,
+    stateMachineRuleRejected,
+    freeStateMachine,
 
     -- * Spans
     Label (..),
@@ -72,10 +81,7 @@ import Data.Bits (bit, shiftL, shiftR, testBit, (.&.))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Fixed (Fixed (MkFixed), Pico)
-import Data.IORef (IORef, newIORef, readIORef)
-#ifdef HEGEL_CENSUS
-import Data.IORef (atomicModifyIORef')
-#endif
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
@@ -595,79 +601,98 @@ instance Exception InvariantViolation
 
 -- * Collections
 
--- | Begin a variable-length collection; returns its integer ID.
+-- | Begin a variable-length collection; returns its caller-owned handle.
 --
 -- Throws 'TestStopped' on exhaustion.
-newCollection :: TestCase -> Int -> Maybe Int -> IO Int
+newCollection :: TestCase -> Int -> Maybe Int -> IO (Ptr HegelCollection)
 newCollection tc minSz maxSz =
-  withSlotOf tc.slot \outId -> do
-    hegel_new_collection tc.handle.ctx tc.handle.ptr (fromIntegral minSz) (maybe maxBound fromIntegral maxSz) outId
+  withSlotOf tc.slot \outColl -> do
+    hegel_new_collection tc.handle.ctx tc.handle.ptr (fromIntegral minSz) (maybe maxBound fromIntegral maxSz) outColl
       >>= handleReturnCode tc
-    fromIntegral <$> (peek outId :: IO Int64)
+    peek outColl
 
 -- | Ask whether the engine wants another element.
 --
 -- Throws 'TestStopped' on exhaustion.
-collectionMore :: TestCase -> Int -> IO Bool
-collectionMore tc cid =
+collectionMore :: TestCase -> Ptr HegelCollection -> IO Bool
+collectionMore tc coll =
   withSlotOf tc.slot \outMore -> do
-    hegel_collection_more tc.handle.ctx tc.handle.ptr (fromIntegral cid) outMore >>= handleReturnCode tc
+    hegel_collection_more tc.handle.ctx tc.handle.ptr coll outMore >>= handleReturnCode tc
     (/= 0) . (\(CBool b) -> b) <$> peek outMore
 
 -- | Notify the engine that the last element was rejected.
 --
 -- Throws 'TestStopped' if the engine gives up.
-collectionReject :: TestCase -> Int -> Maybe Text -> IO ()
-collectionReject tc cid mWhy =
+collectionReject :: TestCase -> Ptr HegelCollection -> Maybe Text -> IO ()
+collectionReject tc coll mWhy =
   case mWhy of
     Nothing -> do
-      result <- hegel_collection_reject tc.handle.ctx tc.handle.ptr (fromIntegral cid) nullPtr
+      result <- hegel_collection_reject tc.handle.ctx tc.handle.ptr coll nullPtr
       handleReturnCode tc result
     Just why -> CString.withText why \p -> do
-      result <- hegel_collection_reject tc.handle.ctx tc.handle.ptr (fromIntegral cid) p
+      result <- hegel_collection_reject tc.handle.ctx tc.handle.ptr coll p
       handleReturnCode tc result
+
+-- | Release a collection handle from 'newCollection'. Each handle must be
+-- freed exactly once.
+freeCollection :: TestCase -> Ptr HegelCollection -> IO ()
+freeCollection tc coll = void (hegel_collection_free tc.handle.ctx coll)
 
 -- * Pools
 
--- | Create a new variable pool; returns its ID.
+-- | Source of the small integer identities 'freshPoolIdentity' hands out.
+poolIdentitySource :: IORef Int
+poolIdentitySource = unsafePerformIO (newIORef 0)
+{-# NOINLINE poolIdentitySource #-}
+
+-- | A fresh integer identity for 'Event.Var' report grouping, unique for
+-- the life of the process.
+--
+-- Call once per pool, at creation, and thread the result through every call
+-- that reports an event against that pool.
+freshPoolIdentity :: IO Int
+freshPoolIdentity = atomicModifyIORef' poolIdentitySource \n -> (n + 1, n)
+
+-- | Create a new variable pool; returns its caller-owned handle.
 --
 -- Throws 'TestStopped' on exhaustion.
-newPool :: TestCase -> IO Int
+newPool :: TestCase -> IO (Ptr HegelPool)
 newPool tc =
-  withSlotOf tc.slot \outId -> do
-    hegel_new_pool tc.handle.ctx tc.handle.ptr outId >>= handleReturnCode tc
-    fromIntegral <$> (peek outId :: IO Int64)
+  withSlotOf tc.slot \outPool -> do
+    hegel_new_pool tc.handle.ctx tc.handle.ptr outPool >>= handleReturnCode tc
+    peek outPool
 
--- | Register a new variable in the pool; returns the engine-assigned
--- variable id.
+-- | Register a new variable in the pool, returning the engine-assigned
+-- variable id; @identity@ is the pool's own 'freshPoolIdentity', for
+-- 'Event.Var' report grouping.
 --
 -- Records a 'Event.Born' event (this, 'poolAddFrom', 'poolGenerate', and
 -- 'labelPool' are the only pool emission points, so 'Hegel.Pool' needs no
 -- event awareness).
-poolAdd :: TestCase -> Int -> IO Int
-poolAdd tc pid = poolAddWith tc pid Nothing
+poolAdd :: TestCase -> Ptr HegelPool -> Int -> IO Int
+poolAdd tc pool identity = poolAddWith tc pool identity Nothing
 
 -- | 'poolAdd' with a declared lineage: the new variable continues the given
 -- source var's logical value (the destination half of 'Hegel.Pool.transfer').
-poolAddFrom :: TestCase -> Int -> Event.Var -> IO Int
-poolAddFrom tc pid from = poolAddWith tc pid (Just from)
+poolAddFrom :: TestCase -> Ptr HegelPool -> Int -> Event.Var -> IO Int
+poolAddFrom tc pool identity from = poolAddWith tc pool identity (Just from)
 
-poolAddWith :: TestCase -> Int -> Maybe Event.Var -> IO Int
-poolAddWith tc pid lineage = do
+poolAddWith :: TestCase -> Ptr HegelPool -> Int -> Maybe Event.Var -> IO Int
+poolAddWith tc pool identity lineage = do
   vid <- withSlotOf tc.slot \outId -> do
-    hegel_pool_add tc.handle.ctx tc.handle.ptr (fromIntegral pid) outId >>= handleReturnCode tc
+    hegel_pool_add tc.handle.ctx tc.handle.ptr pool outId >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
   Tick.record tc.recording tc.events \c ->
-    Event.Event {clock = c, var = Event.Var {pool = pid, id = vid}, kind = Event.Born lineage}
+    Event.Event {clock = c, var = Event.Var {pool = identity, id = vid}, kind = Event.Born lineage}
   pure vid
 
 -- | Record a pool's display label ('Hegel.Pool.named'). No engine call —
 -- labels are report vocabulary; the event stream is their only channel to
 -- the renderer.
 labelPool :: TestCase -> Int -> Text -> IO ()
-labelPool tc pid label =
+labelPool tc identity label =
   Tick.record tc.recording tc.events \c ->
-    Event.Event {clock = c, var = Event.Var {pool = pid, id = 0}, kind = Event.Named label}
+    Event.Event {clock = c, var = Event.Var {pool = identity, id = 0}, kind = Event.Named label}
 
 -- | Draw a variable id from the pool.
 --
@@ -676,13 +701,13 @@ labelPool tc pid label =
 -- death (the engine has no @pool_remove@).
 --
 -- Throws 'AssumeRejected' when the pool is empty, discarding the test case.
-poolGenerate :: TestCase -> Int -> Bool -> IO Int
-poolGenerate tc pid consume = do
+poolGenerate :: TestCase -> Ptr HegelPool -> Int -> Bool -> IO Int
+poolGenerate tc pool identity consume = do
   vid <- withSlotOf tc.slot \outId -> do
-    hegel_pool_generate tc.handle.ctx tc.handle.ptr (fromIntegral pid) (CBool (if consume then 1 else 0)) outId
+    hegel_pool_generate tc.handle.ctx tc.handle.ptr pool (CBool (if consume then 1 else 0)) outId
       >>= handleReturnCode tc
     fromIntegral <$> (peek outId :: IO Int64)
-  let var = Event.Var {pool = pid, id = vid}
+  let var = Event.Var {pool = identity, id = vid}
   Tick.record tc.recording tc.events \c ->
     Event.Event
       { clock = c,
@@ -694,43 +719,89 @@ poolGenerate tc pid consume = do
   recordDraw tc var
   pure vid
 
+-- | Release a pool handle from 'newPool'. Each handle must be freed exactly
+-- once.
+freePool :: TestCase -> Ptr HegelPool -> IO ()
+freePool tc pool = void (hegel_pool_free tc.handle.ctx pool)
+
 -- * State machines
 
--- | Register an engine-owned state machine; returns its ID.
+-- | Register an engine-owned, sequential state machine; returns its
+-- caller-owned handle.
+--
+-- Every rule shares one concurrency group and the machine's concurrency level
+-- is fixed at 1, so creation consumes no entropy beyond the rule\/invariant
+-- registration itself.
 --
 -- @ruleNames@ must be non-empty.
 --
 -- Throws 'TestStopped' on exhaustion.
-newStateMachine :: TestCase -> [Text] -> [Text] -> IO Int
+newStateMachine :: TestCase -> [Text] -> [Text] -> IO (Ptr HegelStateMachine)
 newStateMachine tc ruleNames invariantNames =
   withMany CString.withText ruleNames \rulePtrs ->
     withMany CString.withText invariantNames \invPtrs ->
       withArray rulePtrs \rulesArr ->
         withArray invPtrs \invArr ->
-          withSlotOf tc.slot \outId -> do
-            hegel_new_state_machine
-              tc.handle.ctx
-              tc.handle.ptr
-              rulesArr
-              (fromIntegral (length ruleNames))
-              invArr
-              (fromIntegral (length invariantNames))
-              outId
-              >>= handleReturnCode tc
-            fromIntegral <$> (peek outId :: IO Int64)
+          -- One sequential group (id 0) for every rule.
+          withArray (replicate (length ruleNames) 0 :: [Int64]) \groupsArr ->
+            withSlotOf tc.slot \outHandle ->
+              alloca \outConcurrency -> do
+                hegel_new_state_machine
+                  tc.handle.ctx
+                  tc.handle.ptr
+                  rulesArr
+                  groupsArr
+                  (fromIntegral (length ruleNames))
+                  invArr
+                  (fromIntegral (length invariantNames))
+                  1
+                  1
+                  outHandle
+                  outConcurrency
+                  >>= handleReturnCode tc
+                peek outHandle
 
--- | Draw the next rule index for the state machine, or 'Nothing' once the
--- engine has decided the machine is done stepping.
+-- | Start the machine's next round, or 'Nothing' once the engine has
+-- decided the whole state machine is done stepping.
+--
+-- Call on the root test-case handle at every join point, including before
+-- the first rule is requested, even for a sequential machine.
 --
 -- Throws 'TestStopped' when the choice budget is exhausted, distinct from a
 -- clean 'Nothing'.
-stateMachineNextRule :: TestCase -> Int -> IO (Maybe Int)
-stateMachineNextRule tc mid =
+stateMachineNextGroup :: TestCase -> Ptr HegelStateMachine -> IO (Maybe Int)
+stateMachineNextGroup tc sm =
+  withSlotOf tc.slot \outGroup -> do
+    hegel_state_machine_next_group tc.handle.ctx tc.handle.ptr sm outGroup >>= handleReturnCode tc
+    raw <- peek outGroup :: IO Int64
+    pure $ if raw == HEGEL_STATE_MACHINE_DONE then Nothing else Just (fromIntegral raw)
+
+-- | Draw the next rule index for worker @workerIndex@ to run this round, or
+-- 'Nothing' once its round budget is exhausted.
+--
+-- Pass @workerIndex = 0@ for a sequential machine.
+--
+-- Throws 'TestStopped' when the choice budget is exhausted, distinct from a
+-- clean 'Nothing'.
+stateMachineNextRule :: TestCase -> Ptr HegelStateMachine -> Int -> IO (Maybe Int)
+stateMachineNextRule tc sm workerIndex =
   withSlotOf tc.slot \outIdx -> do
-    hegel_state_machine_next_rule tc.handle.ctx tc.handle.ptr (fromIntegral mid) outIdx
+    hegel_state_machine_next_rule tc.handle.ctx tc.handle.ptr sm (fromIntegral workerIndex) outIdx
       >>= handleReturnCode tc
     raw <- peek outIdx :: IO Int64
     pure $ if raw == HEGEL_STATE_MACHINE_DONE then Nothing else Just (fromIntegral raw)
+
+-- | Report that the rule most recently handed to worker @workerIndex@ was
+-- rejected, so it does not count toward the engine's step budget.
+stateMachineRuleRejected :: TestCase -> Ptr HegelStateMachine -> Int -> IO ()
+stateMachineRuleRejected tc sm workerIndex = do
+  result <- hegel_state_machine_rule_rejected tc.handle.ctx tc.handle.ptr sm (fromIntegral workerIndex)
+  handleReturnCode tc result
+
+-- | Release a state-machine handle from 'newStateMachine'. Each handle must
+-- be freed exactly once.
+freeStateMachine :: TestCase -> Ptr HegelStateMachine -> IO ()
+freeStateMachine tc sm = void (hegel_state_machine_free tc.handle.ctx sm)
 
 -- * Spans
 
@@ -766,6 +837,7 @@ data Label
   | LabelSampledFrom
   | LabelEnumVariant
   | LabelFeatureFlag
+  | LabelStatefulRule
   deriving stock (Show)
 
 -- | The @hegel_label_t@ wire identifier (the @HEGEL_LABEL_*@ constants are the
@@ -787,3 +859,4 @@ instance Witch.From Label Word64 where
   from LabelSampledFrom = HEGEL_LABEL_SAMPLED_FROM
   from LabelEnumVariant = HEGEL_LABEL_ENUM_VARIANT
   from LabelFeatureFlag = HEGEL_LABEL_FEATURE_FLAG
+  from LabelStatefulRule = HEGEL_LABEL_STATEFUL_RULE

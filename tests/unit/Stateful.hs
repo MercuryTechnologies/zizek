@@ -15,7 +15,7 @@ import Hegel.Gen qualified as Gen
 import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, assume, forAll, forAllSilent)
-import Hegel.Report (Abort (..), Note (..), NoteKind (..), Report (..), Result (..), isFailureNote, renderReportRich)
+import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), isFailureNote, renderReportRich)
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..))
 import Hegel.Stateful qualified as Stateful
@@ -169,10 +169,10 @@ statefulSpec = describe "Machine" do
       Counterexample {} -> pure ()
       other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
-  it "a counterexample past step 50 under a higher statefulStepCount fails to reconstruct" do
-    -- This pins the replay caveat documented on
-    -- 'Hegel.Settings.statefulStepCount'. A failure past step 50 under a
-    -- higher count diverges on replay instead of reproducing.
+  it "a counterexample past step 50 under a higher statefulStepCount still reconstructs" do
+    -- libhegel 0.33's round-based state-machine protocol resolved the
+    -- upstream replay bug this pinned: a failure past step 50 under a
+    -- higher count now reproduces on replay like any other counterexample.
     let neverAbove150 :: Stateful.Invariant Counter IO
         neverAbove150 =
           Stateful.Invariant "never_above_150" \(Counter n) ->
@@ -185,8 +185,8 @@ statefulSpec = describe "Machine" do
             }
     report <- check def {statefulStepCount = 200} (Stateful.run machine)
     case report.result of
-      Aborted (ReplayDiverged _) -> pure ()
-      other -> expectationFailure ("expected Aborted (ReplayDiverged _), got: " <> show other)
+      Counterexample {} -> pure ()
+      other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
   it "machinery annotations carry no source location" do
     -- The 'Step N: ...' / invariant-check annotations are emitted by
@@ -283,15 +283,15 @@ statefulSpec = describe "Machine" do
     counts `shouldSatisfy` all (\c -> c >= 1 && c <= 50)
     length (filter (== 50) counts) `shouldSatisfy` (> length counts `div` 2)
 
-  it "an assume-rejecting rule is still bounded by the step cap" do
-    -- Analogue of the Rust reference's
-    -- test_hopeless_machine_is_bounded_by_the_step_cap. The cap counts
-    -- attempted rules rather than successful ones, so a rule that never
-    -- gets past its precondition is bounded the same as one that always
-    -- succeeds.
-    counts <- stepRecorder True def {testCases = 30}
-    counts `shouldSatisfy` all (\c -> c >= 1 && c <= 50)
-    length (filter (== 50) counts) `shouldSatisfy` (> length counts `div` 2)
+  it "an assume-rejecting rule's attempts are still bounded" do
+    -- Analogue of the Rust reference's test_hopeless_machine_attempts_are_bounded.
+    -- A rejected rule is reported to the engine and does not count toward
+    -- 'Hegel.Settings.statefulStepCount', so a machine whose rule never gets
+    -- past its precondition is bounded by the engine's separate 1000-attempt
+    -- cap on a case with no successful rule, rather than the step cap.
+    counts <- stepRecorder True def {testCases = 10}
+    counts `shouldSatisfy` all (\c -> c >= 1 && c <= 1000)
+    length (filter (== 1000) counts) `shouldSatisfy` (> length counts `div` 2)
 
   it "statefulStepCount replaces the default cap" do
     -- Analogue of the Rust reference's test_stateful_step_count_setting_bounds_steps.

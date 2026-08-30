@@ -12,12 +12,11 @@ tested-with: ghc ^>=9.10 && ^>=9.12
 build-type: Simple
 extra-source-files: licenses/hedgehog.LICENSE
 
--- Off by default: tracks live HegelStringGenerator handle counts
--- (Hegel.Internal.DataSource.currentLiveStringGenerators/settleStringGenerators)
--- for the string-gen-handles regression suite and profile-hegel's
--- strgen-reclaim scenario. Every check adds an atomicModifyIORef' to
--- string-generator construction and finalization, so normal builds carry
--- none of it.
+-- Tracks live HegelStringGenerator handle counts for the string-gen-handles
+-- regression suite and profile-hegel's strgen-reclaim scenario.
+--
+-- Every check adds an atomicModifyIORef' to string-generator construction and
+-- finalization.
 flag census
   description: Track live string-generator handle counts for diagnostics.
   default: False
@@ -175,9 +174,6 @@ common threaded
     -rtsopts
     -with-rtsopts=-N
 
--- Gallery of deliberately-failing stateful machines, each stressing one
--- rendering decision of the rich report renderer; for manual eyeballing.
--- Not run by CI; `just gallery` from the repo root.
 executable gallery
   import: threaded
   hs-source-dirs: examples/gallery
@@ -186,10 +182,6 @@ executable gallery
     containers ^>=0.7,
     zizek,
 
--- Profiling scenarios: deterministic, named workloads isolating the
--- Haskell-side hot paths (see notes/decisions/profiling-harness.md).
--- `cabal run profile-hegel -- --list` for the scenario list; driven by
--- `just profile-run` / `just profile-space` / `just profile-time`.
 executable profile-hegel
   import: threaded
   -- -N1 (overriding threaded's -N): the scenarios are single-threaded, and
@@ -247,18 +239,6 @@ test-suite unit
     tasty-hspec ^>=1.2,
     zizek,
 
--- Isolated in its own process, deliberately: this spec asserts that
--- unreferenced 'Hegel.Internal.DataSource.HegelStringGenerator' handles get
--- GC-reclaimed, which is only a reliable assertion in a quiet process. In
--- the shared, hundreds-of-tests `unit` binary — many worker threads and
--- property runs in flight at once — the exact same assertion is flaky (see
--- 'Hegel.Internal.DataSource.settleStringGenerators'), for reasons upstream
--- of anything this repo controls.
---
--- Needs the `census` flag: `cabal test zizek:string-gen-handles --flag
--- census` (or `just test string-gen-handles --flag census`). Without it the
--- suite still builds and runs, but every case is `pendingWith` — the
--- handle-count tracking this suite asserts on is compiled out by default.
 test-suite string-gen-handles
   import: library
   type: exitcode-stdio-1.0
@@ -284,9 +264,6 @@ test-suite ffi
   pkgconfig-depends: hegel
   -- Closed-world guard: fails to build if libhegel adds an enum variant.
   c-sources: cbits/wire_enum_guard.c
-  -- Both flags are needed: our switches have no `default:`, and on clang a
-  -- missing case with no default is diagnosed under -Wswitch, not
-  -- -Wswitch-enum.
   cc-options:
     -Werror=switch-enum
     -Werror=switch

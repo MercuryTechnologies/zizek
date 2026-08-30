@@ -36,6 +36,9 @@ module Hegel.Internal.Foreign.Raw
     HegelRunResult,
     HegelFailure,
     HegelStringGenerator,
+    HegelCollection,
+    HegelPool,
+    HegelStateMachine,
 
     -- * Typed-draw result structs
     -- $typedrawresults
@@ -61,6 +64,7 @@ module Hegel.Internal.Foreign.Raw
     pattern HEGEL_E_NOT_COMPLETE,
     pattern HEGEL_E_INTERNAL,
     pattern HEGEL_E_CONCURRENT_USE,
+    pattern HEGEL_E_RETRY,
 
     -- * State-machine termination sentinel
     -- $statemachine
@@ -100,6 +104,7 @@ module Hegel.Internal.Foreign.Raw
     pattern HEGEL_LABEL_SAMPLED_FROM,
     pattern HEGEL_LABEL_ENUM_VARIANT,
     pattern HEGEL_LABEL_FEATURE_FLAG,
+    pattern HEGEL_LABEL_STATEFUL_RULE,
 
     -- * Mode pattern synonyms
     -- $modes
@@ -131,6 +136,7 @@ module Hegel.Internal.Foreign.Raw
     pattern HEGEL_RUN_STATUS_PASSED,
     pattern HEGEL_RUN_STATUS_FAILED,
     pattern HEGEL_RUN_STATUS_ERROR,
+    pattern HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC,
 
     -- * Context lifecycle
     -- $context
@@ -171,14 +177,20 @@ module Hegel.Internal.Foreign.Raw
     hegel_new_collection,
     hegel_collection_more,
     hegel_collection_reject,
+    hegel_collection_free,
     hegel_new_pool,
     hegel_pool_add,
     hegel_pool_generate,
+    hegel_pool_free,
     hegel_new_state_machine,
+    hegel_state_machine_next_group,
     hegel_state_machine_next_rule,
+    hegel_state_machine_rule_rejected,
+    hegel_state_machine_free,
     hegel_target,
     hegel_mark_complete,
     hegel_test_case_clone,
+    hegel_test_case_is_nondeterministic,
 
     -- * Typed draws
     -- $typeddraws
@@ -279,6 +291,21 @@ data HegelFailure
 -- a 'hegel_string_generator_text'-family constructor and freed with
 -- 'hegel_string_generator_free'.
 data HegelStringGenerator
+
+-- | Marker type for @hegel_collection_t*@: a caller-owned handle to an
+-- engine-managed variable-length collection, built by 'hegel_new_collection'
+-- and freed with 'hegel_collection_free'.
+data HegelCollection
+
+-- | Marker type for @hegel_pool_t*@: a caller-owned handle to an
+-- engine-managed variable pool for stateful testing, built by
+-- 'hegel_new_pool' and freed with 'hegel_pool_free'.
+data HegelPool
+
+-- | Marker type for @hegel_state_machine_t*@: a caller-owned handle to an
+-- engine-owned state machine for stateful testing, built by
+-- 'hegel_new_state_machine' and freed with 'hegel_state_machine_free'.
+data HegelStateMachine
 
 -- $typedrawresults
 --
@@ -460,6 +487,14 @@ pattern HEGEL_E_INTERNAL = (#const HEGEL_E_INTERNAL)
 pattern HEGEL_E_CONCURRENT_USE :: CInt
 pattern HEGEL_E_CONCURRENT_USE = (#const HEGEL_E_CONCURRENT_USE)
 
+-- | Signals that a recursive generation attempt must be regenerated from the
+-- root, either because it outgrew its leaf budget ('hegel_recursion_leaf') or
+-- because the engine discarded it as mispriced ('hegel_recursion_finish').
+-- Not used by this library today, since it has no recursive-generator
+-- binding yet, but the closed-world guard still checks it against @hegel.h@.
+pattern HEGEL_E_RETRY :: CInt
+pattern HEGEL_E_RETRY = (#const HEGEL_E_RETRY)
+
 -- $statemachine
 --
 -- The value 'hegel_state_machine_next_rule' writes into its @out_rule_index@
@@ -520,11 +555,13 @@ pattern HEGEL_HC_LARGE_INITIAL_TEST_CASE = (#const HEGEL_HC_LARGE_INITIAL_TEST_C
 --
 -- The engine uses these labels to shrink generated values intelligently.
 --
--- Only the 16 values mirrored by 'Hegel.Internal.DataSource.Label' have a
+-- Only the values mirrored by 'Hegel.Internal.DataSource.Label' have a
 -- synonym here: the client-side spans this library itself opens.
 --
 -- Labels 17 through 30 are spans the engine emits internally around its own
--- typed-draw primitives, so nothing here constructs or matches them.
+-- typed-draw primitives, and labels 32 through 35 are spans the engine emits
+-- internally around pool and recursive-generation primitives, so nothing
+-- here constructs or matches any of them.
 
 pattern HEGEL_LABEL_LIST :: Word64
 pattern HEGEL_LABEL_LIST = (#const HEGEL_LABEL_LIST)
@@ -573,6 +610,11 @@ pattern HEGEL_LABEL_ENUM_VARIANT = (#const HEGEL_LABEL_ENUM_VARIANT)
 
 pattern HEGEL_LABEL_FEATURE_FLAG :: Word64
 pattern HEGEL_LABEL_FEATURE_FLAG = (#const HEGEL_LABEL_FEATURE_FLAG)
+
+-- | Outer span around one stateful-testing rule invocation, grouping a
+-- round's draws so the shrinker can delete a whole step at once.
+pattern HEGEL_LABEL_STATEFUL_RULE :: Word64
+pattern HEGEL_LABEL_STATEFUL_RULE = (#const HEGEL_LABEL_STATEFUL_RULE)
 
 -- $modes
 --
@@ -647,6 +689,9 @@ pattern HEGEL_STATUS_INTERESTING = (#const HEGEL_STATUS_INTERESTING)
 -- * passed (the property held)
 -- * failed (the property has counterexamples)
 -- * error (the run itself failed and produced no verdict)
+-- * failed, nondeterministically (the property failed on a run a concurrent
+--   state machine declared nondeterministic, so the failure carries no
+--   reproduce blob)
 
 pattern HEGEL_RUN_STATUS_PASSED :: CInt
 pattern HEGEL_RUN_STATUS_PASSED = (#const HEGEL_RUN_STATUS_PASSED)
@@ -656,6 +701,9 @@ pattern HEGEL_RUN_STATUS_FAILED = (#const HEGEL_RUN_STATUS_FAILED)
 
 pattern HEGEL_RUN_STATUS_ERROR :: CInt
 pattern HEGEL_RUN_STATUS_ERROR = (#const HEGEL_RUN_STATUS_ERROR)
+
+pattern HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC :: CInt
+pattern HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC = (#const HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC)
 
 -- $context
 --
@@ -874,8 +922,8 @@ foreign import ccall unsafe "hegel_stop_span"
 
 -- | Start an engine-managed variable-length collection.
 --
--- Writes the opaque
--- collection ID into @*out_collection_id@.
+-- Writes a caller-owned handle into @*out_collection@; release it with
+-- 'hegel_collection_free'.
 --
 -- Pass @maxBound@ for @max_size@ when unbounded.
 foreign import ccall unsafe "hegel_new_collection"
@@ -884,7 +932,7 @@ foreign import ccall unsafe "hegel_new_collection"
     -> Ptr HegelTestCase
     -> Word64    -- ^ @min_size@
     -> Word64    -- ^ @max_size@ (@'maxBound' :: Word64@ for unbounded)
-    -> Ptr Int64 -- ^ out: collection ID
+    -> Ptr (Ptr HegelCollection) -- ^ out: caller-owned handle
     -> IO CInt
 
 -- | Ask whether the engine wants another element; writes the answer into
@@ -893,8 +941,8 @@ foreign import ccall unsafe "hegel_collection_more"
   hegel_collection_more
     :: Ptr HegelContext
     -> Ptr HegelTestCase
-    -> Int64      -- ^ @collection_id@
-    -> Ptr CBool  -- ^ out: more?
+    -> Ptr HegelCollection -- ^ @collection@ (borrowed)
+    -> Ptr CBool           -- ^ out: more?
     -> IO CInt
 
 -- | Notify the engine the last element was rejected.
@@ -904,14 +952,22 @@ foreign import ccall unsafe "hegel_collection_reject"
   hegel_collection_reject
     :: Ptr HegelContext
     -> Ptr HegelTestCase
-    -> Int64   -- ^ @collection_id@
-    -> CString -- ^ @why@ (optional, may be @NULL@)
+    -> Ptr HegelCollection -- ^ @collection@ (borrowed)
+    -> CString             -- ^ @why@ (optional, may be @NULL@)
     -> IO CInt
 
--- | Create a new variable pool for stateful testing; writes the pool ID
--- into @*out_pool_id@.
+-- | Release a collection handle from 'hegel_new_collection'. Safe to call
+-- with @NULL@, and safe at any point in any order relative to freeing the
+-- test case or the run. Each handle must be freed exactly once.
+foreign import ccall unsafe "hegel_collection_free"
+  hegel_collection_free :: Ptr HegelContext -> Ptr HegelCollection -> IO CInt
+
+-- | Create a new variable pool for stateful testing.
+--
+-- Writes a caller-owned handle into @*out_pool@; release it with
+-- 'hegel_pool_free'.
 foreign import ccall unsafe "hegel_new_pool"
-  hegel_new_pool :: Ptr HegelContext -> Ptr HegelTestCase -> Ptr Int64 -> IO CInt
+  hegel_new_pool :: Ptr HegelContext -> Ptr HegelTestCase -> Ptr (Ptr HegelPool) -> IO CInt
 
 -- | Register a new variable in the pool; writes its ID into
 -- @*out_variable_id@.
@@ -919,8 +975,8 @@ foreign import ccall unsafe "hegel_pool_add"
   hegel_pool_add
     :: Ptr HegelContext
     -> Ptr HegelTestCase
-    -> Int64     -- ^ @pool_id@
-    -> Ptr Int64 -- ^ out: @variable_id@
+    -> Ptr HegelPool -- ^ @pool@ (borrowed)
+    -> Ptr Int64     -- ^ out: @variable_id@
     -> IO CInt
 
 -- | Draw a variable from the pool.
@@ -932,40 +988,79 @@ foreign import ccall unsafe "hegel_pool_generate"
   hegel_pool_generate
     :: Ptr HegelContext
     -> Ptr HegelTestCase
-    -> Int64     -- ^ @pool_id@
-    -> CBool     -- ^ @consume@ (remove from pool)
-    -> Ptr Int64 -- ^ out: @variable_id@
+    -> Ptr HegelPool -- ^ @pool@ (borrowed)
+    -> CBool         -- ^ @consume@ (remove from pool)
+    -> Ptr Int64     -- ^ out: @variable_id@
     -> IO CInt
 
--- | Register an engine-owned state machine for swarm-based stateful testing;
--- writes the machine ID into @*out_state_machine_id@.
+-- | Release a pool handle from 'hegel_new_pool'. Safe to call with @NULL@,
+-- and safe at any point in any order relative to freeing the test case or
+-- the run, provided no pool operation is still in flight on another thread.
+-- Each handle must be freed exactly once.
+foreign import ccall unsafe "hegel_pool_free"
+  hegel_pool_free :: Ptr HegelContext -> Ptr HegelPool -> IO CInt
+
+-- | Register an engine-owned state machine for swarm-based stateful testing,
+-- sequential or concurrent.
 --
 -- @rule_names@ and @invariant_names@ are arrays of NUL-terminated UTF-8
--- strings.
+-- strings; @rule_groups@ is a parallel array of concurrency-group ids, one
+-- per rule. The engine draws the machine's concurrency level in
+-- @[min_concurrency, max_concurrency]@ and writes it into
+-- @*out_concurrency@; pass @1, 1@ for a sequential machine, which fixes the
+-- level without consuming entropy.
 --
--- Returns 'HEGEL_E_INVALID_ARG' when @num_rules@ is zero or a name is not
--- valid UTF-8.
+-- On success writes a caller-owned handle into @*out_state_machine@;
+-- release it with 'hegel_state_machine_free'.
+--
+-- Returns 'HEGEL_E_INVALID_ARG' when @num_rules@ is zero, an entry of
+-- @rule_groups@ is 'HEGEL_STATE_MACHINE_DONE', the concurrency bounds are
+-- invalid, or a name is not valid UTF-8. Returns 'HEGEL_E_ASSUME' for the
+-- run's first @max_concurrency > 1@ creation; see @hegel.h@.
 foreign import ccall unsafe "hegel_new_state_machine"
   hegel_new_state_machine
     :: Ptr HegelContext
     -> Ptr HegelTestCase
     -> Ptr CString  -- ^ @rule_names@
+    -> Ptr Int64    -- ^ @rule_groups@ (parallel to @rule_names@)
     -> CSize        -- ^ @num_rules@
     -> Ptr CString  -- ^ @invariant_names@
     -> CSize        -- ^ @num_invariants@
-    -> Ptr Int64    -- ^ out: @state_machine_id@
+    -> Int64        -- ^ @min_concurrency@
+    -> Int64        -- ^ @max_concurrency@
+    -> Ptr (Ptr HegelStateMachine) -- ^ out: caller-owned handle
+    -> Ptr Int64    -- ^ out: drawn @concurrency@ level
     -> IO CInt
 
--- | Draw the next rule index in @[0, num_rules)@ for the given state machine,
--- honoring swarm-selected rule restrictions, or signal that the machine is
--- done stepping.
+-- | Start the machine's next round, writing the current round's concurrency
+-- group id into @*out_group_id@, or 'HEGEL_STATE_MACHINE_DONE' once the
+-- whole state machine is finished stepping.
+--
+-- Call this on the root test-case handle at every join point, including
+-- before the first rule is requested: this applies even to a sequential
+-- machine, which has only one group. Call unconditionally, on generation
+-- and replay alike, since skipping a call misaligns every later draw the
+-- same way skipping any other draw would.
+--
+-- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted.
+foreign import ccall unsafe "hegel_state_machine_next_group"
+  hegel_state_machine_next_group
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Ptr HegelStateMachine
+    -> Ptr Int64 -- ^ out: @group_id@, or 'HEGEL_STATE_MACHINE_DONE'
+    -> IO CInt
+
+-- | Draw the next rule index in @[0, num_rules)@ for worker @worker_index@ to
+-- run this round, honoring swarm-selected rule restrictions, or signal that
+-- the worker's round budget is exhausted.
 --
 -- The engine owns the machine's step cap: once it decides to stop, this
 -- writes 'HEGEL_STATE_MACHINE_DONE' into @*out_rule_index@ instead of a rule
 -- index, rather than returning an error. Call this exactly once per loop
 -- iteration, unconditionally, on generation and replay alike, since skipping
 -- a call misaligns every later draw the same way skipping any other draw
--- would.
+-- would. Pass @worker_index = 0@ at concurrency 1.
 --
 -- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted, which is
 -- distinct from the machine finishing normally.
@@ -973,9 +1068,28 @@ foreign import ccall unsafe "hegel_state_machine_next_rule"
   hegel_state_machine_next_rule
     :: Ptr HegelContext
     -> Ptr HegelTestCase
-    -> Int64      -- ^ @state_machine_id@
-    -> Ptr Int64  -- ^ out: @rule_index@
+    -> Ptr HegelStateMachine
+    -> Int64      -- ^ @worker_index@
+    -> Ptr Int64  -- ^ out: @rule_index@, or 'HEGEL_STATE_MACHINE_DONE'
     -> IO CInt
+
+-- | Report that the rule most recently handed to worker @worker_index@ was
+-- rejected, so it does not count toward the engine's step budget.
+--
+-- Returns 'HEGEL_E_INVALID_ARG' when the worker has no outstanding rule.
+foreign import ccall unsafe "hegel_state_machine_rule_rejected"
+  hegel_state_machine_rule_rejected
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Ptr HegelStateMachine
+    -> Int64 -- ^ @worker_index@
+    -> IO CInt
+
+-- | Release a state-machine handle from 'hegel_new_state_machine'. Safe to
+-- call with @NULL@, and safe at any point in any order relative to freeing
+-- the test case or the run. Each handle must be freed exactly once.
+foreign import ccall unsafe "hegel_state_machine_free"
+  hegel_state_machine_free :: Ptr HegelContext -> Ptr HegelStateMachine -> IO CInt
 
 -- $typeddraws
 --
@@ -1316,6 +1430,12 @@ foreign import ccall unsafe "hegel_test_case_clone"
     -> Ptr (Ptr HegelTestCase) -- ^ out: caller-owned clone
     -> IO CInt
 
+-- | Write whether this test case belongs to a run already known to be
+-- nondeterministic into @*out_is_nondeterministic@; see
+-- 'HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC'.
+foreign import ccall unsafe "hegel_test_case_is_nondeterministic"
+  hegel_test_case_is_nondeterministic :: Ptr HegelContext -> Ptr HegelTestCase -> Ptr CBool -> IO CInt
+
 -- $reproduction
 --
 -- Build and free a /standalone/ test case that replays a failure blob.
@@ -1529,7 +1649,7 @@ withTestCaseFromBlob ctx s blob action =
 
 -- | Reusable pinned block that a test case's per-call out-parameters write
 -- through, in place of a fresh 'alloca' every call. Covers single-word
--- out-params (rule indices, collection\/pool ids, primitive booleans,
+-- out-params (rule\/group indices, collection\/pool\/state-machine handles, primitive booleans,
 -- integers, floats), the two-word @{ptr, len}@ result structs
 -- ('HegelBytesResult', 'HegelStringResult'), and the raw 16-byte UUID buffer.
 -- Allocated once per test case ('Hegel.Internal.TestCase.mkTestCase') and

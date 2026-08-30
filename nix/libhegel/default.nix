@@ -9,16 +9,16 @@
 
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "libhegel";
-  version = "0.30.5";
+  version = "0.33.3";
 
   src = fetchFromGitHub {
     owner = "hegeldev";
     repo = "hegel-rust";
     rev = "v${finalAttrs.version}";
-    hash = "sha256-ajtebLYnjUCPT93k1IN1iXAJJXR4g+sO2WzCSY73RmA=";
+    hash = "sha256-3Lk3E1lsQlxbR+1stQWvz5yIz+JGdAOjJ6sQhOp5B4Y=";
   };
 
-  cargoHash = "sha256-vGGc8cvFIRi8hB7TDKqQ/f+AlKVcv3Cd0vdAdZxs6b8=";
+  cargoHash = "sha256-X19WyJ1NpMxHBmvl0pkXC+sOoH4LK7tuE8Tb3+ArjQA=";
 
   # Build only the C-binding crate.
   cargoBuildFlags = [ "--package" "hegeltest-c" ];

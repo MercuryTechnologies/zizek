@@ -41,15 +41,15 @@ instance Build (NonEmptyBuilder a) (NonEmpty a) where
     checkSizeBounds "Hegel.Gen.NonEmpty" b.neMinSize b.neMaxSize
     checkAtLeastOne b.neMinSize
     startSpan tc LabelList
-    coll <- Collection.new tc b.neMinSize b.neMaxSize
-    let loop acc = do
-          keepGoing <- Collection.more coll
-          if not keepGoing
-            then pure (reverse acc)
-            else do
-              x <- draw tc b.neElement
-              loop (x : acc)
-    result <- loop []
+    result <- Collection.with tc b.neMinSize b.neMaxSize \coll -> do
+      let loop acc = do
+            keepGoing <- Collection.more coll
+            if not keepGoing
+              then pure (reverse acc)
+              else do
+                x <- draw tc b.neElement
+                loop (x : acc)
+      loop []
     let trimmed = case b.neMaxSize of
           Just mx | length result > mx -> take mx result
           _ -> result
