@@ -13,7 +13,9 @@ import Control.Exception
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Hegel.Internal.Control
   ( AssumeRejected (..),
+    AttemptMispriced (..),
     ControlSignal (..),
+    LeafBudgetExceeded (..),
     MalformedTest (..),
     TestStopped (..),
     catchControl,
@@ -59,6 +61,8 @@ spec = do
     it "is False for the control signals" do
       isFailure (toException AssumeRejected) `shouldBe` False
       isFailure (toException TestStopped) `shouldBe` False
+      isFailure (toException LeafBudgetExceeded) `shouldBe` False
+      isFailure (toException AttemptMispriced) `shouldBe` False
 
     it "is False for a genuine async exception" do
       isFailure (toException Interrupt) `shouldBe` False
@@ -82,6 +86,15 @@ spec = do
       stopHooked `shouldSatisfy` null
       caught' <- (throwIO stopEscaped >> pure Nothing) `catchControl` (pure . Just)
       caught' `shouldBe` Just Stop
+
+    it "does not fire the hook for the recursion retry signals" do
+      (leafEscaped, leafHooked) <- observeHook (throwIO LeafBudgetExceeded)
+      leafHooked `shouldSatisfy` null
+      isSyncException leafEscaped `shouldBe` False
+
+      (mispricedEscaped, mispricedHooked) <- observeHook (throwIO AttemptMispriced)
+      mispricedHooked `shouldSatisfy` null
+      isSyncException mispricedEscaped `shouldBe` False
 
     it "does not fire the hook for async exceptions and preserves their flavor" do
       (escaped, hooked) <- observeHook (throwIO Interrupt)

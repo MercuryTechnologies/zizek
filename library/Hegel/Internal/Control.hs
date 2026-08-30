@@ -12,6 +12,8 @@
 module Hegel.Internal.Control
   ( TestStopped (..),
     AssumeRejected (..),
+    LeafBudgetExceeded (..),
+    AttemptMispriced (..),
     MalformedTest (..),
     FinalizerFailed (..),
     NoBacktrace (..),
@@ -97,6 +99,42 @@ instance Exception AssumeRejected where
   backtraceDesired _ = False
 #endif
 
+-- | Thrown from 'Hegel.Internal.DataSource.recursionLeaf' when a recursive
+-- generation attempt has drawn more leaves than its configured budget.
+--
+-- 'Hegel.Gen.Recursive' catches this at the point where it opened the
+-- recursion scope, discards the attempt, and starts it again from the root;
+-- nothing else should catch it.
+data LeafBudgetExceeded = LeafBudgetExceeded
+  deriving stock (Show)
+
+instance Exception LeafBudgetExceeded where
+  toException = asyncExceptionToException
+  fromException = asyncExceptionFromException
+
+#if __GLASGOW_HASKELL__ >= 912
+  backtraceDesired _ = False
+#endif
+
+-- | Thrown from 'Hegel.Internal.DataSource.recursionFinish' when a completed
+-- recursive value turns out to have been priced for a different branch
+-- arity than its branch function actually drew. The engine has already
+-- discarded the attempt's spans by the time this is thrown.
+--
+-- 'Hegel.Gen.Recursive' catches this at the point where it opened the
+-- recursion scope, drops the value, and starts again from the root; nothing
+-- else should catch it.
+data AttemptMispriced = AttemptMispriced
+  deriving stock (Show)
+
+instance Exception AttemptMispriced where
+  toException = asyncExceptionToException
+  fromException = asyncExceptionFromException
+
+#if __GLASGOW_HASKELL__ >= 912
+  backtraceDesired _ = False
+#endif
+
 -- | Thrown when a test is structurally invalid — a precondition on the test
 -- /definition/ rather than a property failure (for example, a stateful
 -- 'Hegel.Stateful.Machine' with no rules).
@@ -141,8 +179,8 @@ instance Exception FinalizerFailed where
         Nothing -> ""
         Just o -> " (the case had already failed at " <> T.unpack o <> ")"
 
--- | Is this exception one of Hegel's control signals ('AssumeRejected' or
--- 'TestStopped')?
+-- | Is this exception one of Hegel's control signals ('AssumeRejected',
+-- 'TestStopped', 'LeafBudgetExceeded', or 'AttemptMispriced')?
 --
 -- These signals are thrown as asynchronous exceptions, so handlers that need
 -- to catch them may use this predicate to recognize them.
@@ -150,6 +188,8 @@ isControlSignal :: SomeException -> Bool
 isControlSignal e =
   isJust (fromException @AssumeRejected e)
     || isJust (fromException @TestStopped e)
+    || isJust (fromException @LeafBudgetExceeded e)
+    || isJust (fromException @AttemptMispriced e)
 
 -- | Discriminated form of one of Hegel's two control signals.
 --

@@ -215,6 +215,15 @@ spec = do
         prop (Gen.datetime & Gen.max hi & Gen.build) (\_ -> pure ())
           `shouldThrow` messageContains "Hegel.Gen.DateTime"
 
+    describe "Gen.recursive" $ do
+      it "rejects a negative maxDepth" $ do
+        prop (Gen.recursive (pure True) (\_ctx sub -> sub) & Gen.maxDepth (-1) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Recursive"
+
+      it "rejects a negative maxLeaves" $ do
+        prop (Gen.recursive (pure True) (\_ctx sub -> sub) & Gen.maxLeaves (-1) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Recursive"
+
     describe "Gen.duration" $ do
       it "rejects an inverted min/max" $ do
         prop (Gen.duration & Gen.min 20 & Gen.max 10 & Gen.build) (\_ -> pure ())

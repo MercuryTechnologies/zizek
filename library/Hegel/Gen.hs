@@ -77,6 +77,13 @@ module Hegel.Gen
     NonEmptyBuilder,
     nonEmpty,
 
+    -- * Recursive
+    RecursiveBuilder,
+    recursive,
+    maxDepth,
+    maxLeaves,
+    RecursionContext (..),
+
     -- * Set
     SetBuilder,
     set,
@@ -257,6 +264,7 @@ import Hegel.Gen.Internal
 import Hegel.Gen.List (ListBuilder, list, unique)
 import Hegel.Gen.Map (MapBuilder, map)
 import Hegel.Gen.NonEmpty (NonEmptyBuilder, nonEmpty)
+import Hegel.Gen.Recursive (RecursionContext (..), RecursiveBuilder, maxDepth, maxLeaves, recursive)
 import Hegel.Gen.Regex (RegexBuilder, fullMatch, regex)
 import Hegel.Gen.Set (SetBuilder, set)
 import Hegel.Gen.Text (TextBuilder, text)

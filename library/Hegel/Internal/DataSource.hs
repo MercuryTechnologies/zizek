@@ -14,13 +14,14 @@
 -- String draws go through a caller-owned 'HegelStringGenerator' handle, built
 -- once by a @build*Gen@ constructor and drawn from any number of times.
 --
--- Pools and state machines also live here.
+-- Pools, state machines, and recursive generation scopes also live here.
 module Hegel.Internal.DataSource
   ( -- * Generation
     HegelStringGenerator,
     HegelCollection,
     HegelPool,
     HegelStateMachine,
+    HegelRecursion,
     drawBool,
     drawInteger,
     FloatSpec (..),
@@ -68,6 +69,14 @@ module Hegel.Internal.DataSource
     stateMachineRuleRejected,
     freeStateMachine,
 
+    -- * Recursive generation
+    newRecursion,
+    recursionBranch,
+    recursionLeaf,
+    recursionRetry,
+    recursionFinish,
+    freeRecursion,
+
     -- * Spans
     Label (..),
     startSpan,
@@ -94,7 +103,7 @@ import Foreign (ForeignPtr, Ptr, alloca, allocaBytes, castPtr, nullPtr, peek, wi
 import Foreign.C.String (CString)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt, CSize (..))
 import Foreign.Concurrent qualified as Concurrent
-import Hegel.Internal.Control (AssumeRejected (..), TestStopped (..))
+import Hegel.Internal.Control (AssumeRejected (..), AttemptMispriced (..), LeafBudgetExceeded (..), TestStopped (..))
 import Hegel.Internal.Event qualified as Event
 import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
@@ -803,6 +812,74 @@ stateMachineRuleRejected tc sm workerIndex = do
 freeStateMachine :: TestCase -> Ptr HegelStateMachine -> IO ()
 freeStateMachine tc sm = void (hegel_state_machine_free tc.handle.ctx sm)
 
+-- * Recursive generation
+
+-- | Open a recursive generation scope for one recursively defined value;
+-- returns its caller-owned handle.
+--
+-- Throws 'TestStopped' on exhaustion.
+newRecursion :: TestCase -> Word64 -> Word64 -> IO (Ptr HegelRecursion)
+newRecursion tc maxDep maxLeavesN =
+  withSlotOf tc.slot \outRecursion -> do
+    hegel_new_recursion tc.handle.ctx tc.handle.ptr maxDep maxLeavesN outRecursion >>= handleReturnCode tc
+    peek outRecursion
+
+-- | Draw the leaf-or-branch decision for the sub-value at @depth@: 'True'
+-- means invoke the branch function, drawing its own sub-values at
+-- @depth + 1@ by this same protocol; 'False' means the sub-value is a leaf,
+-- so call 'recursionLeaf' and then draw it.
+--
+-- Throws 'TestStopped' on exhaustion.
+recursionBranch :: TestCase -> Ptr HegelRecursion -> Word64 -> IO Bool
+recursionBranch tc recursion depth =
+  withSlotOf tc.slot \outBranch -> do
+    hegel_recursion_branch tc.handle.ctx tc.handle.ptr recursion depth outBranch >>= handleReturnCode tc
+    (/= 0) . (\(CBool b) -> b) <$> peek outBranch
+
+-- | Count one leaf against the current attempt's budget. Call immediately
+-- before drawing each leaf value.
+--
+-- Throws 'LeafBudgetExceeded' when the attempt has outgrown its leaf budget:
+-- the caller must unwind without drawing anything further and let
+-- 'Hegel.Gen.Recursive' retry from the root. Throws 'TestStopped' on
+-- exhaustion.
+recursionLeaf :: TestCase -> Ptr HegelRecursion -> IO ()
+recursionLeaf tc recursion = do
+  rc <- hegel_recursion_leaf tc.handle.ctx tc.handle.ptr recursion
+  case rc of
+    HEGEL_E_RETRY -> throwIO LeafBudgetExceeded
+    _ -> handleReturnCode tc rc
+
+-- | Discard a generation attempt after a 'LeafBudgetExceeded' unwind, so the
+-- next attempt starts fresh from the root, steering toward a smaller target.
+-- Call only after unwinding out of the caller's generators, back to the
+-- point 'newRecursion' was called.
+--
+-- Throws 'AssumeRejected' once attempts are exhausted, 'TestStopped' on
+-- exhaustion.
+recursionRetry :: TestCase -> Ptr HegelRecursion -> IO ()
+recursionRetry tc recursion = hegel_recursion_retry tc.handle.ctx tc.handle.ptr recursion >>= handleReturnCode tc
+
+-- | Report that the recursive value's root sub-value, and therefore the
+-- whole value, has finished generating.
+--
+-- Throws 'AttemptMispriced' when the completed value was priced for a
+-- different branch arity than the branch function actually drew; the engine
+-- has already discarded it, so the caller must drop the value and start
+-- again from the root, without calling 'recursionRetry'. Throws
+-- 'TestStopped' on exhaustion.
+recursionFinish :: TestCase -> Ptr HegelRecursion -> IO ()
+recursionFinish tc recursion = do
+  rc <- hegel_recursion_finish tc.handle.ctx tc.handle.ptr recursion
+  case rc of
+    HEGEL_E_RETRY -> throwIO AttemptMispriced
+    _ -> handleReturnCode tc rc
+
+-- | Release a recursion handle from 'newRecursion'. Each handle must be
+-- freed exactly once.
+freeRecursion :: TestCase -> Ptr HegelRecursion -> IO ()
+freeRecursion tc recursion = void (hegel_recursion_free tc.handle.ctx recursion)
+
 -- * Spans
 
 -- | Open a labeled span.
@@ -838,6 +915,7 @@ data Label
   | LabelEnumVariant
   | LabelFeatureFlag
   | LabelStatefulRule
+  | LabelRecursive
   deriving stock (Show)
 
 -- | The @hegel_label_t@ wire identifier (the @HEGEL_LABEL_*@ constants are the
@@ -860,3 +938,4 @@ instance Witch.From Label Word64 where
   from LabelEnumVariant = HEGEL_LABEL_ENUM_VARIANT
   from LabelFeatureFlag = HEGEL_LABEL_FEATURE_FLAG
   from LabelStatefulRule = HEGEL_LABEL_STATEFUL_RULE
+  from LabelRecursive = HEGEL_LABEL_RECURSIVE

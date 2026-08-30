@@ -13,6 +13,7 @@ import KeyedProperties qualified
 import LogRendering qualified
 import PoolEvents qualified
 import PropertyChecks qualified
+import RecursiveGenerators qualified
 import ReportRendering qualified
 import Resources qualified
 import Sampling qualified
@@ -47,6 +48,7 @@ main = do
   branchProperties <- testSpec "branch combinators" BranchProperties.spec
   forkProperties <- testSpec "fork combinators" ForkProperties.spec
   sampling <- testSpec "sampling" Sampling.spec
+  recursiveGenerators <- testSpec "recursive generators" RecursiveGenerators.spec
   defaultMain
     ( testGroup
         "zizek:unit"
@@ -72,6 +74,7 @@ main = do
           testCaseClone,
           branchProperties,
           forkProperties,
-          sampling
+          sampling,
+          recursiveGenerators
         ]
     )

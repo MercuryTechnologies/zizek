@@ -42,13 +42,13 @@ Minimum supported GHC version is 9.10 (enforced in CI and `zizek.cabal`). If you
 - `library/Hegel/Gen.hs` — Umbrella re-export; designed for `import Hegel.Gen qualified as Gen`
 - `library/Hegel/Gen/Internal.hs` — `Gen` GADT, combinators (`oneOf`, `filtered`, `assume`, `draw`), `enumerate`
 - `library/Hegel/Gen/Builder.hs` — `Build`, `HasMin`, `HasMax`, `HasSize` typeclasses
-- `library/Hegel/Gen/*.hs` — per-category builders (bool, integer, float, binary, char, text, regex, uri, uuid, list, set, map, …)
+- `library/Hegel/Gen/*.hs` — per-category builders (bool, integer, float, binary, char, text, regex, uri, uuid, list, set, map, …); `Hegel.Gen.Recursive` builds recursively defined data over an engine-owned depth cap, leaf budget, and retry protocol instead of a client-side loop
 - `library/Hegel/Collection.hs` — `libhegel`-managed variable-length collection handle, used by the list/set/map generators
 - `library/Hegel/Internal/Tick.hs` — the recording substrate: a monotonic per-case sequence stamp (`Tick`) plus the `Silent`/`Active` toggle and the generic gated `record`, shared by the note journal and the pool-event stream. Domain-agnostic (knows nothing of pools, notes, or state machines); records only in the final reconstruction replay
 - `library/Hegel/Internal/Event.hs` — the per-case pool-event stream (`Event`/`Operation`/`Var`), stamped via `Tick`
 - `library/Hegel/Internal/Foreign/*.hs(c)` — the `libhegel` interop: `Raw` (raw `foreign import ccall` bindings — all `hegel_*` C functions, opaque handle types, `HEGEL_*` pattern synonyms, bracket helpers) and `CString` (C-string marshalling) feeding it
 - `library/Hegel/Internal/TestCase.hs` and `library/Hegel/Internal/DataSource.hs` — the per-test-case engine interaction: `TestCase` (the handle — context + `hegel_test_case_t*` pointer — carrying the recording toggle, plus `markComplete`/`Status`) and `DataSource` (the generator-facing channel: `generate`, spans (`startSpan`/`stopSpan`, `Label`), collections, pools, state machines)
-- `library/Hegel/Internal/Control.hs` — control signals (`AssumeRejected`/`TestStopped`) and the exception-discipline helpers (`catchControl`/`onFailure`/`isFailure`/`tryProperty`)
+- `library/Hegel/Internal/Control.hs` — control signals (`AssumeRejected`/`TestStopped`/`LeafBudgetExceeded`/`AttemptMispriced`) and the exception-discipline helpers (`catchControl`/`onFailure`/`isFailure`/`tryProperty`)
 - `library/Hegel/Internal/DatabaseKey.hs` — database-key derivation
 
 ## Module Style
@@ -149,6 +149,10 @@ Spans (`start_span`/`stop_span`) group related generation calls so the engine ca
 ### Collections
 
 `libhegel`-managed collections (`Collection.new`/`Collection.more`/`Collection.reject` in `Hegel.Collection`) drive variable-length generation; the list/set/map generators are built on them. Rejecting duplicates requires variable-size mode — see Note [Variable-size mode required for reject] in `Hegel.Collection`.
+
+### Recursive Generation
+
+`Gen.recursive` (`Hegel.Gen.Recursive`) generates recursively defined data, such as trees or JSON documents, from a leaf generator and a branch function over sub-values. The engine owns branch probability, the depth cap (`maxDepth`), the leaf budget (`maxLeaves`), and the per-value target size, driven through `hegel_new_recursion`/`hegel_recursion_branch`/`hegel_recursion_leaf`/`hegel_recursion_finish`/`hegel_recursion_retry`. Two distinct situations both signal through `HEGEL_E_RETRY`: outgrowing the leaf budget (from `hegel_recursion_leaf`) throws `LeafBudgetExceeded`, and a completed value the engine discarded as mispriced (from `hegel_recursion_finish`) throws `AttemptMispriced`; both are control signals in `Hegel.Internal.Control`, caught only by the retry loop that opened the recursion scope. The `RECURSIVE` span around each sub-value is opened and closed in plain sequence, never under a `bracket`-style guarantee, so either retry's unwind skips the closing `stopSpan` instead of closing a span the engine already discarded.
 
 ### Stateful Testing
 

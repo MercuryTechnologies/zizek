@@ -39,6 +39,7 @@ module Hegel.Internal.Foreign.Raw
     HegelCollection,
     HegelPool,
     HegelStateMachine,
+    HegelRecursion,
 
     -- * Typed-draw result structs
     -- $typedrawresults
@@ -105,6 +106,7 @@ module Hegel.Internal.Foreign.Raw
     pattern HEGEL_LABEL_ENUM_VARIANT,
     pattern HEGEL_LABEL_FEATURE_FLAG,
     pattern HEGEL_LABEL_STATEFUL_RULE,
+    pattern HEGEL_LABEL_RECURSIVE,
 
     -- * Mode pattern synonyms
     -- $modes
@@ -187,6 +189,12 @@ module Hegel.Internal.Foreign.Raw
     hegel_state_machine_next_rule,
     hegel_state_machine_rule_rejected,
     hegel_state_machine_free,
+    hegel_new_recursion,
+    hegel_recursion_branch,
+    hegel_recursion_leaf,
+    hegel_recursion_retry,
+    hegel_recursion_finish,
+    hegel_recursion_free,
     hegel_target,
     hegel_mark_complete,
     hegel_test_case_clone,
@@ -306,6 +314,11 @@ data HegelPool
 -- engine-owned state machine for stateful testing, built by
 -- 'hegel_new_state_machine' and freed with 'hegel_state_machine_free'.
 data HegelStateMachine
+
+-- | Marker type for @HegelRecursion*@: a caller-owned handle to the leaf
+-- budget and retry bookkeeping for one recursively defined value, built by
+-- 'hegel_new_recursion' and freed with 'hegel_recursion_free'.
+data HegelRecursion
 
 -- $typedrawresults
 --
@@ -490,8 +503,10 @@ pattern HEGEL_E_CONCURRENT_USE = (#const HEGEL_E_CONCURRENT_USE)
 -- | Signals that a recursive generation attempt must be regenerated from the
 -- root, either because it outgrew its leaf budget ('hegel_recursion_leaf') or
 -- because the engine discarded it as mispriced ('hegel_recursion_finish').
--- Not used by this library today, since it has no recursive-generator
--- binding yet, but the closed-world guard still checks it against @hegel.h@.
+-- 'Hegel.Internal.DataSource.recursionLeaf'\/'Hegel.Internal.DataSource.recursionFinish'
+-- translate the two cases to 'Hegel.Internal.Control.LeafBudgetExceeded'\/
+-- 'Hegel.Internal.Control.AttemptMispriced' respectively, which
+-- 'Hegel.Gen.Recursive' catches at the point it opened the recursion scope.
 pattern HEGEL_E_RETRY :: CInt
 pattern HEGEL_E_RETRY = (#const HEGEL_E_RETRY)
 
@@ -559,9 +574,11 @@ pattern HEGEL_HC_LARGE_INITIAL_TEST_CASE = (#const HEGEL_HC_LARGE_INITIAL_TEST_C
 -- synonym here: the client-side spans this library itself opens.
 --
 -- Labels 17 through 30 are spans the engine emits internally around its own
--- typed-draw primitives, and labels 32 through 35 are spans the engine emits
--- internally around pool and recursive-generation primitives, so nothing
--- here constructs or matches any of them.
+-- typed-draw primitives, and labels 32 through 34 are spans the engine emits
+-- internally around pool and concurrency primitives, so nothing here
+-- constructs or matches any of them. Label 35, 'HEGEL_LABEL_RECURSIVE', is
+-- the one exception in that upper range: 'Hegel.Gen.Recursive' opens it
+-- itself, the same way it opens every other span below.
 
 pattern HEGEL_LABEL_LIST :: Word64
 pattern HEGEL_LABEL_LIST = (#const HEGEL_LABEL_LIST)
@@ -615,6 +632,12 @@ pattern HEGEL_LABEL_FEATURE_FLAG = (#const HEGEL_LABEL_FEATURE_FLAG)
 -- round's draws so the shrinker can delete a whole step at once.
 pattern HEGEL_LABEL_STATEFUL_RULE :: Word64
 pattern HEGEL_LABEL_STATEFUL_RULE = (#const HEGEL_LABEL_STATEFUL_RULE)
+
+-- | Span around one sub-value of a recursively defined value, grouping its
+-- leaf-or-branch decision and draws so the shrinker can replace it with one
+-- of its own subtrees.
+pattern HEGEL_LABEL_RECURSIVE :: Word64
+pattern HEGEL_LABEL_RECURSIVE = (#const HEGEL_LABEL_RECURSIVE)
 
 -- $modes
 --
@@ -1090,6 +1113,79 @@ foreign import ccall unsafe "hegel_state_machine_rule_rejected"
 -- the test case or the run. Each handle must be freed exactly once.
 foreign import ccall unsafe "hegel_state_machine_free"
   hegel_state_machine_free :: Ptr HegelContext -> Ptr HegelStateMachine -> IO CInt
+
+-- | Open a recursive generation scope, drawing its target size from @tc@'s
+-- stream: call at the point in the draw sequence where the recursive value
+-- begins.
+--
+-- On success writes a caller-owned handle into @*out_recursion@; release it
+-- with 'hegel_recursion_free'.
+--
+-- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted.
+foreign import ccall unsafe "hegel_new_recursion"
+  hegel_new_recursion
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Word64 -- ^ @max_depth@
+    -> Word64 -- ^ @max_leaves@
+    -> Ptr (Ptr HegelRecursion) -- ^ out: caller-owned handle
+    -> IO CInt
+
+-- | Draw the leaf-or-branch decision for the sub-value at @depth@; writes the
+-- answer into @*out_branch@. @True@ means invoke the branch function,
+-- drawing its own sub-values at @depth + 1@ by this same protocol; @False@
+-- means the sub-value is a leaf, so call 'hegel_recursion_leaf' and then draw
+-- it.
+--
+-- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted.
+foreign import ccall unsafe "hegel_recursion_branch"
+  hegel_recursion_branch
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Ptr HegelRecursion
+    -> Word64 -- ^ @depth@
+    -> Ptr CBool -- ^ out: branch?
+    -> IO CInt
+
+-- | Count one leaf against the current attempt's budget. Call immediately
+-- before drawing each leaf value.
+--
+-- Returns 'HEGEL_E_RETRY' when the attempt has outgrown @max_leaves@: unwind
+-- out of the caller's generators without drawing anything further, then call
+-- 'hegel_recursion_retry'. Returns 'HEGEL_E_STOP_TEST' when the choice budget
+-- is exhausted.
+foreign import ccall unsafe "hegel_recursion_leaf"
+  hegel_recursion_leaf :: Ptr HegelContext -> Ptr HegelTestCase -> Ptr HegelRecursion -> IO CInt
+
+-- | Discard a generation attempt that returned 'HEGEL_E_RETRY' from
+-- 'hegel_recursion_leaf': the spans it left open are closed and marked
+-- discarded, its leaf budget is reset, and the next attempt uses a lower
+-- branching probability. Call only after unwinding out of the caller's
+-- generators, from the stack depth at which 'hegel_new_recursion' was
+-- called.
+--
+-- Returns 'HEGEL_OK' (start the value again from the root), 'HEGEL_E_ASSUME'
+-- (attempts exhausted; the test case has already been concluded invalid), or
+-- 'HEGEL_E_STOP_TEST'.
+foreign import ccall unsafe "hegel_recursion_retry"
+  hegel_recursion_retry :: Ptr HegelContext -> Ptr HegelTestCase -> Ptr HegelRecursion -> IO CInt
+
+-- | Report that the recursive value's root sub-value, and therefore the
+-- whole value, has finished generating. The engine checks the branch pricing
+-- the attempt started from against the branch arities it actually produced.
+--
+-- Returns 'HEGEL_OK' (the value is accepted), 'HEGEL_E_RETRY' (the attempt
+-- was mispriced and has already been discarded, its spans closed as
+-- discarded: drop the value and start again from the root, without calling
+-- 'hegel_recursion_retry'), or 'HEGEL_E_STOP_TEST'.
+foreign import ccall unsafe "hegel_recursion_finish"
+  hegel_recursion_finish :: Ptr HegelContext -> Ptr HegelTestCase -> Ptr HegelRecursion -> IO CInt
+
+-- | Release a recursion handle from 'hegel_new_recursion'. Safe to call with
+-- @NULL@, and safe at any point in any order relative to freeing the test
+-- case or the run. Each handle must be freed exactly once.
+foreign import ccall unsafe "hegel_recursion_free"
+  hegel_recursion_free :: Ptr HegelContext -> Ptr HegelRecursion -> IO CInt
 
 -- $typeddraws
 --

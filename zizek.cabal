@@ -117,6 +117,7 @@ library
     Hegel.Gen.List
     Hegel.Gen.Map
     Hegel.Gen.NonEmpty
+    Hegel.Gen.Recursive
     Hegel.Gen.Regex
     Hegel.Gen.Set
     Hegel.Gen.Text
@@ -224,6 +225,7 @@ test-suite unit
     LogRendering
     PoolEvents
     PropertyChecks
+    RecursiveGenerators
     ReportRendering
     Resources
     Sampling
