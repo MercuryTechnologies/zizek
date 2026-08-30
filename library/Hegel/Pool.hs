@@ -2,8 +2,7 @@
 --
 -- A 'Pool' holds a set of previously generated values that rules can draw from
 -- during a stateful run. The engine picks which value to hand out on each draw,
--- so pool references shrink like any other choice: a minimal counterexample
--- shows the smallest set of values that triggers the failure.
+-- so pool references shrink like any other choice.
 --
 -- Usage:
 --
@@ -12,8 +11,8 @@
 -- > Pool.add pool anotherValue
 -- >
 -- > -- In a rule body:
--- > v <- forAll (Pool.reuse pool)     -- does not remove from pool
--- > v <- forAll (Pool.consume pool)   -- removes from pool
+-- > x <- forAll (Pool.reuse pool)     -- does not remove from pool
+-- > y <- forAll (Pool.consume pool)   -- removes from pool
 --
 -- Drawing from an empty pool discards the current test case (equivalent to
 -- @assume False@); the run is tallied as 'Invalid', not a failure.
@@ -39,6 +38,7 @@ module Hegel.Pool
   )
 where
 
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar, withMVar)
 import Control.Exception (throwIO)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.IntMap.Strict (IntMap)
@@ -51,27 +51,25 @@ import Hegel.Internal.DataSource (HegelPool, freePool, freshPoolIdentity, labelP
 import Hegel.Internal.Event (Var (..))
 import Hegel.Internal.TestCase (TestCase)
 import Hegel.Property.Internal (Env (..), PropertyT, askEnv, resource)
-import UnliftIO.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 
 -- | Opaque handle to a @libhegel@-managed pool of values of type @a@.
 data Pool a = Pool
   { handle :: !(Ptr HegelPool),
     identity :: !Int,
-    values :: !(IORef (IntMap a))
+    values :: !(MVar (IntMap a))
   }
 
--- | Create a new pool against the running property's test case. Acquires
--- the native handle and registers its release atomically, so an async
--- exception landing between the two (a sibling branch failing, a fork
--- being cancelled) can't leak it; see 'resource'. Consequently, like
--- 'resource', this throws 'Hegel.Internal.Control.MalformedTest' if called
--- from inside a stateful rule's @apply@ or an invariant's @check@ — create
--- pools in a 'Hegel.Stateful.Machine'\'s @initial@ or in a plain property
--- body instead, then have rules move values in and out of them.
+-- | Create a new pool against the running property's test case.
 --
--- The failure report auto-names the pool's values @v₁, w₁, ...@ by birth
--- order. Use 'named' when a semantic letter such as @h₁@ for handles reads
--- better.
+-- Like 'resource', this throws 'Hegel.Internal.Control.MalformedTest' if called
+-- from within a stateful rule's @apply@ or an invariant's @check@.
+--
+-- Pools should be created in a 'Hegel.Stateful.Machine'\'s @initial@ or in a
+-- plain property body instead, and rules should only move values into and out
+-- of them.
+--
+-- The failure report automatically names the pool's values @v₁, w₁, ...@ based
+-- on their birth order; use 'named' to assign a name directly upon creation.
 new :: (MonadIO m) => PropertyT m (Pool a)
 new = do
   env <- askEnv
@@ -79,7 +77,7 @@ new = do
     ( do
         handle <- newPool env.testCase
         identity <- freshPoolIdentity
-        values <- newIORef IntMap.empty
+        values <- newMVar IntMap.empty
         pure Pool {handle, identity, values}
     )
     (\pool -> freePool env.testCase pool.handle)
@@ -94,42 +92,38 @@ named label = do
   pure pool
 
 -- | Add a value to the pool. The engine assigns the variable id.
---
--- Runs against whichever test case is live at the point of the call, so an
--- add is attributed to the branch that performed it. The mirror insert is
--- atomic, so concurrent 'add' calls sharing one pool do not lose entries.
 add :: (MonadIO m) => Pool a -> a -> PropertyT m ()
 add pool v = do
   env <- askEnv
-  liftIO do
+  liftIO $ modifyMVar_ pool.values \m -> do
     vid <- poolAdd env.testCase pool.handle pool.identity
-    atomicModifyIORef' pool.values \m -> (IntMap.insert vid v m, ())
+    pure (IntMap.insert vid v m)
 
 -- | Number of values currently in the pool.
 size :: Pool a -> IO Int
-size pool = IntMap.size <$> readIORef pool.values
+size pool = IntMap.size <$> readMVar pool.values
 
 -- | Is the pool currently empty?
 isEmpty :: Pool a -> IO Bool
-isEmpty pool = IntMap.null <$> readIORef pool.values
+isEmpty pool = IntMap.null <$> readMVar pool.values
 
 -- | A generator over values in the pool that does not remove them.
 --
 -- The engine picks the variable id so the choice shrinks like any other draw.
 -- Drawing from an empty pool discards the current test case.
 reuse :: Pool a -> Gen a
-reuse pool = Draw \tc -> do
-  vals <- readIORef pool.values
-  if IntMap.null vals
-    then throwIO AssumeRejected
-    else do
-      vid <- poolGenerate tc pool.handle pool.identity False
-      case IntMap.lookup vid vals of
-        Just v -> pure v
-        Nothing ->
-          -- Engine returned a variable id that was never added — engine-contract
-          -- violation, not a user error.
-          error ("Hegel.Pool.reuse: unknown variable id " <> show vid)
+reuse pool = Draw \tc ->
+  withMVar pool.values \vals ->
+    if IntMap.null vals
+      then throwIO AssumeRejected
+      else do
+        vid <- poolGenerate tc pool.handle pool.identity False
+        case IntMap.lookup vid vals of
+          Just v -> pure v
+          Nothing ->
+            -- Engine returned a variable id that was never added — engine-contract
+            -- violation, not a user error.
+            error ("Hegel.Pool.reuse: unknown variable id " <> show vid)
 
 -- | A generator that consumes values from the pool, removing each yielded
 -- value so it is never drawn again.
@@ -143,37 +137,29 @@ consume pool = Draw \tc -> snd <$> drawConsuming "consume" pool tc
 --
 -- Throws 'AssumeRejected' when the pool is empty, discarding the test case.
 drawConsuming :: String -> Pool a -> TestCase -> IO (Int, a)
-drawConsuming caller pool tc = do
-  empty <- IntMap.null <$> readIORef pool.values
-  if empty
-    then throwIO AssumeRejected
-    else do
-      vid <- poolGenerate tc pool.handle pool.identity True
-      v <- atomicModifyIORef' pool.values \m ->
+drawConsuming caller pool tc =
+  modifyMVar pool.values \m ->
+    if IntMap.null m
+      then throwIO AssumeRejected
+      else do
+        vid <- poolGenerate tc pool.handle pool.identity True
         case IntMap.updateLookupWithKey (\_ _ -> Nothing) vid m of
-          (Just v, m') -> (m', v)
+          (Just v, m') -> pure (m', (vid, v))
           (Nothing, _) ->
             -- Engine returned a variable id that was never added —
             -- engine-contract violation, not a user error.
             error ("Hegel.Pool." <> caller <> ": unknown variable id " <> show vid)
-      pure (vid, v)
 
 -- | A generator that moves a value from one pool to another: a consuming
 -- draw from @src@ whose value is immediately registered in @dst@, with the
--- identity link /declared/ in the event stream — the failure report renders
--- the value as one continuous lifeline across both pools rather than two
--- unrelated ones.
+-- identity link /declared/ in the event stream.
 --
--- This is the honest way to model state changes like closing a handle
--- (consume from the open pool, transfer into the closed pool): a manual
--- @'consume' ... 'add'@ pair works but severs the value's story.
---
--- No engine primitive is involved beyond the same draw + add; the link is
--- zizek-side bookkeeping. Drawing from an empty @src@ discards the test
--- case.
+-- Use this this when modeling state changes, such as closing a handle to some
+-- resource.
 transfer :: Pool a -> Pool a -> Gen a
 transfer src dst = Draw \tc -> do
   (vid, v) <- drawConsuming "transfer" src tc
-  vid' <- poolAddFrom tc dst.handle dst.identity Var {pool = src.identity, id = vid}
-  atomicModifyIORef' dst.values \m -> (IntMap.insert vid' v m, ())
+  modifyMVar_ dst.values \m -> do
+    vid' <- poolAddFrom tc dst.handle dst.identity Var {pool = src.identity, id = vid}
+    pure (IntMap.insert vid' v m)
   pure v
