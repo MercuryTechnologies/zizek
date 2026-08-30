@@ -59,11 +59,13 @@ module Hegel
     module Hegel.Assertion,
 
     -- * Stateful testing
+
+    -- | Only "Hegel.Pool" is re-exported here. 'Hegel.Stateful.Rule' and
+    -- 'Hegel.Stateful.Concurrent.Rule' share a name but not a shape, so
+    -- reaching for either always goes through its own qualified import:
+    -- @import Hegel.Stateful qualified as Stateful@ or @import
+    -- Hegel.Stateful.Concurrent qualified as Concurrent@.
     module Hegel.Pool,
-    Machine (..),
-    Rule (..),
-    Invariant (..),
-    runMachine,
   )
 where
 
@@ -100,17 +102,10 @@ import Hegel.Property
 import Hegel.Report
 import Hegel.Runner (sample, samples)
 import Hegel.Settings
-import Hegel.Stateful (Invariant (..), Machine (..), Rule (..))
-import Hegel.Stateful qualified as Stateful
 import Hegel.Verbosity
-import UnliftIO (MonadUnliftIO)
 
 -- | 'check_' with 'defaultSettings' and 'forEach': the shortest spelling for
 -- use inside a test framework's @it@\/@testCase@, where the framework owns the
 -- label and reports the thrown failure.
 prop :: (Show a) => Gen a -> (a -> IO ()) -> IO ()
 prop gen body = check_ def (forEach gen body)
-
--- | Run a stateful test specified by a 'Machine'. Sugar for 'Stateful.run'.
-runMachine :: (MonadUnliftIO m) => Machine s m -> PropertyT m ()
-runMachine = Stateful.run

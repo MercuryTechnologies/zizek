@@ -157,6 +157,7 @@ library
     Hegel.Runner
     Hegel.Settings
     Hegel.Stateful
+    Hegel.Stateful.Concurrent
     Hegel.Tasty
     Hegel.Verbosity
 
@@ -215,6 +216,7 @@ test-suite unit
     Alphabet
     BasicProperties
     BranchProperties
+    ConcurrentStateful
     ControlSignals
     DatabaseReplay
     Finalizers

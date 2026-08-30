@@ -3,6 +3,7 @@ module Main (main) where
 import Alphabet qualified
 import BasicProperties qualified
 import BranchProperties qualified
+import ConcurrentStateful qualified
 import ControlSignals qualified
 import DatabaseReplay qualified
 import Finalizers qualified
@@ -41,6 +42,7 @@ main = do
   keyed <- testSpec "keyed properties" KeyedProperties.spec
   stateful <- testSpec "stateful testing" Stateful.spec
   statefulRoundInternal <- testSpec "stateful round (internal)" StatefulRoundInternal.spec
+  concurrentStateful <- testSpec "concurrent stateful testing" ConcurrentStateful.spec
   finalizers <- testSpec "finalizers" Finalizers.spec
   resources <- testSpec "resources" Resources.spec
   poolEvents <- testSpec "pool events" PoolEvents.spec
@@ -69,6 +71,7 @@ main = do
           KeyedProperties.tastyTree,
           stateful,
           statefulRoundInternal,
+          concurrentStateful,
           finalizers,
           resources,
           poolEvents,

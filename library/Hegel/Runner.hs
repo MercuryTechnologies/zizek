@@ -42,7 +42,7 @@ import Hegel.Property.Internal
     observeProperty,
     propertyAction,
   )
-import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), aborted)
+import Hegel.Report (Abort (..), Note (..), NoteKind (Footnote), Report (..), Result (..), Stats (..), Tick (..), aborted)
 import Hegel.Settings (Settings (..))
 import UnliftIO.Exception (catch, catchAny, throwIO)
 import UnliftIO.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
@@ -98,21 +98,45 @@ check settings prop =
           -- The run itself failed (a health check, an engine panic) and
           -- produced no verdict on the property.
           RunErrored -> pure (Aborted (UnhealthyInput (fromMaybe "the run failed" outcome.runError)))
-          -- Unreachable until a caller can create a concurrent state machine;
-          -- see 'RunNondeterministic'.
-          RunNondeterministic ->
-            pure . Aborted . Errored . toException $
-              userError "the run failed on a nondeterministic concurrent state machine, which Hegel.Stateful cannot yet report"
+          RunNondeterministic -> case outcome.failure of
+            Just f -> pure (unreproducibleCounterexample f.origin)
+            Nothing ->
+              pure . Aborted . Errored . toException $
+                userError "the run reported a nondeterministic failure but exposed no counterexample"
         pure
           Report
             { result,
               stats = Stats {valid = nValid, invalid = nInvalid},
               -- The reproduction surface, for the failure footer: only a
-              -- persisted key is honest to point at.
-              databaseKey = case settings.database of
-                DatabaseDisabled -> Nothing
+              -- persisted key is honest to point at. A nondeterministic run
+              -- never persists, regardless of what the caller configured.
+              databaseKey = case (outcome.status, settings.database) of
+                (RunNondeterministic, _) -> Nothing
+                (_, DatabaseDisabled) -> Nothing
                 _ -> settings.databaseKey
             }
+
+-- | Describe a failure from a run a concurrent state machine declared
+-- nondeterministic: the engine skips shrinking and reproduce-blob emission
+-- for such a run, so @origin@, a stable dedup key rather than the failing
+-- assertion's own message, is all there is to report.
+unreproducibleCounterexample :: Text -> Result
+unreproducibleCounterexample origin =
+  Counterexample
+    { message = origin,
+      notes =
+        [ Note
+            { kind = Footnote,
+              text = "this failure came from a concurrent run, so there is no stored example to replay",
+              loc = Nothing,
+              depth = 0,
+              clock = Tick 0
+            }
+        ],
+      events = [],
+      loc = Nothing,
+      diff = Nothing
+    }
 
 -- * Sampling
 

@@ -13,7 +13,7 @@
 -- data Counter = Counter Int
 --
 -- increment :: Stateful.Rule Counter IO
--- increment = Stateful.Rule "increment" \\(Counter n) -> pure (Counter (n + 1))
+-- increment = Stateful.rule "increment" \\(Counter n) -> pure (Counter (n + 1))
 --
 -- neverAboveTen :: Stateful.Invariant Counter IO
 -- neverAboveTen = Stateful.Invariant "never_above_ten" \\(Counter n) ->
@@ -50,6 +50,7 @@
 module Hegel.Stateful
   ( -- * Specification
     Rule (..),
+    rule,
     Invariant (..),
     Machine (..),
 
@@ -106,6 +107,11 @@ data Rule s m = Rule
   { name :: !Text,
     apply :: s -> PropertyT m s
   }
+
+-- | Construct a 'Rule' from a name and its application function, for
+-- symmetry with 'Hegel.Stateful.Concurrent.rule'.
+rule :: Text -> (s -> PropertyT m s) -> Rule s m
+rule name apply = Rule {name, apply}
 
 -- | An invariant checked after every successful rule application and after
 -- the initial state is constructed.
@@ -243,7 +249,7 @@ run machine = do
   -- until the one worker's own budget is exhausted.
   withRunInIO \runInIO -> do
     let dispatch ruleIndex = do
-          let rule = case lookup ruleIndex (zip [0 ..] machine.rules) of
+          let matchedRule = case lookup ruleIndex (zip [0 ..] machine.rules) of
                 Just r -> r
                 -- @libhegel@ guarantees indices in @[0, num_rules)@, so
                 -- this is unreachable unless the engine itself is
@@ -259,11 +265,11 @@ run machine = do
           stepIndex <- atomicModifyIORef' attemptsRef \a -> (a + 1, a + 1)
           runInIO $
             note
-              (StepHeader stepIndex rule.name)
+              (StepHeader stepIndex matchedRule.name)
               Nothing
-              ("Step " <> T.pack (show stepIndex) <> ": " <> rule.name)
+              ("Step " <> T.pack (show stepIndex) <> ": " <> matchedRule.name)
           s <- readIORef stateRef
-          s' <- runInIO (nested (withFailureNote (withScope InStep (rule.apply s))))
+          s' <- runInIO (nested (withFailureNote (withScope InStep (matchedRule.apply s))))
           writeIORef stateRef s'
 
         onRejected = do
