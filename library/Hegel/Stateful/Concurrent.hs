@@ -214,7 +214,7 @@ stepText :: Int -> Text -> Text
 stepText idx ruleName = "Step " <> T.pack (show idx) <> ": " <> ruleName
 
 -- | The round\/worker detail line folded in alongside a step's header:
--- 
+--
 -- e.g. @\"round 2, worker 2\"@.
 roundWorkerText :: Int -> Int -> Text
 roundWorkerText roundIdx workerIdx =

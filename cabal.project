@@ -1,2 +1,8 @@
 packages: .
 tests: True
+
+-- The test suite slows down pretty dramatically under contention at high
+-- thread counts, so we limit to N = 4 threads which experimentally seems to
+-- be the best tradeoff in terms of maximizing parallelism while limiting
+-- contention.
+test-options: --num-threads=4

@@ -84,7 +84,7 @@ groupHeaderLabel g = case (snd g.root).kind of
 
 -- | Splice one note into its enclosing source declaration, labeled by its
 -- group's header text when it has one.
--- 
+--
 -- Falls back to the structured journal line when the note has no location or
 -- its source cannot be read.
 spliceNote ::
