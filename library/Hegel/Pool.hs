@@ -14,8 +14,10 @@
 -- > x <- forAll (Pool.reuse pool)     -- does not remove from pool
 -- > y <- forAll (Pool.consume pool)   -- removes from pool
 --
--- Drawing from an empty pool discards the current test case (equivalent to
--- @assume False@); the run is tallied as 'Invalid', not a failure.
+-- Drawing from an empty pool is equivalent to @assume False@: inside a
+-- stateful rule's body it skips just that step, without discarding the
+-- case; anywhere else it discards the whole test case, tallied as
+-- 'Invalid' rather than a failure.
 module Hegel.Pool
   ( -- * Handle
     Pool,
@@ -110,7 +112,8 @@ isEmpty pool = IntMap.null <$> readMVar pool.values
 -- | A generator over values in the pool that does not remove them.
 --
 -- The engine picks the variable id so the choice shrinks like any other draw.
--- Drawing from an empty pool discards the current test case.
+-- Drawing from an empty pool skips the step it's drawn in without
+-- discarding the case, the same as @assume False@ inside a rule body.
 reuse :: Pool a -> Gen a
 reuse pool = Draw \tc ->
   withMVar pool.values \vals ->
@@ -128,7 +131,8 @@ reuse pool = Draw \tc ->
 -- | A generator that consumes values from the pool, removing each yielded
 -- value so it is never drawn again.
 --
--- Drawing from an empty pool discards the current test case.
+-- Drawing from an empty pool skips the step it's drawn in without
+-- discarding the case, the same as @assume False@ inside a rule body.
 consume :: Pool a -> Gen a
 consume pool = Draw \tc -> snd <$> drawConsuming "consume" pool tc
 

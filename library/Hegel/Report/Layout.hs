@@ -1,5 +1,7 @@
 -- | The flat, chronological event log: one row per step, a bare @✗@/blank
--- gutter, and touch-irrelevant runs collapsed into a single elision row.
+-- gutter, and touch-irrelevant runs collapsed into a single elision row. A
+-- concurrent stateful step's round\/worker tag rides in its own right-aligned
+-- column, dim, past the call.
 --
 -- Intended to be imported with qualification:
 --
@@ -16,13 +18,14 @@ where
 
 import Data.List (nub, sortOn)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Internal.Event (Var (..))
 import Hegel.Report.Ann (Ann (..))
 import Hegel.Report.Note (Note (..), NoteKind (..))
 import Hegel.Report.Style (Cell (..), GlyphTable (..), PhraseTable (..), Style (..), firstLine)
-import Hegel.Report.Trace (Identity (..), Step (..), Touch (..), Trace)
+import Hegel.Report.Trace (Identity (..), Origin (..), Step (..), Touch (..), Trace)
 import Hegel.Report.Trace qualified as Trace
 import Prettyprinter (Doc)
 import Prettyprinter qualified as PP
@@ -43,7 +46,11 @@ data Row = Row
   { kind :: !RowKind,
     gutter :: !Cell,
     stepNo :: !(Maybe Int),
-    call :: !Text
+    call :: !Text,
+    -- | A concurrent stateful step's round\/worker tag, right-aligned in its
+    -- own column. 'Nothing' for a sequential machine's steps and for detail
+    -- and elision rows.
+    origin :: !(Maybe Text)
   }
   deriving stock (Show, Eq)
 
@@ -58,11 +65,16 @@ relevantRoots trace =
     Nothing -> []
     Just failing -> nub [Trace.root trace t.var | t <- failing.touches]
 
--- | Lay the trace out as event-log rows, oldest step first and the failing
--- step last. A step is kept when it failed, when the failure touched no
--- pool value at all, or when it shares a lineage root with the failing
--- step's own touches. Any other run of steps collapses into one
--- 'ElisionRow'.
+-- | Lay the trace out as event-log rows, oldest step first. A step is kept
+-- when it failed, when the failure touched no pool value at all, or when it
+-- shares a lineage root with the failing step's own touches. Any other run
+-- of steps collapses into one 'ElisionRow'.
+--
+-- For a sequential machine the failing step is always the last one kept,
+-- since the run stops as soon as it fails. A concurrent stateful fold has
+-- no such guarantee: the whole round that produced the failure is folded
+-- unconditionally, so a higher-numbered step from another worker in that
+-- same round can be kept after it.
 layoutRows :: Style -> Trace -> [Row]
 layoutRows opts trace = preludeRows <> go Nothing kept
   where
@@ -84,7 +96,7 @@ layoutRows opts trace = preludeRows <> go Nothing kept
 
     -- Elision rows for the gap between the previous kept step and this one.
     elisionBetween mLo hi =
-      [ Row {kind = ElisionRow, gutter = Blank, stepNo = Nothing, call = elisionLabel between}
+      [ Row {kind = ElisionRow, gutter = Blank, stepNo = Nothing, call = elisionLabel between, origin = Nothing}
       | lo <- maybe [] pure mLo,
         let between = [st | st <- realSteps, st.index > lo, st.index < hi],
         not (null between)
@@ -104,13 +116,14 @@ layoutRows opts trace = preludeRows <> go Nothing kept
         { kind = NodeRow,
           gutter = if s.failed then NodeFail else Blank,
           stepNo = Just s.index,
-          call = fst (stepCall opts trace s)
+          call = fst (stepCall opts trace s),
+          origin = (\o -> opts.phrases.stepOrigin o.roundNo o.workerNo o.group) <$> s.origin
         }
 
     -- Detail lines: free draws that didn't inline, then the step's
     -- annotations, in journal order.
     detailRows s =
-      [ Row {kind = DetailRow, gutter = Blank, stepNo = Nothing, call = l}
+      [ Row {kind = DetailRow, gutter = Blank, stepNo = Nothing, call = l, origin = Nothing}
       | line <- snd (stepCall opts trace s) <> annotations s,
         l <- T.lines line
       ]
@@ -191,6 +204,9 @@ logDoc opts trace = PP.vsep (fmap rowDoc rows)
     rows = layoutRows opts trace
     table = opts.glyphs
     stepW = maximum (1 : [T.length (stepToken i) | Row {stepNo = Just i} <- rows])
+    -- The origin column clears the widest call that has one, so a
+    -- sequential log, which carries no origins at all, pads nothing.
+    callW = maximum (0 : [T.length r.call | r <- rows, isJust r.origin])
 
     rowDoc r = foldMap snd (dropTrailing segments)
       where
@@ -199,7 +215,9 @@ logDoc opts trace = PP.vsep (fmap rowDoc rows)
             (" ", " "),
             (stepTxt, PP.annotate StepNoAnn (PP.pretty stepTxt)),
             (" ", " "),
-            (r.call, callDoc)
+            (r.call, callDoc),
+            (originPad, PP.pretty originPad),
+            (originTxt, PP.annotate BranchLabelAnn (PP.pretty originTxt))
           ]
         gutterTxt = table.cell r.gutter
         gutterDoc = PP.annotate (if r.gutter == NodeFail then FailureMark else StrandAnn 0) (PP.pretty gutterTxt)
@@ -209,6 +227,10 @@ logDoc opts trace = PP.vsep (fmap rowDoc rows)
           DetailRow -> PP.annotate ElidedAnn (PP.pretty r.call)
           ElisionRow -> PP.annotate ElidedAnn (PP.pretty r.call)
           NodeRow -> respAnnotated r.call
+        originTxt = fromMaybe "" r.origin
+        originPad
+          | isJust r.origin = T.replicate (callW - T.length r.call + 2) " "
+          | otherwise = ""
 
     -- Color the response tail separately from the call head.
     respAnnotated t = case T.breakOn (" " <> table.cell ResponseArrow <> " ") t of

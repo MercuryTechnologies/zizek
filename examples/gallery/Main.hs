@@ -1,9 +1,11 @@
 -- | A gallery of deliberately-failing properties: the permanent eyeball
--- harness for the failure renderers. Eight scenarios span the spectrum of
--- report shapes. Every stateful failure renders as
--- one flat chronological event log, oldest step through the failing step,
--- then that step's source splice; runs of steps unrelated to the failure
--- collapse into a single elision row:
+-- harness for the failure renderers. Eleven scenarios span the spectrum of
+-- report shapes. Every stateful failure renders as one flat chronological
+-- event log, then the failing step's source splice; runs of steps
+-- unrelated to the failure collapse into a single elision row. For a
+-- sequential machine the failing step is always the log's last row; a
+-- concurrent one folds a whole round unconditionally, so a step from
+-- another worker in that round can follow it:
 --
 --   1. plain property — the non-stateful base case: drawn values splice into
 --      their source and a '(===)' failure carries a structural diff, with no
@@ -47,6 +49,31 @@
 --      the forked worker's own lines tagged @Fork 1:@. It runs through the
 --      same 'Hegel.Report.Concurrent' machinery as scenario 6, rendering the
 --      @Branch N@ header shape under a @Fork N@ label.
+--   9. concurrent pool, in-rule assert — a concurrent twin of scenario 4:
+--      several workers check connections in and out of one shared pool at
+--      once, racing a non-atomically maintained cache of the idle count.
+--      The claim lives inside the @checkin@ rule itself, so the failure
+--      journals into that worker's own step and renders in-band under its
+--      @Step N: checkin@ row, tagged with the round\/worker that saw the
+--      stale count. This is the run's first reproduction footer: a
+--      concurrent run is always 'Hegel.Report.Unreproducible'.
+--   10. concurrent pool, invariant at the round join — the same racing
+--      machine, but the claim moves to an 'Hegel.Stateful.Concurrent.Invariant',
+--      checked on the root case only after every worker in the round has
+--      finished, the shape that catches corruption no single worker could see
+--      on its own. The invariant's own draws run at depth 1 under whichever
+--      step the round happened to fold last, so /that/ step's row and splice
+--      carry the failure mark and the origin tag, even though the step
+--      itself did nothing wrong; the invariant's own body splices in
+--      underneath, as a second declaration.
+--   11. concurrent groups — the same racing pool, pared to a single seeded
+--      connection @checkout@\/@checkin@ toggle forever. The two share a
+--      @"writers"@ 'Hegel.Stateful.Concurrent.grouped' concurrency group,
+--      and a new read-only @peek@ rule sits alone in a @"readers"@ group,
+--      so no round ever mixes the two. The origin column names each step's
+--      group directly, so the constraint is visible without inferring it
+--      from rule names: every round's rows read @(writers)@ or
+--      @(readers)@, never a mix.
 --
 -- Run with @just gallery@ from the repo root (source splicing resolves
 -- @srcLocFile@ relative to the working directory). Every scenario renders
@@ -55,6 +82,7 @@
 -- Always exits 0; this is an eyeballing harness, not an assertion.
 module Main (main) where
 
+import Control.Concurrent (threadDelay)
 import Control.Monad.IO.Class (liftIO)
 import Data.Default.Class (def)
 import Data.Function ((&))
@@ -77,11 +105,13 @@ import Hegel.Property
 import Hegel.Property.Branch qualified as Branch
 import Hegel.Property.Fork qualified as Fork
 import Hegel.Report (Report (..), renderReportRichAnsi, renderReportRichAnsiWith, renderValue)
-import Hegel.Report.Style qualified as Style
 import Hegel.Report.Style (defaultStyle)
+import Hegel.Report.Style qualified as Style
 import Hegel.Runner (check)
+import Hegel.Settings (Settings (..))
 import Hegel.Stateful qualified as Stateful
-import UnliftIO.IORef (IORef, modifyIORef', newIORef, readIORef)
+import Hegel.Stateful.Concurrent qualified as Concurrent
+import UnliftIO.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 
 main :: IO ()
 main = do
@@ -93,9 +123,17 @@ main = do
   runScenario "6: concurrently — two branches fail independently, spliced" concurrentProperty
   runScenario "7: fan-out — ten clients, only #7 fails, threshold collapses the rest" fanOutProperty
   runScenario "8: fork — spawned worker fails independently, top-level lines unlabeled" forkedWorkerProperty
+  runScenarioWith concurrentPoolSettings "9: concurrent pool — in-rule assert, splices at the worker's own step" (Concurrent.run (Concurrent.fixed 3) inRuleAssertMachine)
+  runScenarioWith concurrentPoolSettings "10: concurrent pool — invariant at the round join, no worker attribution" (Concurrent.run (Concurrent.fixed 3) invariantJoinMachine)
+  runScenarioWith concurrentPoolSettings "11: concurrent groups — writers and readers never share a round" (Concurrent.run (Concurrent.fixed 3) groupedMachine)
 
 runScenario :: Text -> Property () -> IO ()
 runScenario title prop = showReport title =<< check def prop
+
+-- | 'runScenario' with settings other than the default, for a scenario that
+-- needs a tighter budget to keep its log readable.
+runScenarioWith :: Settings -> Text -> Property () -> IO ()
+runScenarioWith settings title prop = showReport title =<< check settings prop
 
 -- | Print one report through the wired rich ANSI renderer.
 showReport :: Text -> Report -> IO ()
@@ -478,3 +516,169 @@ forkedWorkerProperty = do
     annotate ("worker drew " <> renderValue v)
     assert (v < 30) "worker: value too big"
   Fork.join worker
+
+-- * Scenarios 9-10: concurrent pool (racy cache, two render paths)
+
+-- | Connections checked in and out of a shared pool by several workers at
+-- once, alongside the SUT's own cached idle count.
+data PoolModel = PoolModel
+  { idle :: Pool Int,
+    active :: Pool Int,
+    nextConn :: IORef Int,
+    -- | SUT: the pool's own cached count of idle connections.
+    cached :: IORef Int
+  }
+
+newPoolModel :: Property PoolModel
+newPoolModel = do
+  idle <- Pool.named "conn"
+  active <- Pool.new
+  nextConn <- newIORef 0
+  cached <- newIORef 0
+  pure PoolModel {idle, active, nextConn, cached}
+
+-- | Read, pause, write: widens the window so two workers updating a shared
+-- counter within one round reliably lose one of their two updates.
+bumpRacily :: IORef Int -> Int -> IO ()
+bumpRacily ref dv = do
+  v <- readIORef ref
+  threadDelay 200
+  writeIORef ref (v + dv)
+
+-- | Mint a fresh connection into 'idle'.
+--
+-- BUG: the shared cache is bumped non-atomically, the same way every rule
+-- below touches it; two workers racing in one round can each read the same
+-- starting value and one update is lost.
+connectBody :: PoolModel -> Property ()
+connectBody m = do
+  c <- liftIO do
+    c <- readIORef m.nextConn
+    modifyIORef' m.nextConn (+ 1)
+    pure c
+  Pool.add m.idle c
+  liftIO (bumpRacily m.cached 1)
+
+connect :: Concurrent.Rule PoolModel IO
+connect = Concurrent.rule "connect" connectBody
+
+checkoutBody :: PoolModel -> Property ()
+checkoutBody m = do
+  _ <- forAll (Pool.transfer m.idle m.active)
+  liftIO (bumpRacily m.cached (-1))
+
+checkout :: Concurrent.Rule PoolModel IO
+checkout = Concurrent.rule "checkout" checkoutBody
+
+checkinBody :: PoolModel -> Property ()
+checkinBody m = do
+  _ <- forAll (Pool.transfer m.active m.idle)
+  liftIO (bumpRacily m.cached 1)
+
+-- | 'checkinBody', with the claim checked inline at the end of the rule:
+-- the failure journals into the firing worker's own step.
+checkinAsserting :: Concurrent.Rule PoolModel IO
+checkinAsserting =
+  Concurrent.rule "checkin" \m -> do
+    checkinBody m
+    actual <- liftIO (Pool.size m.idle)
+    cachedNow <- liftIO (readIORef m.cached)
+    assert (cachedNow == actual) "the cached idle count matches the pool"
+
+-- | 'checkinBody' with no claim of its own, for pairing with
+-- 'cacheMatchesPool'.
+checkinPlain :: Concurrent.Rule PoolModel IO
+checkinPlain = Concurrent.rule "checkin" checkinBody
+
+-- | The same claim as 'checkinAsserting', checked on the root case once
+-- every worker in the round has finished rather than inside any one rule.
+-- Its failure attaches to whichever step the round happened to fold last,
+-- not to the step that caused the drift.
+cacheMatchesPool :: Concurrent.Invariant PoolModel IO
+cacheMatchesPool =
+  Concurrent.Invariant "cache_matches_pool" \m -> do
+    actual <- liftIO (Pool.size m.idle)
+    cachedNow <- liftIO (readIORef m.cached)
+    cachedNow === actual
+
+inRuleAssertMachine :: Concurrent.Machine PoolModel IO
+inRuleAssertMachine =
+  Concurrent.Machine
+    { initial = newPoolModel,
+      rules = [connect, checkout, checkinAsserting],
+      invariants = []
+    }
+
+invariantJoinMachine :: Concurrent.Machine PoolModel IO
+invariantJoinMachine =
+  Concurrent.Machine
+    { initial = newPoolModel,
+      rules = [connect, checkout, checkinPlain],
+      invariants = [cacheMatchesPool]
+    }
+
+-- | A tighter budget than 'def'. @statefulStepCount@ bounds /rounds/, not
+-- raw steps, once concurrency exceeds 1, and up to five rule dispatches can
+-- land in a single round. A nondeterministic run is never shrunk, so the
+-- log below is the live case exactly as it ran; a tight round budget is
+-- what keeps it readable.
+concurrentPoolSettings :: Settings
+concurrentPoolSettings = def {testCases = 20, statefulStepCount = 3}
+
+-- * Scenario 11: concurrent groups (writers and readers never share a round)
+
+-- | A read-only rule in its own @"readers"@ concurrency group: 'Pool.reuse'
+-- doesn't remove its draw, so @peek@ mutates nothing and carries no claim
+-- of its own, but the draw is a real touch, so its steps render rather than
+-- eliding away with the rest.
+peek :: Concurrent.Rule PoolModel IO
+peek =
+  Concurrent.grouped "peek" "readers" \m -> do
+    c <- forAll (Pool.reuse m.idle)
+    Stateful.respondShow c
+
+-- | Two connections, seeded directly into @idle@, with no @connect@ rule to
+-- mint more: 'checkout' and 'checkin' just toggle them between pools
+-- forever. Two keeps both directions almost always available, so workers
+-- rarely grind through a run of rejections the way exactly one connection
+-- would; two is still few enough that a 'peek' read usually shares a
+-- lineage root with whichever connection a failing writer step touches.
+--
+-- Matching the pool's size to the worker count instead, one connection per
+-- worker, was tried and measured worse: three connections against three
+-- workers gives a thinner margin, since as soon as all three land in the
+-- same pool the opposite direction starves completely, which happened more
+-- often in practice than the storms two connections still occasionally hit.
+--
+-- Occasionally a worker's assigned rule keeps rejecting for many steps in a
+-- row before the round moves on: genuine contention on a two-item pool
+-- shared by three workers, not a bug in this fixture. When the failure
+-- lands on such a step, its header falls back to that rejection's own
+-- annotation text instead of a normal @Step N: rule@ line, the same
+-- "attaches to whichever step folded last" trade-off scenario 10 already
+-- documents, just more visible here under heavier contention.
+groupedInitial :: Property PoolModel
+groupedInitial = do
+  idle <- Pool.named "conn"
+  active <- Pool.new
+  nextConn <- newIORef 2
+  cached <- newIORef 2
+  Pool.add idle 0
+  Pool.add idle 1
+  pure PoolModel {idle, active, nextConn, cached}
+
+-- | 'checkout' and 'checkin' share a @"writers"@ group, so they still race
+-- exactly as in scenarios 9 and 10; 'peek' never shares a round with them,
+-- and every step's origin column names its group, so the constraint is
+-- visible without inferring it from rule names alone.
+groupedMachine :: Concurrent.Machine PoolModel IO
+groupedMachine =
+  Concurrent.Machine
+    { initial = groupedInitial,
+      rules =
+        [ Concurrent.grouped "checkout" "writers" checkoutBody,
+          Concurrent.grouped "checkin" "writers" checkinBody,
+          peek
+        ],
+      invariants = [cacheMatchesPool]
+    }

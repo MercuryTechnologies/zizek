@@ -86,6 +86,6 @@ check-coverage:
   @echo "check-coverage: not yet implemented — add hpc-codecov to flake.nix devShell and wire up here"
   @exit 1
 
-# Render the failure-report gallery (plain splice → stateful → trajectory → composed ledger; eyeball harness)
+# Render the failure-report gallery: eleven scenarios spanning plain/branch/fork/stateful/concurrent stateful reports (eyeball harness)
 gallery:
     cabal run gallery

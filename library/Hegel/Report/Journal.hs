@@ -128,9 +128,9 @@ noteLineDoc (mIx, n) = case mIx of
     Failure diff -> failureNoteDoc diff n
     BranchFailure diff -> failureNoteDoc diff n
     BranchHeader _ -> PP.annotate BranchLabelAnn (PP.pretty n.text)
-    -- 'Annotation' renders as a plain label line; 'Footnote' and unnumbered
-    -- 'Drawn' are unreachable (footnotes are hoisted before grouping, draws
-    -- always numbered).
+    -- 'Annotation' and 'StepOrigin' render as a plain label line; 'Footnote'
+    -- and unnumbered 'Drawn' are unreachable (footnotes are hoisted before
+    -- grouping, draws always numbered).
     _ -> PP.annotate NoteAnn (PP.pretty n.text)
 
 -- | Render an in-band 'Failure' or 'BranchFailure' note: a marked headline,

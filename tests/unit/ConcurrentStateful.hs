@@ -17,7 +17,7 @@ import Hegel.Gen qualified as Gen
 import Hegel.Internal.Control (MalformedTest (..))
 import Hegel.Property (assert, assume, forAll, resource, (===))
 import Hegel.Property.Fork qualified as Fork
-import Hegel.Report (Abort (..), Note (..), NoteKind (Annotation, StepHeader), Report (..), Reproduction (..), Result (..), Stats (..), renderReport, renderReportRich)
+import Hegel.Report (Abort (..), Note (..), NoteKind (Annotation, StepHeader, StepOrigin), Report (..), Reproduction (..), Result (..), Stats (..), renderReport, renderReportRich)
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..))
 import Hegel.Stateful.Concurrent qualified as Concurrent
@@ -311,18 +311,21 @@ behaviorSpec = describe "run (behavior)" do
               _ -> False
         notes `shouldSatisfy` any isBoomStep
         -- The round/worker identity folds in as a companion note right
-        -- after each step header, not baked into the header's own text.
+        -- after each step header, carried structurally in 'StepOrigin'
+        -- rather than baked into the header's own text.
         let afterEachBoomStep =
               [rest | (n, rest) <- zip notes (drop 1 (List.tails notes)), isBoomStep n]
             roundWorkerNote :: [Note] -> Bool
-            roundWorkerNote (r : _) = r.kind == Annotation && ("round" `T.isInfixOf` r.text) && ("worker" `T.isInfixOf` r.text)
+            roundWorkerNote (r : _) = case r.kind of
+              StepOrigin _ _ _ -> True
+              _ -> False
             roundWorkerNote [] = False
         afterEachBoomStep `shouldSatisfy` all roundWorkerNote
       _ -> expectationFailure "expected a Counterexample"
     -- The richer, source-splicing renderer must not choke on a folded,
-    -- multi-worker journal either, and must show the round/worker detail
-    -- line as an ordinary annotation under the step, not only the plain
-    -- renderer.
+    -- multi-worker journal either, and must show the round/worker identity
+    -- both in the event log's own origin column and spelled out under the
+    -- failing step's own splice.
     rendered <- renderReportRich report
     ("boom" `T.isInfixOf` rendered) `shouldBe` True
     ("round" `T.isInfixOf` rendered) `shouldBe` True

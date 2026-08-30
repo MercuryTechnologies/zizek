@@ -51,6 +51,12 @@ data NoteKind
     -- 'Failure' so a branch failure never trips the stateful (step-structured)
     -- render path.
     BranchFailure (Maybe Diff)
+  | -- | The round, 1-based worker, and concurrency group that fired a
+    -- folded concurrent stateful step, carrying all three structurally;
+    -- 'Nothing' when the rule belongs to no named group. 'Note.text' still
+    -- carries the rendered @\"round R, worker W\"@ string, mirroring
+    -- 'StepHeader'.
+    StepOrigin !Int !Int !(Maybe Text)
   deriving stock (Show, Eq)
 
 -- | One entry in a failure report's journal: rendered text plus the call

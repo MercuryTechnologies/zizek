@@ -66,7 +66,7 @@ import Hegel.Property.Internal
     withBaseRunInIO,
     withScope,
   )
-import Hegel.Report (Note (..), NoteKind (Annotation, StepHeader))
+import Hegel.Report (Note (..), NoteKind (Annotation, StepHeader, StepOrigin))
 import Hegel.Stateful (Invariant (..))
 import UnliftIO (MonadUnliftIO, throwIO, withRunInIO)
 import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef)
@@ -182,23 +182,25 @@ mergeByClock :: [Note] -> [Event] -> [WorkerEntry]
 mergeByClock notes events = sortOn entryClock (map EntryNote notes <> map EntryEvent events)
 
 -- | Fold one worker's notes and pool events into the root journal and event
--- buffer.
-foldWorkerRound :: TestCase -> (Note -> IO ()) -> IORef Int -> Int -> Int -> [Note] -> [Event] -> IO ()
-foldWorkerRound rootTc sink stepCounter roundIdx workerIdx notes events =
+-- buffer. @groupOf@ resolves a rule's name to its concurrency group, for the
+-- 'StepOrigin' note this attaches to each folded header.
+foldWorkerRound :: TestCase -> (Note -> IO ()) -> IORef Int -> Int -> Int -> (Text -> Maybe Text) -> [Note] -> [Event] -> IO ()
+foldWorkerRound rootTc sink stepCounter roundIdx workerIdx groupOf notes events =
   for_ (mergeByClock notes events) \case
     EntryNote n -> case n.kind of
       StepHeader _ ruleName -> do
         idx <- atomicModifyIORef' stepCounter \i -> (i + 1, i + 1)
         headerClock <- Tick.next rootTc.recording
         sink Note {kind = StepHeader idx ruleName, text = stepText idx ruleName, loc = n.loc, depth = n.depth, clock = headerClock}
-        annotationClock <- Tick.next rootTc.recording
+        originClock <- Tick.next rootTc.recording
+        let group = groupOf ruleName
         sink
           Note
-            { kind = Annotation,
-              text = roundWorkerText roundIdx workerIdx,
+            { kind = StepOrigin roundIdx (workerIdx + 1) group,
+              text = roundWorkerText roundIdx workerIdx group,
               loc = Nothing,
               depth = n.depth + 1,
-              clock = annotationClock
+              clock = originClock
             }
       _ -> do
         clock <- Tick.next rootTc.recording
@@ -213,12 +215,16 @@ foldWorkerRound rootTc sink stepCounter roundIdx workerIdx notes events =
 stepText :: Int -> Text -> Text
 stepText idx ruleName = "Step " <> T.pack (show idx) <> ": " <> ruleName
 
--- | The round\/worker detail line folded in alongside a step's header:
+-- | The 'StepOrigin' note's own display text, folded in alongside a step's
+-- header:
 --
--- e.g. @\"round 2, worker 2\"@.
-roundWorkerText :: Int -> Int -> Text
-roundWorkerText roundIdx workerIdx =
-  "round " <> T.pack (show roundIdx) <> ", worker " <> T.pack (show (workerIdx + 1))
+-- e.g. @\"round 2, worker 2\"@, or @\"round 2, worker 2 (writers)\"@ for a
+-- rule in a named concurrency group.
+roundWorkerText :: Int -> Int -> Maybe Text -> Text
+roundWorkerText roundIdx workerIdx group =
+  "round " <> T.pack (show roundIdx) <> ", worker " <> T.pack (show (workerIdx + 1)) <> groupSuffix
+  where
+    groupSuffix = maybe "" (\g -> " (" <> g <> ")") group
 
 -- * Execution
 
@@ -236,6 +242,14 @@ run bounds machine = do
   let tc = env.testCase
       (_groupNames, groupIds) = internGroups (map (.group) machine.rules)
       indexedRules = zip [0 ..] machine.rules
+
+      -- Resolves a rule's name to its concurrency group, for
+      -- 'foldWorkerRound''s 'StepOrigin' note; assumes rule names are
+      -- unique within one machine, same as every other name-keyed display
+      -- in this report.
+      groupOf :: Text -> Maybe Text
+      groupOf name = Map.findWithDefault Nothing name ruleGroups
+      ruleGroups = Map.fromList [(r.name, r.group) | r <- machine.rules]
 
       -- Every invariant's draws (and any failure) run on the root test
       -- case, ambient journal untouched: unlike a worker's dispatch, only
@@ -326,7 +340,7 @@ run bounds machine = do
               for_ (zip3 [0 :: Int ..] clones workerNotes) \(workerIdx, clone, notesRef) -> do
                 notes <- Tick.drainAndReset notesRef
                 events <- Tick.drainAndReset clone.events
-                foldWorkerRound tc sink stepCounter roundIdx workerIdx notes events
+                foldWorkerRound tc sink stepCounter roundIdx workerIdx groupOf notes events
 
           roundLoop = do
             mGroupId <- stateMachineNextGroup tc sm

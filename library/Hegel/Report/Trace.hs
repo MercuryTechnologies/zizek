@@ -10,6 +10,7 @@ module Hegel.Report.Trace
   ( -- * Trace
     Trace (..),
     Step (..),
+    Origin (..),
     Touch (..),
     Identity (..),
     Failure (..),
@@ -30,7 +31,7 @@ import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Hegel.Internal.Event (Event (..), Operation (..), Var (..))
 import Hegel.Internal.Tick (Tick (..))
-import Hegel.Report.Note (Note (..), NoteKind (Drawn, Response, StepHeader))
+import Hegel.Report.Note (Note (..), NoteKind (Drawn, Response, StepHeader, StepOrigin))
 import Hegel.Report.Note qualified as Note
 
 -- * Trace
@@ -62,7 +63,21 @@ data Step = Step
     -- | Rendered values of this step's draws that are /not/ bound to a 'Touch'.
     freeDraws :: ![Text],
     -- | Does this step's subtree carry the in-band 'Failure'?
-    failed :: !Bool
+    failed :: !Bool,
+    -- | The round and worker that fired this step, when it came from a
+    -- concurrent stateful run's fold; 'Nothing' for a sequential step or the
+    -- prelude.
+    origin :: !(Maybe Origin)
+  }
+  deriving stock (Show)
+
+-- | Which round of a concurrent state machine a step ran in, which 1-based
+-- worker ran it, and the rule's concurrency group, 'Nothing' when the rule
+-- belongs to no named group.
+data Origin = Origin
+  { roundNo :: !Int,
+    workerNo :: !Int,
+    group :: !(Maybe Text)
   }
   deriving stock (Show)
 
@@ -129,7 +144,8 @@ build notes events =
               response = listToMaybe [n.text | n <- reverse body, n.kind == Response],
               touches = [Touch {var = e.var, kind = e.kind} | e <- stepEvents],
               freeDraws = [n.text | n <- body, Drawn prov <- [n.kind], not (boundToTouch prov)],
-              failed = any isFailure body
+              failed = any isFailure body,
+              origin = listToMaybe [Origin {roundNo = r, workerNo = w, group = g} | n <- body, StepOrigin r w g <- [n.kind]]
             }
     isFailure :: Note -> Bool
     isFailure n = case n.kind of Note.Failure _ -> True; _ -> False
