@@ -7,6 +7,7 @@ module Alphabet (spec) where
 
 import Data.Char (GeneralCategory (..), generalCategory, ord)
 import Data.Default.Class (def)
+import Data.Foldable (traverse_)
 import Data.Function ((&))
 import Data.Set qualified as Set
 import Hegel (prop, samples)
@@ -25,7 +26,7 @@ inRange lo hi c = let cp = ord c in cp >= lo && cp <= hi
 spec :: Spec
 spec = describe "Hegel.Alphabet" do
   describe "contiguous ranges only draw characters in their documented range" do
-    mapM_
+    traverse_
       (\(name, builder, member) -> it name (prop (builder & Gen.build) (`shouldSatisfy` member)))
       [ ("ascii", Alphabet.ascii, inRange 0x00 0x7F),
         ("asciiPrintable", Alphabet.asciiPrintable, inRange 0x20 0x7E),
@@ -66,7 +67,7 @@ spec = describe "Hegel.Alphabet" do
         generalCategory c `shouldSatisfy` (`elem` [NonSpacingMark, SpacingCombiningMark, EnclosingMark])
 
   describe "finite alphabets span their whole documented set" do
-    mapM_
+    traverse_
       ( \(name, builder, expected) -> it name do
           seen <- sample 4000 builder
           seen `shouldBe` Set.fromList expected

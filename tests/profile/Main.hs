@@ -15,6 +15,7 @@ module Main (main) where
 
 import Control.Exception (displayException, evaluate)
 import Control.Monad (replicateM_, void)
+import Data.Foldable (traverse_)
 import Data.Function ((&))
 import Data.List qualified as List
 import Data.Maybe (fromMaybe)
@@ -44,7 +45,7 @@ import Warehouse qualified
 main :: IO ()
 main =
   getArgs >>= \case
-    ["--list"] -> mapM_ (putStrLn . describeScenario) scenarios
+    ["--list"] -> traverse_ (putStrLn . describeScenario) scenarios
     name : rest
       | Just scenario <- List.find ((== name) . (.name)) scenarios ->
           either usageError (runScenario scenario) (parseOpts rest)
@@ -96,7 +97,7 @@ usageError err = do
   hPutStrLn stderr ("       " <> prog <> " --list")
   hPutStrLn stderr ""
   hPutStrLn stderr "scenarios:"
-  mapM_ (hPutStrLn stderr . ("  " <>) . describeScenario) scenarios
+  traverse_ (hPutStrLn stderr . ("  " <>) . describeScenario) scenarios
   exitFailure
 
 -- * Driving
@@ -235,7 +236,7 @@ scenarios =
 reclaimProbe :: Int -> IO Text
 reclaimProbe n = do
   before <- DataSource.currentLiveStringGenerators
-  mapM_ (\i -> void (DataSource.buildRegexGen (patternFor i) False Nothing)) [1 .. n]
+  traverse_ (\i -> void (DataSource.buildRegexGen (patternFor i) False Nothing)) [1 .. n]
   peak <- DataSource.currentLiveStringGenerators
   after <- DataSource.settleStringGenerators
   pure

@@ -16,9 +16,10 @@ module Hegel.Internal.StatefulRound
   )
 where
 
-import Control.Exception (SomeException, fromException, throwIO, toException)
-import Control.Monad (forM)
+import Control.Exception (SomeException, fromException, mask, onException, throwIO, toException)
+import Data.Foldable (traverse_)
 import Data.List (sortOn)
+import Data.Traversable (for)
 import Foreign (Ptr)
 import Hegel.Internal.Control (AssumeRejected (..), ControlSignal (Assume, Stop), TestStopped (..), catchControl)
 import Hegel.Internal.DataSource (stateMachineNextRule, stateMachineRuleRejected)
@@ -116,10 +117,20 @@ resolveRound outcomes = case [e | (_, RoundControlError e) <- outcomes] of
 
 -- | Run one round: fan every worker's 'runWorkerRound' out concurrently, wait
 -- for each to finish or end early, and resolve the round.
+--
+-- Every worker's outcome is classified rather than let escape, so an
+-- external async exception arriving while this waits is the only thing that
+-- can leave a worker still running once 'runRound' returns; that path
+-- cancels every handle before propagating, so no worker thread survives a
+-- call to this function. Spawning itself runs 'mask'ed so the same exception
+-- can't land between two 'Async.async' calls and strand an already-spawned
+-- worker outside the handle list the wait's own guard cancels.
 runRound :: Ptr HegelStateMachine -> [Worker] -> IO (RoundVerdict, [(Int, SomeException)])
-runRound sm workers = do
-  handles <- forM (zip [0 ..] workers) \(i, w) -> (,) i <$> Async.async (runWorkerRound sm w i)
-  outcomes <- forM handles \(i, h) -> (,) i <$> waitWorkerOutcome h
+runRound sm workers = mask \restore -> do
+  handles <- for (zip [0 ..] workers) \(i, w) -> (,) i <$> Async.async (runWorkerRound sm w i)
+  outcomes <-
+    restore (for handles (\(i, h) -> (,) i <$> waitWorkerOutcome h))
+      `onException` traverse_ (Async.uninterruptibleCancel . snd) handles
   pure (resolveRound outcomes)
 
 -- | Wait for one worker's round to finish, classifying however it ended.

@@ -4,6 +4,7 @@ module BranchProperties (spec) where
 import Control.Monad (replicateM)
 import Control.Monad.IO.Class (liftIO)
 import Data.Default.Class (def)
+import Data.Foldable (traverse_)
 import Data.Function ((&))
 import Data.List (sort)
 import Data.Text qualified as T
@@ -234,7 +235,7 @@ spec = describe "concurrent combinators" do
                 & Gen.maxSize n
                 & Gen.build
             )
-        mapM_ (Pool.add pool) values
+        traverse_ (Pool.add pool) values
         results <- Branch.replicateConcurrently n (forAll (Pool.consume pool))
         remaining <- liftIO (Pool.size pool)
         annotateShow (n, sort values, sort results, remaining)
@@ -277,8 +278,8 @@ spec = describe "concurrent combinators" do
             (Gen.list (intR (-1000, 1000)) & Gen.unique (==) & Gen.maxSize 5 & Gen.build)
         src <- Pool.new
         dst <- Pool.new
-        mapM_ (Pool.add src) srcValues
-        mapM_ (Pool.add dst) dstValues
+        traverse_ (Pool.add src) srcValues
+        traverse_ (Pool.add dst) dstValues
         transferred <- Branch.replicateConcurrently n (forAll (Pool.transfer src dst))
         srcRemaining <- liftIO (Pool.size src)
         dstFinal <- liftIO (Pool.size dst)

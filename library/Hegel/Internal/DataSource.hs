@@ -91,6 +91,9 @@ import Data.Bits (bit, shiftL, shiftR, testBit, (.&.))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Fixed (Fixed (MkFixed), Pico)
+#ifdef HEGEL_CENSUS
+import Data.Foldable (traverse_)
+#endif
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe, isJust)
@@ -430,7 +433,7 @@ currentLiveStringGenerators = readIORef liveStringGenerators
 settleStringGenerators :: IO Int
 #ifdef HEGEL_CENSUS
 settleStringGenerators = do
-  mapM_ churnRound [1 .. rounds :: Int]
+  traverse_ churnRound [1 .. rounds :: Int]
   currentLiveStringGenerators
   where
     rounds = 1000 :: Int

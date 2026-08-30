@@ -2,11 +2,13 @@
 module ConcurrentStateful (spec) where
 
 import Control.Concurrent (threadDelay)
-import Control.Exception (fromException)
-import Control.Monad (forM_, when)
+import Control.Exception (bracket_, fromException)
+import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Default.Class (def)
+import Data.Foldable (for_)
 import Data.Function ((&))
+import Data.List qualified as List
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Hegel (Gen)
@@ -14,10 +16,12 @@ import Hegel.Database (Database (..))
 import Hegel.Gen qualified as Gen
 import Hegel.Internal.Control (MalformedTest (..))
 import Hegel.Property (assert, assume, forAll, resource, (===))
-import Hegel.Report (Abort (..), Note (..), NoteKind (StepHeader), Report (..), Reproduction (..), Result (..), Stats (..), renderReport, renderReportRich)
+import Hegel.Property.Fork qualified as Fork
+import Hegel.Report (Abort (..), Note (..), NoteKind (Annotation, StepHeader), Report (..), Reproduction (..), Result (..), Stats (..), renderReport, renderReportRich)
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..))
 import Hegel.Stateful.Concurrent qualified as Concurrent
+import System.Timeout (timeout)
 import Test.Hspec
 import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import UnliftIO.Temporary (withSystemTempDirectory)
@@ -85,7 +89,7 @@ validationSpec = describe "run (validation)" do
     let noop :: Concurrent.Rule Counter IO
         noop = Concurrent.rule "noop" \_ -> pure ()
         machine = Concurrent.Machine {initial = pure (Counter 0), rules = [noop], invariants = []}
-    forM_ [(0, 1), (2, 1)] \(lo, hi) -> do
+    for_ [(0, 1), (2, 1)] \(lo, hi) -> do
       report <- check def (Concurrent.run (Concurrent.between lo hi) machine)
       report.result `shouldSatisfy` isMalformedTestAbort "1 <= min <= max"
 
@@ -165,6 +169,55 @@ behaviorSpec = describe "run (behavior)" do
         machine = Concurrent.Machine {initial = liftIO (newIORef 0), rules = [sometimesRejects], invariants = []}
     report <- check def {testCases = 20} (Concurrent.run (Concurrent.fixed 1) machine)
     report.result `shouldSatisfy` isOk
+
+  it "notes why a rejected step ended, once a later step fails" do
+    -- Deterministic, no draws: the rule's own dispatch count (fresh per
+    -- case, via the model) decides everything, so the very first case is
+    -- already the failing one and nothing here depends on shrinking.
+    let flaky :: Concurrent.Rule (IORef Int) IO
+        flaky =
+          Concurrent.rule "flaky" \ref -> do
+            n <- liftIO (atomicModifyIORef' ref \a -> (a + 1, a + 1))
+            assume (n /= 1)
+            assert (n < 2) "fails on the second attempt"
+        machine = Concurrent.Machine {initial = liftIO (newIORef 0), rules = [flaky], invariants = []}
+    report <- check def {testCases = 1, statefulStepCount = 5} (Concurrent.run (Concurrent.fixed 1) machine)
+    report.result `shouldSatisfy` isCounterexample
+    case report.result of
+      Counterexample {notes} -> do
+        let rejectionNotes =
+              [n | n <- notes, n.kind == Annotation, "Rule stopped early due to violated assumption." `T.isInfixOf` n.text]
+        length rejectionNotes `shouldBe` 1
+      _ -> expectationFailure "expected a Counterexample"
+
+  it "settles a fork spawned by a rule that then rejects, rather than leaving it running" do
+    -- The rule always rejects, immediately, always abandoning its fork
+    -- without ever joining it. The fork's own body never finishes on its
+    -- own within this test's lifetime, so the only way 'active' can drop
+    -- back to 0 is genuine cancellation on the exception path.
+    active <- newIORef (0 :: Int)
+    let leaky :: Concurrent.Rule () IO
+        leaky =
+          Concurrent.rule "leaky" \_ -> do
+            _worker <-
+              Fork.spawn . liftIO $
+                bracket_
+                  (atomicModifyIORef' active \a -> (a + 1, ()))
+                  (atomicModifyIORef' active \a -> (a - 1, ()))
+                  (threadDelay maxBound)
+            assume False
+        machine = Concurrent.Machine {initial = pure (), rules = [leaky], invariants = []}
+    -- A tight step budget matters here: every rejected dispatch spawns and
+    -- abandons another fork, and the default budget (50) would let a single
+    -- case churn through far more fork spawn\/cancel cycles than this test
+    -- needs to exercise the fix.
+    report <- check def {testCases = 10, statefulStepCount = 3} (Concurrent.run (Concurrent.fixed 3) machine)
+    report.result `shouldSatisfy` isOk
+    let waitForSettled = do
+          a <- readIORef active
+          when (a > 0) (threadDelay 1_000 >> waitForSettled)
+    settled <- timeout 2_000_000 waitForSettled
+    settled `shouldBe` Just ()
 
   it "a round's dispatches never span two groups" do
     -- Deterministic, not timing-based: each rule records its own group into
@@ -257,14 +310,23 @@ behaviorSpec = describe "run (behavior)" do
               StepHeader _ label -> label == "boom"
               _ -> False
         notes `shouldSatisfy` any isBoomStep
-        let headerText = [n.text | n <- notes, isBoomStep n]
-        headerText `shouldSatisfy` any ("round" `T.isInfixOf`)
-        headerText `shouldSatisfy` any ("worker" `T.isInfixOf`)
+        -- The round/worker identity folds in as a companion note right
+        -- after each step header, not baked into the header's own text.
+        let afterEachBoomStep =
+              [rest | (n, rest) <- zip notes (drop 1 (List.tails notes)), isBoomStep n]
+            roundWorkerNote :: [Note] -> Bool
+            roundWorkerNote (r : _) = r.kind == Annotation && ("round" `T.isInfixOf` r.text) && ("worker" `T.isInfixOf` r.text)
+            roundWorkerNote [] = False
+        afterEachBoomStep `shouldSatisfy` all roundWorkerNote
       _ -> expectationFailure "expected a Counterexample"
     -- The richer, source-splicing renderer must not choke on a folded,
-    -- multi-worker journal either.
+    -- multi-worker journal either, and must show the round/worker detail
+    -- line as an ordinary annotation under the step, not only the plain
+    -- renderer.
     rendered <- renderReportRich report
     ("boom" `T.isInfixOf` rendered) `shouldBe` True
+    ("round" `T.isInfixOf` rendered) `shouldBe` True
+    ("worker" `T.isInfixOf` rendered) `shouldBe` True
 
 -- | A model carrying both the racy shared counter and the ground-truth
 -- attempt count, for 'behaviorSpec's lost-update race.

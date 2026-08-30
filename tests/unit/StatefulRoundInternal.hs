@@ -7,8 +7,10 @@
 -- 'Hegel.Internal.DataSource.newConcurrentStateMachine'.
 module StatefulRoundInternal (spec) where
 
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (modifyMVar_, newMVar, readMVar)
-import Control.Exception (ErrorCall (..), SomeException, fromException, toException)
+import Control.Exception (ErrorCall (..), SomeException, bracket_, fromException, toException)
+import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Default.Class (def)
 import Data.Int (Int64)
@@ -30,7 +32,9 @@ import Hegel.Property.Internal (Env (..), askEnv)
 import Hegel.Report (Report (..), Result (..))
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..))
+import System.Timeout (timeout)
 import Test.Hspec
+import UnliftIO.Async qualified as Async
 import UnliftIO.IORef (atomicModifyIORef', newIORef, readIORef)
 
 isOk :: Result -> Bool
@@ -183,3 +187,52 @@ fanOutSpec = describe "runRound (real engine, several workers)" do
     finalCounter `shouldBe` finalDispatches
     workers <- readMVar seenWorkers
     Set.size workers `shouldSatisfy` (>= 2)
+
+  it "cancels every still-running worker if an external exception arrives while runRound waits" do
+    active <- newIORef (0 :: Int)
+    let n = 3 :: Int64
+    -- The engine hands a worker zero rules on its first pull with real
+    -- (non-negligible) probability, independent of 'statefulStepCount', so
+    -- waiting for every one of @n@ workers to reach 'dispatch' is not a
+    -- precondition this round can guarantee. One worker mid-dispatch is
+    -- enough to exercise cancellation.
+    report <- check def {testCases = 1, statefulStepCount = fromIntegral n} do
+      env <- askEnv
+      let tc = env.testCase
+      (sm, _concurrency) <- liftIO (newConcurrentStateMachine tc ["stall"] [0] [] n n)
+      registerFinalizer (freeStateMachine tc sm)
+      liftIO $ withClones (fromIntegral n) tc \clones -> do
+        let mkWorker clone =
+              Worker
+                { testCase = clone,
+                  dispatch = \_ruleIndex ->
+                    bracket_
+                      (atomicModifyIORef' active \a -> (a + 1, ()))
+                      (atomicModifyIORef' active \a -> (a - 1, ()))
+                      (threadDelay 10_000_000),
+                  onRejected = pure ()
+                }
+            workers = map mkWorker clones
+        _ <- stateMachineNextGroup tc sm
+        -- 'Async.cancel' is the external async exception this guards
+        -- against: it blocks until the cancelled 'Async' has actually
+        -- unwound, so by the time it returns, 'runRound''s own exception
+        -- handler has already had the chance to settle every worker.
+        Async.withAsync (runRound sm workers) \roundHandle -> do
+          let waitForOneStarted = do
+                a <- readIORef active
+                when (a < 1) (threadDelay 1_000 >> waitForOneStarted)
+          -- Bounded so a real regression here fails loudly instead of
+          -- hanging the suite.
+          started <- timeout 10_000_000 waitForOneStarted
+          case started of
+            Just () -> pure ()
+            Nothing -> ioError (userError "no worker ever started dispatching")
+          Async.cancel roundHandle
+    report.result `shouldSatisfy` isOk
+    settled <- timeout 10_000_000 do
+      let waitForSettled = do
+            a <- readIORef active
+            when (a > 0) (threadDelay 1_000 >> waitForSettled)
+      waitForSettled
+    settled `shouldBe` Just ()

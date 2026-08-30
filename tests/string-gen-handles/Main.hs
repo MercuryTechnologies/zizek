@@ -28,9 +28,11 @@
 module Main (main) where
 
 #ifdef HEGEL_CENSUS
-import Control.Monad (forM, forM_, void)
+import Control.Monad (void)
+import Data.Foldable (for_)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Traversable (for)
 import Foreign.ForeignPtr (finalizeForeignPtr)
 import Hegel.Internal.DataSource (buildRegexGen, currentLiveStringGenerators, settleStringGenerators)
 #endif
@@ -44,7 +46,7 @@ spec = describe "string-generator handle census" do
   it "reclaims transient handles but not retained ones, and the finalizer runs deterministically on demand" do
     -- Scenario 1: nothing retains these — they should settle back down.
     before1 <- currentLiveStringGenerators
-    forM_ [1 .. handleCount] \i -> void (buildRegexGen (patternFor i) False Nothing)
+    for_ [1 .. handleCount] \i -> void (buildRegexGen (patternFor i) False Nothing)
     after1 <- settleStringGenerators
     after1 `shouldSatisfy` (<= before1)
 
@@ -52,7 +54,7 @@ spec = describe "string-generator handle census" do
     -- eligible for collection before the assertion runs — these should
     -- \*not* settle back down.
     before2 <- currentLiveStringGenerators
-    handles <- forM [1 .. handleCount] \i -> buildRegexGen (patternFor i) False Nothing
+    handles <- for [1 .. handleCount] \i -> buildRegexGen (patternFor i) False Nothing
     after2 <- settleStringGenerators
     after2 `shouldSatisfy` (>= before2 + handleCount)
     length handles `shouldBe` handleCount

@@ -112,7 +112,7 @@ data PhraseTable = PhraseTable
     -- e.g. @\"9 branches passed\"@.
     elidedBranches :: Int -> Text,
     -- | The reproduction footer, given the database key:
-    -- 
+    --
     -- @\"stored under k and replays automatically next run\"@.
     stored :: Text -> Text,
     -- | The footer for a failure with nothing to replay:

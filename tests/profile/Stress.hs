@@ -28,6 +28,7 @@ module Stress
 where
 
 import Control.Monad (void)
+import Data.Foldable (traverse_)
 import Data.Function ((&))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -226,4 +227,4 @@ strgenHoard =
 strgenHoardProperty :: Property ()
 strgenHoardProperty = do
   offset <- forAllSilent (Gen.int & Gen.min 0 & Gen.max 1800 & Gen.build)
-  mapM_ (void . forAllSilent) (take 200 (drop offset strgenHoard))
+  traverse_ (void . forAllSilent) (take 200 (drop offset strgenHoard))

@@ -34,9 +34,6 @@ data NoteKind
     Response
   | -- | A stateful step header, carrying the step number and rule name
     -- structurally.
-    --
-    -- 'Note.text' still carries the rendered @\"Step N: rulename\"@ string,
-    -- which is what the structured renderers display.
     StepHeader !Int !Text
   | -- | Context rendered after the report body (a @footnote@-style call).
     Footnote

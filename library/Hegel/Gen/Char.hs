@@ -33,6 +33,7 @@ where
 
 import Control.Exception (throwIO)
 import Data.Char (GeneralCategory (..))
+import Data.Foldable (traverse_)
 import Data.List (nub)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -166,8 +167,8 @@ categoryCode NotAssigned = "Cn"
 buildCharTextGen :: Word64 -> Word64 -> CharBuilder -> IO (ForeignPtr HegelStringGenerator)
 buildCharTextGen minSz maxSz b = do
   checkOrderedMaybe "Hegel.Gen.Char" b.bMinCodepoint b.bMaxCodepoint
-  mapM_ (checkNonNegative "Hegel.Gen.Char") b.bMinCodepoint
-  mapM_ (checkNonNegative "Hegel.Gen.Char") b.bMaxCodepoint
+  traverse_ (checkNonNegative "Hegel.Gen.Char") b.bMinCodepoint
+  traverse_ (checkNonNegative "Hegel.Gen.Char") b.bMaxCodepoint
   buildTextGen
     TextSpec
       { minSize = minSz,

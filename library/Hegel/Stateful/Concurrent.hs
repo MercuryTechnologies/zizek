@@ -186,31 +186,39 @@ mergeByClock notes events = sortOn entryClock (map EntryNote notes <> map EntryE
 foldWorkerRound :: TestCase -> (Note -> IO ()) -> IORef Int -> Int -> Int -> [Note] -> [Event] -> IO ()
 foldWorkerRound rootTc sink stepCounter roundIdx workerIdx notes events =
   for_ (mergeByClock notes events) \case
-    EntryNote n -> do
-      (kind, text) <- case n.kind of
-        StepHeader _ ruleName -> do
-          idx <- atomicModifyIORef' stepCounter \i -> (i + 1, i + 1)
-          pure (StepHeader idx ruleName, stepText idx roundIdx workerIdx ruleName)
-        _ -> pure (n.kind, n.text)
-      clock <- Tick.next rootTc.recording
-      sink Note {kind, text, loc = n.loc, depth = n.depth, clock}
+    EntryNote n -> case n.kind of
+      StepHeader _ ruleName -> do
+        idx <- atomicModifyIORef' stepCounter \i -> (i + 1, i + 1)
+        headerClock <- Tick.next rootTc.recording
+        sink Note {kind = StepHeader idx ruleName, text = stepText idx ruleName, loc = n.loc, depth = n.depth, clock = headerClock}
+        annotationClock <- Tick.next rootTc.recording
+        sink
+          Note
+            { kind = Annotation,
+              text = roundWorkerText roundIdx workerIdx,
+              loc = Nothing,
+              depth = n.depth + 1,
+              clock = annotationClock
+            }
+      _ -> do
+        clock <- Tick.next rootTc.recording
+        sink Note {kind = n.kind, text = n.text, loc = n.loc, depth = n.depth, clock}
     EntryEvent e -> do
       clock <- Tick.next rootTc.recording
       modifyIORef' rootTc.events (|> Event {clock, var = e.var, kind = e.kind})
 
 -- | The display string for a folded step's header:
 --
--- e.g. @\"Step 4 (round 2, worker 2): restock\"@.
-stepText :: Int -> Int -> Int -> Text -> Text
-stepText idx roundIdx workerIdx ruleName =
-  "Step "
-    <> T.pack (show idx)
-    <> " (round "
-    <> T.pack (show roundIdx)
-    <> ", worker "
-    <> T.pack (show (workerIdx + 1))
-    <> "): "
-    <> ruleName
+-- e.g. @\"Step 4: restock\"@.
+stepText :: Int -> Text -> Text
+stepText idx ruleName = "Step " <> T.pack (show idx) <> ": " <> ruleName
+
+-- | The round\/worker detail line folded in alongside a step's header:
+-- 
+-- e.g. @\"round 2, worker 2\"@.
+roundWorkerText :: Int -> Int -> Text
+roundWorkerText roundIdx workerIdx =
+  "round " <> T.pack (show roundIdx) <> ", worker " <> T.pack (show (workerIdx + 1))
 
 -- * Execution
 

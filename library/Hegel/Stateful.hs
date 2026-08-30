@@ -65,8 +65,9 @@ where
 
 import Control.Exception (mask_)
 import Control.Exception qualified
-import Control.Monad (forM_, when)
+import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
+import Data.Foldable (for_)
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
@@ -205,7 +206,7 @@ run machine = do
       -- Each invariant's draws (and any failure) report one level below the
       -- step header, via 'nested'.
       checkInvariants s =
-        forM_ machine.invariants \invariant ->
+        for_ machine.invariants \invariant ->
           nested (withFailureNote (withScope InStep (invariant.check s)))
 
   -- Acquire the state-machine handle and register its release atomically
