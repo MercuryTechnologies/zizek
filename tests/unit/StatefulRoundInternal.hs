@@ -19,7 +19,8 @@ import Hegel.Internal.Control (AssumeRejected (..), TestStopped (..))
 import Hegel.Internal.DataSource (freeStateMachine, newConcurrentStateMachine, stateMachineNextGroup)
 import Hegel.Internal.Foreign.Raw (HegelError (..))
 import Hegel.Internal.StatefulRound
-  ( RoundVerdict (..),
+  ( RoundSpan (..),
+    RoundVerdict (..),
     Worker (..),
     WorkerOutcome (..),
     classifyWorkerOutcome,
@@ -160,7 +161,8 @@ fanOutSpec = describe "runRound (real engine, several workers)" do
                     atomicModifyIORef' counter \c -> (c + 1, ())
                     atomicModifyIORef' dispatches \d -> (d + 1, ())
                     modifyMVar_ seenWorkers (pure . Set.insert i),
-                  onRejected = pure ()
+                  onRejected = pure (),
+                  roundSpan = Caller
                 }
             workers = zipWith mkWorker [0 :: Int ..] clones
             roundLoop = do
@@ -210,7 +212,8 @@ fanOutSpec = describe "runRound (real engine, several workers)" do
                       (atomicModifyIORef' active \a -> (a + 1, ()))
                       (atomicModifyIORef' active \a -> (a - 1, ()))
                       (threadDelay 10_000_000),
-                  onRejected = pure ()
+                  onRejected = pure (),
+                  roundSpan = Caller
                 }
             workers = map mkWorker clones
         _ <- stateMachineNextGroup tc sm

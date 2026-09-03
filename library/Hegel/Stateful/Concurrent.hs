@@ -40,10 +40,10 @@ import Data.Map.Strict qualified as Map
 import Data.Sequence ((|>))
 import Data.Text (Text)
 import Data.Text qualified as T
-import Hegel.Internal.Control (MalformedTest (..), onFailure)
+import Hegel.Internal.Control (MalformedTest (..))
 import Hegel.Internal.DataSource (freeStateMachine, newConcurrentStateMachine, stateMachineNextGroup)
 import Hegel.Internal.Event (Event (..))
-import Hegel.Internal.StatefulRound (RoundVerdict (..), Worker (..), runRound)
+import Hegel.Internal.StatefulRound (RoundSpan (..), RoundVerdict (..), Worker (..), lookupRule, runRound, stepText)
 import Hegel.Internal.TestCase (TestCase (..), withClones)
 import Hegel.Internal.Tick (Tick)
 import Hegel.Internal.Tick qualified as Tick
@@ -56,17 +56,17 @@ import Hegel.Property.Internal
     checkCloneDepth,
     closeOpenForks,
     collectLeaks,
-    failureDetails,
     nested,
+    newChildJournal,
     newOpenForks,
     note,
-    noteFailure,
     registerFinalizer,
     runPropertyT,
     withBaseRunInIO,
+    withFailureNoteIn,
     withScope,
   )
-import Hegel.Report (Note (..), NoteKind (Annotation, StepHeader, StepOrigin))
+import Hegel.Report (Note (..), NoteKind (Annotation, RoundBoundary, StepHeader, StepOrigin))
 import Hegel.Stateful (Invariant (..))
 import UnliftIO (MonadUnliftIO, throwIO, withRunInIO)
 import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef)
@@ -153,18 +153,6 @@ between lo hi = Concurrency {minWorkers = lo, maxWorkers = hi}
 
 -- * Reporting
 
--- | Journal a real failure as an in-band 'Failure' note under @journal@, then
--- re-throw so the caller still sees the counterexample and the round\/case
--- protocol still concludes on it.
-withFailureNoteIn :: (MonadUnliftIO m) => Journal -> PropertyT m a -> PropertyT m a
-withFailureNoteIn journal = case journal of
-  Silent -> id
-  Recording _ -> \act ->
-    withRunInIO \runInIO ->
-      runInIO act `onFailure` \e ->
-        let (message, loc, diff) = failureDetails e
-         in runInIO (noteFailure loc diff message)
-
 -- | One entry drained from a worker's round-local buffer, tagged so its
 -- local clock can be read uniformly for 'mergeByClock'.
 data WorkerEntry = EntryNote !Note | EntryEvent !Event
@@ -209,12 +197,6 @@ foldWorkerRound rootTc sink stepCounter roundIdx workerIdx groupOf notes events 
       clock <- Tick.next rootTc.recording
       modifyIORef' rootTc.events (|> Event {clock, var = e.var, kind = e.kind})
 
--- | The display string for a folded step's header:
---
--- e.g. @\"Step 4: restock\"@.
-stepText :: Int -> Text -> Text
-stepText idx ruleName = "Step " <> T.pack (show idx) <> ": " <> ruleName
-
 -- | The 'StepOrigin' note's own display text, folded in alongside a step's
 -- header:
 --
@@ -225,6 +207,12 @@ roundWorkerText roundIdx workerIdx group =
   "round " <> T.pack (show roundIdx) <> ", worker " <> T.pack (show (workerIdx + 1)) <> groupSuffix
   where
     groupSuffix = maybe "" (\g -> " (" <> g <> ")") group
+
+-- | The 'RoundBoundary' note's own display text:
+--
+-- e.g. @\"round 2 invariant check\"@.
+roundBoundaryText :: Int -> Text
+roundBoundaryText roundIdx = "round " <> T.pack (show roundIdx) <> " invariant check"
 
 -- * Execution
 
@@ -284,32 +272,16 @@ run bounds machine = do
     withClones concurrency tc \clones -> do
       stepCounter <- newIORef (0 :: Int)
       roundCounter <- newIORef (0 :: Int)
-      -- One private notes buffer per clone.
-      workerNotes <- traverse (const (newIORef mempty)) clones
-      let mkWorker (clone, notesRef) =
-            let workerJournal = case env.journal of
-                  Silent -> Silent
-                  Recording _ -> Recording \n -> modifyIORef' notesRef (|> n)
-                workerEnv =
+      workerJournals <- traverse (const (newChildJournal env.journal)) clones
+      let mkWorker (clone, (workerJournal, _drainNotes)) =
+            let workerEnv =
                   env
                     { testCase = clone,
                       journal = workerJournal,
                       cloneDepth = env.cloneDepth + 1
                     }
                 dispatch ruleIndex = do
-                  let matchedRule = case lookup ruleIndex indexedRules of
-                        Just r -> r
-                        -- @libhegel@ guarantees indices in @[0, num_rules)@,
-                        -- so this is unreachable unless the engine itself is
-                        -- misbehaving.
-                        Nothing ->
-                          error
-                            ( "Hegel.Stateful.Concurrent.run: libhegel returned rule index "
-                                <> show ruleIndex
-                                <> " for a machine with "
-                                <> show (length machine.rules)
-                                <> " rules. This should be impossible; please report it as a libhegel bug."
-                            )
+                  let matchedRule = lookupRule "Hegel.Stateful.Concurrent.run" ruleIndex indexedRules
                   workerForks <- newOpenForks
                   let dispatchEnv = workerEnv {openForks = workerForks}
                   runBase
@@ -326,21 +298,26 @@ run bounds machine = do
 
                 onRejected =
                   runBase (runPropertyT workerEnv (note Annotation Nothing "Rule stopped early due to violated assumption."))
-             in Worker {testCase = clone, dispatch, onRejected}
+             in -- Each worker runs on its own clone, so it owns its own
+                -- 'LabelStatefulRule' span: unlike the sequential driver, no
+                -- root span would enclose it.
+                Worker {testCase = clone, dispatch, onRejected, roundSpan = Own}
 
-          workers = map mkWorker (zip clones workerNotes)
+          workers = map mkWorker (zip clones workerJournals)
 
           -- Drain every worker's per-round notes and pool events, in
           -- ascending worker order, and fold them into the root's journal
           -- and event buffer.
+          foldRound :: IO (Maybe Int)
           foldRound = case env.journal of
-            Silent -> pure ()
+            Silent -> pure Nothing
             Recording sink -> do
               roundIdx <- atomicModifyIORef' roundCounter \r -> (r + 1, r + 1)
-              for_ (zip3 [0 :: Int ..] clones workerNotes) \(workerIdx, clone, notesRef) -> do
-                notes <- Tick.drainAndReset notesRef
+              for_ (zip3 [0 :: Int ..] clones workerJournals) \(workerIdx, clone, (_workerJournal, drainNotes)) -> do
+                notes <- drainNotes
                 events <- Tick.drainAndReset clone.events
                 foldWorkerRound tc sink stepCounter roundIdx workerIdx groupOf notes events
+              pure (Just roundIdx)
 
           roundLoop = do
             mGroupId <- stateMachineNextGroup tc sm
@@ -349,17 +326,20 @@ run bounds machine = do
               Nothing -> pure ()
               Just _groupId -> do
                 (verdict, _dropped) <- runRound sm workers
-                foldRound
+                mRoundIdx <- foldRound
                 case verdict of
                   ContinueRound -> do
+                    for_ mRoundIdx \roundIdx -> do
+                      stepIdx <- atomicModifyIORef' stepCounter \i -> (i + 1, i + 1)
+                      runBase (runPropertyT env (note (RoundBoundary stepIdx roundIdx) Nothing (roundBoundaryText roundIdx)))
                     runBase (runPropertyT env (checkInvariants s0))
                     roundLoop
-                  -- Base 'Control.Exception.throwIO', not the 'UnliftIO'
-                  -- import above: 'e' may carry 'TestStopped'\/'AssumeRejected',
-                  -- async-classified so a user's catch-all cannot swallow
-                  -- them, and 'UnliftIO.throwIO' would wrap an async
-                  -- exception so 'Hegel.Runner.runTestCase's 'catchControl'
-                  -- no longer recognizes it.
+                  -- NOTE: This /must/ be 'Control.Exception.throwIO', and not
+                  -- a safe-exceptions variant that would re-wrap 'e' as a
+                  -- 'SyncException'.
+                  --
+                  -- 'e' here may be 'TestStopped' or 'AssumeRejected', which
+                  -- must be passed through as an asynchronous exception.
                   Conclude e -> E.throwIO e
 
       roundLoop

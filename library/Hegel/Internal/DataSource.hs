@@ -1,20 +1,5 @@
 {-# LANGUAGE CPP #-}
 
--- | The generator-facing engine channel: the per-test-case operations a
--- generator draws from.
---
--- These are plain functions over a 'TestCase', with no @DataSource@ typeclass
--- to implement, since libhegel is the only engine.
---
--- Each primitive has one typed draw, and the engine does no compound
--- generation, so lists, sets, maps, tuples, and choices are composed
--- client-side from spans and collections in "Hegel.Collection" and
--- "Hegel.Gen.Internal".
---
--- String draws go through a caller-owned 'HegelStringGenerator' handle, built
--- once by a @build*Gen@ constructor and drawn from any number of times.
---
--- Pools, state machines, and recursive generation scopes also live here.
 module Hegel.Internal.DataSource
   ( -- * Generation
     HegelStringGenerator,
@@ -107,7 +92,7 @@ import Foreign (ForeignPtr, Ptr, alloca, allocaBytes, castPtr, nullPtr, peek, wi
 import Foreign.C.String (CString)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt, CSize (..))
 import Foreign.Concurrent qualified as Concurrent
-import Hegel.Internal.Control (AssumeRejected (..), AttemptMispriced (..), LeafBudgetExceeded (..), TestStopped (..))
+import Hegel.Internal.Control (AssumeRejected (..), AttemptMispriced (..), LeafBudgetExceeded (..), MalformedTest (..), TestStopped (..))
 import Hegel.Internal.Event qualified as Event
 import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
@@ -118,21 +103,13 @@ import Witch qualified
 
 -- * Generation
 
--- | Interpret a return code from a per-test-case operation.
---
--- The engine may signal 'HEGEL_E_STOP_TEST' or 'HEGEL_E_ASSUME' as ordinary
--- control flow rather than an error, so map those to the exceptions the
--- generator layer expects.
---
--- Everything else falls through to 'throwOnError'.
+-- | Interpret a test case operation's return code.
 handleReturnCode :: TestCase -> CInt -> IO ()
 handleReturnCode _ HEGEL_E_STOP_TEST = throwIO TestStopped
 handleReturnCode _ HEGEL_E_ASSUME = throwIO AssumeRejected
 handleReturnCode tc rc = throwOnError tc.handle.ctx rc
 
--- | Draw a single boolean that is 'True' with probability @p@. Callers must
--- validate @p@ is in @[0,1]@ and not NaN before calling; the engine rejects
--- values outside that range with 'HEGEL_E_INVALID_ARG'.
+-- | Draw a single boolean that is 'True' with probability @p@.
 --
 -- Throws 'TestStopped' on exhaustion.
 drawBool :: TestCase -> Double -> IO Bool
@@ -144,10 +121,7 @@ drawBool tc p =
     (/= 0) . (\(CBool b) -> b) <$> peek outValue
 
 -- | Draw an integer in the inclusive range @[lo, hi]@, dispatching to the
--- fixed-width @int64_t@ path when both bounds fit, else the
--- arbitrary-precision path. Used both by "Hegel.Gen.Integer" (for 'Word'\/
--- 'Word64', whose full range exceeds 'Int64') and by "Hegel.Gen.Internal"'s
--- @oneOf@\/@frequency@ index draws.
+-- fixed-width @int64_t@ path when both bounds fit.
 --
 -- Throws 'TestStopped' on exhaustion.
 drawInteger :: TestCase -> Integer -> Integer -> IO Integer
@@ -162,8 +136,7 @@ drawInteger tc lo hi
   where
     fitsInt64 n = n >= toInteger (minBound :: Int64) && n <= toInteger (maxBound :: Int64)
 
--- | The 'drawInteger' fallback for bounds outside the @int64_t@ range,
--- reachable via 'Word'\/'Word64' at their default full-type bounds.
+-- | The 'drawInteger' fallback for bounds outside the @int64_t@.
 drawIntegerBig :: TestCase -> Integer -> Integer -> IO Integer
 drawIntegerBig tc lo hi =
   BS.useAsCStringLen (encodeSignedLE lo) \(loPtr, loLen) ->
@@ -192,10 +165,8 @@ minimalSignedByteLen n = go 1
       | n >= negate (bit (8 * k - 1)) && n < bit (8 * k - 1) = k
       | otherwise = go (k + 1)
 
--- | Encode a signed 'Integer' as minimal-length two's-complement
--- little-endian bytes — the wire format @hegel_generate_integer_big@ expects
--- for its bounds (mirrors Rust's @BigInt::to_signed_bytes_le@ on the engine
--- side).
+-- | Encode a signed 'Integer' as minimal-length two's-complement little-endian;
+-- this is the format that @hegel_generate_integer_big@ expects for its bounds.
 encodeSignedLE :: Integer -> ByteString
 encodeSignedLE n = BS.pack [byteAt i | i <- [0 .. k - 1]]
   where
@@ -203,9 +174,8 @@ encodeSignedLE n = BS.pack [byteAt i | i <- [0 .. k - 1]]
     u = if n < 0 then n + bit (8 * k) else n
     byteAt i = fromInteger ((u `shiftR` (8 * i)) .&. 0xff)
 
--- | Decode a fixed-width two's-complement little-endian buffer — as written
--- by @hegel_generate_integer_big@, sign-extended out to the full requested
--- capacity — back to a signed 'Integer'.
+-- | Decode a fixed-width two's-complement little-endian buffer, as written
+-- by @hegel_generate_integer_big@, back to an 'Integer'.
 decodeSignedLE :: ByteString -> Integer
 decodeSignedLE bs
   | k == 0 = 0
@@ -269,8 +239,7 @@ drawBytes tc lo hi =
     unpack `finally` void (hegel_generate_bytes_result_free tc.handle.ctx outResult)
 
 -- | Draw a UUID as 16 big-endian bytes. 'Just' pins the RFC 4122 version
--- nibble (and the RFC 4122 variant nibble); 'Nothing' draws uniformly
--- (excluding the nil UUID).
+-- nibble (and the RFC 4122 variant nibble); 'Nothing' draws uniformly.
 --
 -- Throws 'TestStopped' on exhaustion.
 drawUuid :: TestCase -> Maybe Word8 -> IO ByteString
@@ -402,10 +371,8 @@ drawString tc genFP =
 -- $census
 --
 -- A census of live 'HegelStringGenerator' handles, for profiling and
--- testing. This only tracks the Haskell-side 'ForeignPtr' bookkeeping, not
--- the native @hegel_string_generator_t@ allocation. It's a reliable proxy
--- for whether the native handle got freed, since the same finalizer that
--- decrements the count also calls 'hegel_string_generator_free'.
+-- testing. It's a reliable proxy for whether the native handle got freed,
+-- since the same finalizer that decrements the count also calls 'hegel_string_generator_free'.
 
 -- | Number of 'HegelStringGenerator' handles currently live, per this
 -- process's 'wrapStringGenerator' bookkeeping.
@@ -417,15 +384,8 @@ liveStringGenerators = unsafePerformIO (newIORef 0)
 currentLiveStringGenerators :: IO Int
 currentLiveStringGenerators = readIORef liveStringGenerators
 
--- | Encourage a settle by generating (and immediately discarding) real
+-- | Encourage the RTS to settle by generating and immediately discarding real
 -- allocation pressure, then return the settled count.
---
--- This deliberately doesn't call 'System.Mem.performGC'. In a busy,
--- many-threaded process, GHC's RTS doesn't reliably respawn the finalizer
--- thread that frees these handles, no matter how many explicit major GCs
--- run. Organic allocation pressure reclaims far more reliably, though it's
--- still not a hard guarantee under heavy sustained concurrency. A caller
--- that needs a reliable answer should run in its own quiet process instead.
 --
 -- The census only tracks handles when built with the @census@ cabal flag.
 -- Without it, 'currentLiveStringGenerators' always reads 0 and this is a
@@ -478,16 +438,9 @@ dropCensus :: IO ()
 dropCensus = pure ()
 #endif
 
--- | Text-generator construction parameters, mirroring
--- @hegel_string_generator_text@'s vocabulary directly. @categories@\/
--- @excludeCategories@ restrict\/remove Unicode general categories (@Just []@
--- for @categories@ means an empty alphabet, distinct from @Nothing@'s no
--- restriction); @includeCharacters@\/@excludeCharacters@ union\/remove
--- individual characters last.
 data TextSpec = TextSpec
   { minSize :: !Word64,
     maxSize :: !Word64,
-    -- | Selects the alphabet's base range; 'Nothing' is all Unicode.
     codec :: !(Maybe Text),
     minCodepoint :: !Word32,
     maxCodepoint :: !Word32,
@@ -499,9 +452,6 @@ data TextSpec = TextSpec
 
 -- | Build a __text__ string generator (@hegel_string_generator_text@) per
 -- 'TextSpec'.
---
--- Called once per 'Hegel.Gen.Internal.Gen' value (cached by the leaf); throws
--- 'HegelError' on an invalid combination (e.g. an unknown codec\/category).
 buildTextGen :: TextSpec -> IO (ForeignPtr HegelStringGenerator)
 buildTextGen spec =
   withContext \ctx ->
@@ -530,10 +480,10 @@ buildTextGen spec =
                   >>= throwOnError ctx
                 peek outGen >>= wrapStringGenerator
 
--- | Build a __regex__ string generator (@hegel_string_generator_regex@).
--- @alphabet@, when given, must itself be a __text__ generator (built by
--- 'buildTextGen') constraining the pattern's padding and wildcard
--- characters.
+-- | Build a __regex__ string generator.
+--
+-- @alphabet@, when given, must itself be a __text__ generator with constraints
+-- on the pattern's padding and wildcard characters.
 buildRegexGen :: Text -> Bool -> Maybe (ForeignPtr HegelStringGenerator) -> IO (ForeignPtr HegelStringGenerator)
 buildRegexGen pat fullmatch mAlphabet =
   withContext \ctx ->
@@ -548,9 +498,8 @@ buildRegexGen pat fullmatch mAlphabet =
     withNullableAlphabet Nothing k = k nullPtr
     withNullableAlphabet (Just fp) k = withForeignPtr fp k
 
--- | Build an __email-address__ string generator
--- (@hegel_string_generator_email@), producing RFC 5321\/5322 addresses like
--- @alice\@example.com@.
+-- | Build an __email-address__ string generator, which produces RFC 5321\/5322
+-- addresses such as @alice\@example.com@.
 buildEmailGen :: IO (ForeignPtr HegelStringGenerator)
 buildEmailGen =
   withContext \ctx ->
@@ -558,8 +507,8 @@ buildEmailGen =
       hegel_string_generator_email ctx outGen >>= throwOnError ctx
       peek outGen >>= wrapStringGenerator
 
--- | Build a __URL__ string generator (@hegel_string_generator_url@),
--- producing RFC 3986 @http@\/@https@ URLs.
+-- | Build a __URL__ string generator, which produces RFC 3986 @http@\/@https@
+-- URLs.
 buildUrlGen :: IO (ForeignPtr HegelStringGenerator)
 buildUrlGen =
   withContext \ctx ->
@@ -567,8 +516,7 @@ buildUrlGen =
       hegel_string_generator_url ctx outGen >>= throwOnError ctx
       peek outGen >>= wrapStringGenerator
 
--- | Build a __domain-name__ string generator (@hegel_string_generator_domain@),
--- producing RFC 1035 FQDNs of total length at most @maxLength@ (4..=255).
+-- | Build a __domain-name__ string generator, which produces RFC 1035 FQDNs.
 buildDomainGen :: Word64 -> IO (ForeignPtr HegelStringGenerator)
 buildDomainGen maxLen =
   withContext \ctx ->
@@ -582,19 +530,15 @@ withNullableText :: Maybe Text -> (CString -> IO a) -> IO a
 withNullableText Nothing k = k nullPtr
 withNullableText (Just t) k = CString.withText t k
 
--- | Marshal a nullable list of NUL-terminated UTF-8 names (codec\/category
--- names) to an array pointer and length. 'Nothing' is \"absent\" (@nullPtr@);
--- @Just []@ is \"present and empty\", which libhegel distinguishes (an empty
--- category list means an empty alphabet).
+-- | Marshal a nullable list of NUL-terminated UTF-8 names to an array pointer
+-- & length.
 withNullableTextArray :: Maybe [Text] -> ((Ptr CString, CSize) -> IO a) -> IO a
 withNullableTextArray Nothing k = k (nullPtr, 0)
 withNullableTextArray (Just ts) k =
   withMany CString.withText ts \ptrs ->
     withArray ptrs \arr -> k (arr, fromIntegral (length ts))
 
--- | Marshal a nullable 'Text' to its raw UTF-8 bytes (pointer + length, not
--- NUL-terminated — these are libhegel's length-delimited character-set
--- arguments, which may legitimately contain U+0000).
+-- | Marshal a nullable 'Text' to its raw UTF-8 bytes.
 withNullableUtf8 :: Maybe Text -> ((Ptr Word8, CSize) -> IO a) -> IO a
 withNullableUtf8 Nothing k = k (nullPtr, 0)
 withNullableUtf8 (Just t) k =
@@ -602,11 +546,10 @@ withNullableUtf8 (Just t) k =
 
 -- * Errors
 
--- | An engine guarantee we depend on didn't hold: a string draw wasn't valid
--- UTF-8, or a URL draw wasn't a parseable 'Network.URI.URI'. Both are engine
--- bugs (the engine documents UTF-8 string output and RFC-3986-valid URLs)
--- rather than user-facing errors, hence distinct from 'AssumeRejected'\/
--- 'TestStopped'.
+-- | An engine guarantee we depend on didn't hold.
+--
+-- Anything that throws this exception should represent a bug in either
+-- @libhegel@ or its C API.
 newtype InvariantViolation = InvariantViolation {detail :: Text}
   deriving stock (Show)
 
@@ -614,7 +557,7 @@ instance Exception InvariantViolation
 
 -- * Collections
 
--- | Begin a variable-length collection; returns its caller-owned handle.
+-- | Begin a variable-length collection.
 --
 -- Throws 'TestStopped' on exhaustion.
 newCollection :: TestCase -> Int -> Maybe Int -> IO (Ptr HegelCollection)
@@ -646,8 +589,8 @@ collectionReject tc coll mWhy =
       result <- hegel_collection_reject tc.handle.ctx tc.handle.ptr coll p
       handleReturnCode tc result
 
--- | Release a collection handle from 'newCollection'. Each handle must be
--- freed exactly once.
+-- | Release a collection handle from 'newCollection'; each handle must be
+-- freed /exactly/ once.
 freeCollection :: TestCase -> Ptr HegelCollection -> IO ()
 freeCollection tc coll = void (hegel_collection_free tc.handle.ctx coll)
 
@@ -678,15 +621,11 @@ newPool tc =
 -- | Register a new variable in the pool, returning the engine-assigned
 -- variable id; @identity@ is the pool's own 'freshPoolIdentity', for
 -- 'Event.Var' report grouping.
---
--- Records a 'Event.Born' event (this, 'poolAddFrom', 'poolGenerate', and
--- 'labelPool' are the only pool emission points, so 'Hegel.Pool' needs no
--- event awareness).
 poolAdd :: TestCase -> Ptr HegelPool -> Int -> IO Int
 poolAdd tc pool identity = poolAddWith tc pool identity Nothing
 
 -- | 'poolAdd' with a declared lineage: the new variable continues the given
--- source var's logical value (the destination half of 'Hegel.Pool.transfer').
+-- source var's logical value.
 poolAddFrom :: TestCase -> Ptr HegelPool -> Int -> Event.Var -> IO Int
 poolAddFrom tc pool identity from = poolAddWith tc pool identity (Just from)
 
@@ -699,9 +638,7 @@ poolAddWith tc pool identity lineage = do
     Event.Event {clock = c, var = Event.Var {pool = identity, id = vid}, kind = Event.Born lineage}
   pure vid
 
--- | Record a pool's display label ('Hegel.Pool.named'). No engine call —
--- labels are report vocabulary; the event stream is their only channel to
--- the renderer.
+-- | Record a pool's display label.
 labelPool :: TestCase -> Int -> Text -> IO ()
 labelPool tc identity label =
   Tick.record tc.recording tc.events \c ->
@@ -709,9 +646,7 @@ labelPool tc identity label =
 
 -- | Draw a variable id from the pool.
 --
--- Pass 'True' to consume the variable (remove it from the pool). Records a
--- 'Event.Reused'\/'Event.Consumed' event; a consuming draw is the value's
--- death (the engine has no @pool_remove@).
+-- Pass 'True' to consume the variable (remove it from the pool).
 --
 -- Throws 'AssumeRejected' when the pool is empty, discarding the test case.
 poolGenerate :: TestCase -> Ptr HegelPool -> Int -> Bool -> IO Int
@@ -728,7 +663,7 @@ poolGenerate tc pool identity consume = do
         kind = if consume then Event.Consumed else Event.Reused
       }
   -- Tag this draw so the enclosing 'forAll' can bind its rendered value to
-  -- this pool 'Var' (see Note [Draw provenance].
+  -- this pool 'Var' (see Note [Draw provenance]).
   recordDraw tc var
   pure vid
 
@@ -739,74 +674,53 @@ freePool tc pool = void (hegel_pool_free tc.handle.ctx pool)
 
 -- * State machines
 
--- | Register an engine-owned, sequential state machine; returns its
--- caller-owned handle.
---
--- Every rule shares one concurrency group and the machine's concurrency level
--- is fixed at 1, so creation consumes no entropy beyond the rule\/invariant
--- registration itself.
+-- | Register sequential state machine; returns its handle.
 --
 -- @ruleNames@ must be non-empty.
---
--- Throws 'TestStopped' on exhaustion.
 newStateMachine :: TestCase -> [Text] -> [Text] -> IO (Ptr HegelStateMachine)
 newStateMachine tc ruleNames invariantNames =
-  withMany CString.withText ruleNames \rulePtrs ->
-    withMany CString.withText invariantNames \invPtrs ->
-      withArray rulePtrs \rulesArr ->
-        withArray invPtrs \invArr ->
-          -- One sequential group (id 0) for every rule.
-          withArray (replicate (length ruleNames) 0 :: [Int64]) \groupsArr ->
-            withSlotOf tc.slot \outHandle ->
-              alloca \outConcurrency -> do
-                hegel_new_state_machine
-                  tc.handle.ctx
-                  tc.handle.ptr
-                  rulesArr
-                  groupsArr
-                  (fromIntegral (length ruleNames))
-                  invArr
-                  (fromIntegral (length invariantNames))
-                  1
-                  1
-                  outHandle
-                  outConcurrency
-                  >>= handleReturnCode tc
-                peek outHandle
+  -- One sequential group (id 0) for every rule.
+  fst <$> newConcurrentStateMachine tc ruleNames (replicate (length ruleNames) 0) invariantNames 1 1
 
 -- | A generalization of 'newStateMachine' that supports the @libhegel@ round
 -- protocol.
 --
--- @ruleGroups@ is a parallel array to @ruleNames@; @ruleNames@ must be
--- non-empty.
---
--- Throws 'TestStopped' on exhaustion, 'AssumeRejected' for the run's first
--- @maxConcurrency > 1@ creation.
+-- @ruleGroups@ must hold exactly one concurrency-group ID per @ruleNames@
+-- entry, in the same order; @ruleNames@ must be non-empty.
 newConcurrentStateMachine :: TestCase -> [Text] -> [Int64] -> [Text] -> Int64 -> Int64 -> IO (Ptr HegelStateMachine, Int)
-newConcurrentStateMachine tc ruleNames ruleGroups invariantNames minConcurrency maxConcurrency =
-  withMany CString.withText ruleNames \rulePtrs ->
-    withMany CString.withText invariantNames \invPtrs ->
-      withArray rulePtrs \rulesArr ->
-        withArray invPtrs \invArr ->
-          withArray ruleGroups \groupsArr ->
-            withSlotOf tc.slot \outHandle ->
-              alloca \outConcurrency -> do
-                hegel_new_state_machine
-                  tc.handle.ctx
-                  tc.handle.ptr
-                  rulesArr
-                  groupsArr
-                  (fromIntegral (length ruleNames))
-                  invArr
-                  (fromIntegral (length invariantNames))
-                  minConcurrency
-                  maxConcurrency
-                  outHandle
-                  outConcurrency
-                  >>= handleReturnCode tc
-                handle <- peek outHandle
-                concurrency <- fromIntegral <$> (peek outConcurrency :: IO Int64)
-                pure (handle, concurrency)
+newConcurrentStateMachine tc ruleNames ruleGroups invariantNames minConcurrency maxConcurrency
+  | length ruleGroups /= length ruleNames =
+      throwIO . MalformedTest $
+        "Hegel.Internal.DataSource.newConcurrentStateMachine: every rule name needs exactly one "
+          <> "corresponding entry in ruleGroups, in the same order, but got "
+          <> T.pack (show $ length ruleNames)
+          <> " rule name(s) and "
+          <> T.pack (show $ length ruleGroups)
+          <> " rule group(s)"
+  | otherwise =
+      withMany CString.withText ruleNames \rulePtrs ->
+        withMany CString.withText invariantNames \invPtrs ->
+          withArray rulePtrs \rulesArr ->
+            withArray invPtrs \invArr ->
+              withArray ruleGroups \groupsArr ->
+                withSlotOf tc.slot \outHandle ->
+                  alloca \outConcurrency -> do
+                    hegel_new_state_machine
+                      tc.handle.ctx
+                      tc.handle.ptr
+                      rulesArr
+                      groupsArr
+                      (fromIntegral (length ruleNames))
+                      invArr
+                      (fromIntegral (length invariantNames))
+                      minConcurrency
+                      maxConcurrency
+                      outHandle
+                      outConcurrency
+                      >>= handleReturnCode tc
+                    handle <- peek outHandle
+                    concurrency <- fromIntegral <$> (peek outConcurrency :: IO Int64)
+                    pure (handle, concurrency)
 
 -- | Start the machine's next round, or 'Nothing' once the engine has
 -- decided the whole state machine is done stepping.
@@ -874,13 +788,14 @@ recursionBranch tc recursion depth =
     hegel_recursion_branch tc.handle.ctx tc.handle.ptr recursion depth outBranch >>= handleReturnCode tc
     (/= 0) . (\(CBool b) -> b) <$> peek outBranch
 
--- | Count one leaf against the current attempt's budget. Call immediately
+-- | Count one leaf against the current attempt's budget; call immediately
 -- before drawing each leaf value.
 --
--- Throws 'LeafBudgetExceeded' when the attempt has outgrown its leaf budget:
--- the caller must unwind without drawing anything further and let
--- 'Hegel.Gen.Recursive' retry from the root. Throws 'TestStopped' on
--- exhaustion.
+-- Throws 'LeafBudgetExceeded' when the attempt has outgrown its leaf budget;
+-- callers then must unwind without drawing anything further and start again
+-- from the root.
+--
+-- Throws 'TestStopped' on exhaustion.
 recursionLeaf :: TestCase -> Ptr HegelRecursion -> IO ()
 recursionLeaf tc recursion = do
   rc <- hegel_recursion_leaf tc.handle.ctx tc.handle.ptr recursion
@@ -888,24 +803,18 @@ recursionLeaf tc recursion = do
     HEGEL_E_RETRY -> throwIO LeafBudgetExceeded
     _ -> handleReturnCode tc rc
 
--- | Discard a generation attempt after a 'LeafBudgetExceeded' unwind, so the
--- next attempt starts fresh from the root, steering toward a smaller target.
--- Call only after unwinding out of the caller's generators, back to the
--- point 'newRecursion' was called.
---
--- Throws 'AssumeRejected' once attempts are exhausted, 'TestStopped' on
--- exhaustion.
+-- | Discard a generation attempt after a 'LeafBudgetExceeded'.
 recursionRetry :: TestCase -> Ptr HegelRecursion -> IO ()
 recursionRetry tc recursion = hegel_recursion_retry tc.handle.ctx tc.handle.ptr recursion >>= handleReturnCode tc
 
--- | Report that the recursive value's root sub-value, and therefore the
--- whole value, has finished generating.
+-- | Report that the recursive value's root sub-value has finished generating.
 --
 -- Throws 'AttemptMispriced' when the completed value was priced for a
--- different branch arity than the branch function actually drew; the engine
+-- different branch arity than the branch function actually drew. The engine
 -- has already discarded it, so the caller must drop the value and start
--- again from the root, without calling 'recursionRetry'. Throws
--- 'TestStopped' on exhaustion.
+-- again from the root, without calling 'recursionRetry'.
+--
+-- Throws 'TestStopped' on exhaustion.
 recursionFinish :: TestCase -> Ptr HegelRecursion -> IO ()
 recursionFinish tc recursion = do
   rc <- hegel_recursion_finish tc.handle.ctx tc.handle.ptr recursion
@@ -913,8 +822,9 @@ recursionFinish tc recursion = do
     HEGEL_E_RETRY -> throwIO AttemptMispriced
     _ -> handleReturnCode tc rc
 
--- | Release a recursion handle from 'newRecursion'. Each handle must be
--- freed exactly once.
+-- | Release a recursion handle from 'newRecursion'.
+--
+-- __NOTE__: Each handle must be freed exactly once.
 freeRecursion :: TestCase -> Ptr HegelRecursion -> IO ()
 freeRecursion tc recursion = void (hegel_recursion_free tc.handle.ctx recursion)
 

@@ -158,8 +158,11 @@ drawConsuming caller pool tc =
 -- draw from @src@ whose value is immediately registered in @dst@, with the
 -- identity link /declared/ in the event stream.
 --
--- Use this this when modeling state changes, such as closing a handle to some
+-- Use this when modeling state changes, such as closing a handle to some
 -- resource.
+--
+-- The move is not atomic across the two pools, and is therefore not safe to
+-- retry.
 transfer :: Pool a -> Pool a -> Gen a
 transfer src dst = Draw \tc -> do
   (vid, v) <- drawConsuming "transfer" src tc

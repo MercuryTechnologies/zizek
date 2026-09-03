@@ -29,9 +29,10 @@ import Data.List (find)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Hegel.Internal.Event (Event (..), Operation (..), Var (..))
 import Hegel.Internal.Tick (Tick (..))
-import Hegel.Report.Note (Note (..), NoteKind (Drawn, Response, StepHeader, StepOrigin))
+import Hegel.Report.Note (Note (..), NoteKind (Drawn, Response, RoundBoundary, StepHeader, StepOrigin))
 import Hegel.Report.Note qualified as Note
 
 -- * Trace
@@ -64,16 +65,13 @@ data Step = Step
     freeDraws :: ![Text],
     -- | Does this step's subtree carry the in-band 'Failure'?
     failed :: !Bool,
-    -- | The round and worker that fired this step, when it came from a
-    -- concurrent stateful run's fold; 'Nothing' for a sequential step or the
-    -- prelude.
+    -- | The round and worker that fired this step.
     origin :: !(Maybe Origin)
   }
   deriving stock (Show)
 
--- | Which round of a concurrent state machine a step ran in, which 1-based
--- worker ran it, and the rule's concurrency group, 'Nothing' when the rule
--- belongs to no named group.
+-- | Which round of a concurrent state machine a step ran in, which worker ran
+-- it, and the rule's concurrency group.
 data Origin = Origin
   { roundNo :: !Int,
     workerNo :: !Int,
@@ -130,11 +128,10 @@ build notes events =
           -- Note [Draw provenance]
           -- ~~~~~~~~~~~~~~~~~~~~~~~
           -- A value drawn from a pool journals its 'Drawn' note tagged with the
-          -- 'Var'(s) it resolved ('Hegel.Property.Internal.forAllWith'). A note
-          -- tagged with exactly one 'Var' is a pool draw already represented by
-          -- that var's 'Touch'; anything else — a plain non-pool draw (tagged
-          -- @[]@) or a composite multi-pool draw — is a free draw, surfaced as a
-          -- detail line. The tag is what tells the two apart.
+          -- 'Var'(s) it resolved ('Hegel.Property.Internal.forAllWith').
+          --
+          -- A note tagged with exactly one 'Var' is a pool draw already
+          -- represented by that var's 'Touch'; anything else is a free draw.
           touchVars = fmap (.var) stepEvents
           boundToTouch = \case [v] -> v `elem` touchVars; _ -> False
        in Step
@@ -193,10 +190,14 @@ segment notes = case break isHeader notes of
        in Segment {header = (\(i, l) -> Header {index = i, rule = l, start = h.clock}) <$> parseHeader h, body} : go rest'
     isHeader n = n.depth == 0 && maybe False (const True) (parseHeader n)
 
--- | A 'StepHeader' note's structured index and rule name.
+-- | A 'StepHeader' or 'RoundBoundary' note's structured index and display
+-- label.
 parseHeader :: Note -> Maybe (Int, Text)
 parseHeader n
   | n.depth == 0, StepHeader i label <- n.kind = Just (i, label)
+  | n.depth == 0,
+    RoundBoundary i roundIdx <- n.kind =
+      Just (i, "round " <> T.pack (show roundIdx) <> " invariant check")
   | otherwise = Nothing
 
 -- | Is this event a step activity (as opposed to out-of-band vocabulary
@@ -208,10 +209,7 @@ isTouch = \case
   Consumed -> True
   Named _ -> False
 
--- | Fold the event stream into per-value identities, in birth order,
--- contributed only by 'Born' events. A 'Reused' or 'Consumed' event carries
--- no identity information of its own, so it's captured in 'Step.touches'
--- instead.
+-- | Fold the event stream into per-value identities, in birth order.
 identitiesOf :: [Event] -> [Identity]
 identitiesOf events = reverse (foldl' apply [] events)
   where
@@ -243,8 +241,7 @@ step t i = find (\s -> s.index == i) t.steps
 identity :: Trace -> Var -> Maybe Identity
 identity t v = find (\i -> i.var == v) t.identities
 
--- | The logical value's original identity: follow declared lineage
--- ('Hegel.Pool.transfer') back to the first var.
+-- | The logical value's original identity.
 root :: Trace -> Var -> Var
 root t = go []
   where

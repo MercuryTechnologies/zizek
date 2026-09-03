@@ -1,20 +1,22 @@
 -- | Coverage for 'Gen.recursive': respecting 'Gen.maxDepth'\/'Gen.maxLeaves',
 -- the depth\/cap the branch function sees via 'Gen.RecursionContext',
 -- subtree-hoisting shrinking, and the leaf-budget retry path's span
--- discipline (see Note [Span discipline on retry] in
--- "Hegel.Gen.Recursive").
+-- discipline (see Note [Span discipline] in "Hegel.Gen.Recursive").
 module RecursiveGenerators (spec) where
 
+import Control.Exception (throwIO)
 import Data.Default.Class (def)
 import Data.Function ((&))
 import Data.Word (Word64)
 import Hegel (prop)
 import Hegel.Gen qualified as Gen
+import Hegel.Gen.Recursive (retryLoopWith)
+import Hegel.Internal.Control (AttemptMispriced (..), LeafBudgetExceeded (..))
 import Hegel.Property (check, check_, forEach)
 import Hegel.Report (Report (..), Result (..))
 import Hegel.Settings (Settings (..))
 import Test.Hspec
-import UnliftIO.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import UnliftIO.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 
 -- | A tree whose branches hold a variable number of children, built through
 -- 'Gen.list'.
@@ -153,3 +155,29 @@ spec = describe "Gen.recursive" $ do
     case report.result of
       Counterexample {} -> readIORef capture >>= (`shouldBe` BBranch BLeaf BLeaf)
       other -> expectationFailure ("expected a counterexample, got: " <> show other)
+
+  -- 'retryLoopWith' drives the asymmetry directly, with no engine needed:
+  -- neither retry signal has a settings knob or other deterministic trigger
+  -- from the Haskell side, so this is the only way to pin the load-bearing
+  -- half of the contract that 'LeafBudgetExceeded' resets the engine's
+  -- leaf-budget bookkeeping before looping and 'AttemptMispriced' never does.
+  describe "retryLoopWith" do
+    it "runs onLeafBudgetExceeded before looping on LeafBudgetExceeded" do
+      calls <- newIORef (0 :: Int)
+      attempts <- newIORef (0 :: Int)
+      let attempt = do
+            n <- atomicModifyIORef' attempts \a -> (a + 1, a + 1)
+            if n == 1 then throwIO LeafBudgetExceeded else pure ("ok" :: String)
+      result <- retryLoopWith attempt (modifyIORef' calls (+ 1))
+      result `shouldBe` "ok"
+      readIORef calls >>= (`shouldBe` 1)
+
+    it "never runs onLeafBudgetExceeded on AttemptMispriced" do
+      calls <- newIORef (0 :: Int)
+      attempts <- newIORef (0 :: Int)
+      let attempt = do
+            n <- atomicModifyIORef' attempts \a -> (a + 1, a + 1)
+            if n == 1 then throwIO AttemptMispriced else pure ("ok" :: String)
+      result <- retryLoopWith attempt (modifyIORef' calls (+ 1))
+      result `shouldBe` "ok"
+      readIORef calls >>= (`shouldBe` 0)

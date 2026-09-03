@@ -2,6 +2,7 @@
 -- number of workers.
 module Hegel.Internal.StatefulRound
   ( -- * Workers
+    RoundSpan (..),
     Worker (..),
     runWorkerRound,
 
@@ -13,16 +14,22 @@ module Hegel.Internal.StatefulRound
 
     -- * Fan-out
     runRound,
+
+    -- * Reporting
+    lookupRule,
+    stepText,
   )
 where
 
 import Control.Exception (SomeException, fromException, mask, onException, throwIO, toException)
 import Data.Foldable (traverse_)
 import Data.List (sortOn)
+import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Traversable (for)
 import Foreign (Ptr)
 import Hegel.Internal.Control (AssumeRejected (..), ControlSignal (Assume, Stop), TestStopped (..), catchControl)
-import Hegel.Internal.DataSource (stateMachineNextRule, stateMachineRuleRejected)
+import Hegel.Internal.DataSource (Label (LabelStatefulRule), startSpan, stateMachineNextRule, stateMachineRuleRejected, stopSpan)
 import Hegel.Internal.Foreign.Raw (HegelError, HegelStateMachine)
 import Hegel.Internal.TestCase (TestCase)
 import UnliftIO.Async (Async)
@@ -30,29 +37,42 @@ import UnliftIO.Async qualified as Async
 
 -- * Workers
 
+-- | Who opens and closes the 'LabelStatefulRule' span around a worker's pull
+-- for the round.
+data RoundSpan
+  = Own
+  | Caller
+
 -- | One worker's connection into a round: its own test case to draw against,
--- how to apply the rule at a given index, and what to do once a rejected
--- rule has been reported to the engine.
+-- how to apply the rule at a given index, what to do once a rejected rule has
+-- been reported to the engine, and who owns this worker's 'RoundSpan'.
 data Worker = Worker
   { testCase :: !TestCase,
     dispatch :: !(Int -> IO ()),
-    onRejected :: !(IO ())
+    onRejected :: !(IO ()),
+    roundSpan :: !RoundSpan
   }
 
 -- | Pull rules for one worker from @sm@ until the round's own budget is
 -- exhausted (the join point) or a terminal outcome ends it early.
 runWorkerRound :: Ptr HegelStateMachine -> Worker -> Int -> IO ()
-runWorkerRound sm w workerIndex = loop
+runWorkerRound sm w workerIndex = case w.roundSpan of
+  Own -> do
+    startSpan w.testCase LabelStatefulRule
+    loop False `onException` stopSpan w.testCase False
+  Caller -> loop False
   where
-    loop = do
+    loop rejected = do
       mRuleIndex <- stateMachineNextRule w.testCase sm workerIndex
       case mRuleIndex of
-        Nothing -> pure ()
+        Nothing -> case w.roundSpan of
+          Own -> stopSpan w.testCase rejected
+          Caller -> pure ()
         Just ruleIndex -> do
           verdict <- (Right <$> w.dispatch ruleIndex) `catchControl` (pure . Left)
           case verdict of
-            Right () -> loop
-            Left Assume -> stateMachineRuleRejected w.testCase sm workerIndex *> w.onRejected *> loop
+            Right () -> loop rejected
+            Left Assume -> stateMachineRuleRejected w.testCase sm workerIndex *> w.onRejected *> loop True
             Left Stop -> throwIO TestStopped
 
 -- * Round resolution
@@ -80,7 +100,7 @@ classifyWorkerOutcome e
   | Just he <- fromException @HegelError e = RoundControlError (toException he)
   | otherwise = RoundPanicked e
 
--- | What a round concludes to, once every worker has reported in.
+-- | The conclusion of a given round.
 data RoundVerdict
   = -- | Every worker finished its round normally; run invariants and start
     -- the next round.
@@ -88,7 +108,7 @@ data RoundVerdict
   | -- | The round ends the whole test case; (re)throw this exception.
     Conclude !SomeException
 
--- | Resolve one round's worker outcomes by precedence:
+-- | Resolve one round's worker outcomes by precedence.
 --
 -- A control error outranks an overrun or an invalid conclusion, which outrank
 -- a panic; among several panics, the lowest-indexed worker's wins.
@@ -115,16 +135,7 @@ resolveRound outcomes = case [e | (_, RoundControlError e) <- outcomes] of
 
 -- * Fan-out
 
--- | Run one round: fan every worker's 'runWorkerRound' out concurrently, wait
--- for each to finish or end early, and resolve the round.
---
--- Every worker's outcome is classified rather than let escape, so an
--- external async exception arriving while this waits is the only thing that
--- can leave a worker still running once 'runRound' returns; that path
--- cancels every handle before propagating, so no worker thread survives a
--- call to this function. Spawning itself runs 'mask'ed so the same exception
--- can't land between two 'Async.async' calls and strand an already-spawned
--- worker outside the handle list the wait's own guard cancels.
+-- | Run one round.
 runRound :: Ptr HegelStateMachine -> [Worker] -> IO (RoundVerdict, [(Int, SomeException)])
 runRound sm workers = mask \restore -> do
   handles <- for (zip [0 ..] workers) \(i, w) -> (,) i <$> Async.async (runWorkerRound sm w i)
@@ -139,3 +150,27 @@ waitWorkerOutcome h =
   Async.waitCatch h >>= \case
     Right () -> pure RoundDone
     Left e -> pure (classifyWorkerOutcome e)
+
+-- * Reporting
+
+-- | Resolve the engine's rule index against a list of pre-registered rules.
+--
+-- __NOTE__: Throws an 'error' if @libhegel@ returns an invalid index; this
+-- should be impossible and must be reported upstream.
+lookupRule :: String -> Int -> [(Int, a)] -> a
+lookupRule caller ruleIndex indexedRules = case lookup ruleIndex indexedRules of
+  Just r -> r
+  Nothing ->
+    error $
+      caller
+        <> ": libhegel returned rule index "
+        <> show ruleIndex
+        <> " for a machine with "
+        <> show (length indexedRules)
+        <> " rules. This should be impossible; please report it as a libhegel bug."
+
+-- | The display string for a stateful step's header:
+--
+-- e.g. @\"Step 4: restock\"@.
+stepText :: Int -> Text -> Text
+stepText idx ruleName = "Step " <> T.pack (show idx) <> ": " <> ruleName

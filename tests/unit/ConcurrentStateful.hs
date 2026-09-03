@@ -18,6 +18,8 @@ import Hegel.Internal.Control (MalformedTest (..))
 import Hegel.Property (assert, assume, forAll, resource, (===))
 import Hegel.Property.Fork qualified as Fork
 import Hegel.Report (Abort (..), Note (..), NoteKind (Annotation, StepHeader, StepOrigin), Report (..), Reproduction (..), Result (..), Stats (..), renderReport, renderReportRich)
+import Hegel.Report.Trace (Step (..), Trace (..))
+import Hegel.Report.Trace qualified as Trace
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..))
 import Hegel.Stateful.Concurrent qualified as Concurrent
@@ -158,6 +160,32 @@ behaviorSpec = describe "run (behavior)" do
             }
     report <- check def {statefulStepCount = 10} (Concurrent.run (Concurrent.fixed 1) machine)
     report.result `shouldSatisfy` isCounterexample
+
+  it "attaches a join-point invariant failure to the round, not to the last worker step" do
+    let bump :: Concurrent.Rule (IORef Int) IO
+        bump = Concurrent.rule "bump" \ref -> liftIO (modifyIORef' ref (+ 1))
+        neverAboveThree :: Concurrent.Invariant (IORef Int) IO
+        neverAboveThree =
+          Concurrent.Invariant "never_above_three" \ref -> do
+            n <- liftIO (readIORef ref)
+            assert (n <= 3) "counter stays small"
+        machine =
+          Concurrent.Machine
+            { initial = liftIO (newIORef 0),
+              rules = [bump],
+              invariants = [neverAboveThree]
+            }
+    report <- check def {statefulStepCount = 10} (Concurrent.run (Concurrent.fixed 1) machine)
+    case report.result of
+      Counterexample {notes, events} ->
+        let trace = Trace.build notes events
+         in case trace.failure >>= Trace.step trace . (.step) of
+              Nothing -> expectationFailure "expected the trace to locate the failing step"
+              -- Not "bump": the failure must attach to the round's own
+              -- synthetic step rather than trail whichever worker step
+              -- 'foldWorkerRound' happened to fold last.
+              Just failingStep -> failingStep.rule `shouldSatisfy` ("invariant check" `T.isInfixOf`)
+      other -> expectationFailure ("expected Counterexample, got: " <> show other)
 
   it "a rejected rule's assumption skips the step without discarding the case" do
     let sometimesRejects :: Concurrent.Rule (IORef Int) IO

@@ -51,11 +51,6 @@ import UnliftIO.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Witch qualified
 
 -- | Run a 'Property' through @libhegel@.
---
--- The engine's run result decides the verdict: a failure with
--- a reproduction blob is replayed through the property to describe the
--- counterexample ('reconstructProperty'); one without is a health-check
--- abort; otherwise the tally decides between 'GaveUp' and 'Ok'.
 check :: Settings -> Property () -> IO Report
 check settings prop =
   withAsyncBound go wait
@@ -112,6 +107,13 @@ check settings prop =
             }
 
 -- | A test case 'runTestCase' itself classified 'Interesting'.
+--
+-- 'driveLoop' stashes this into a single shared 'IORef', unconditionally
+-- overwritten on every 'Interesting' case once the run is recording live.
+--
+-- __NOTE__: This relies on the engine reporting at most one case worth
+-- explaining once it has declared a run nondeterministic; if it ever produced
+-- more than one, only the last would be kept.
 data LiveFailure = LiveFailure
   { exception :: !SomeException,
     notes :: [Note],
@@ -389,8 +391,7 @@ readRunError ctx res =
 -- | Replay a reproduction blob through the 'Property' to harvest its journal.
 --
 -- The failure is expected to recur; its notes become the counterexample
--- description, and its exception supplies the message and source location
--- (via 'failureDetails').
+-- description, and its exception supplies the message and source location.
 --
 -- A replay that passes, discards, or runs out of choices did not reproduce the
 -- engine's failure and will be reported as an unexpected divergence.
@@ -434,15 +435,10 @@ driveLoop ctx action run lastFailure = loop 0 0
           case status of
             Valid -> loop (nValid + 1) nInvalid
             Invalid -> loop nValid (nInvalid + 1)
-            -- A failure (counted via the run result) or an overrun (a
-            -- budget-exhausted shrink probe) — neither is a valid example
-            -- nor an assume\/filter rejection, so it affects neither tally.
             Interesting _ -> loop nValid nInvalid
             Overrun -> loop nValid nInvalid
 
--- | Run one engine-produced test case: execute the per-case action against a
--- live 'TestCase', classify how it finished, and report that 'Status' to the
--- engine.
+-- | Run one engine-produced test case.
 runTestCase ::
   Ptr HegelContext ->
   (Journal -> Finalizers -> OpenForks -> TestCase -> IO ()) ->

@@ -17,8 +17,22 @@ module Hegel.Gen.Recursive
     maxDepth,
     maxLeaves,
     RecursionContext (..),
+
+    -- * Exposed for testing
+    retryLoopWith,
   )
 where
+
+{- Note [span-discipline]
+~~~~~~~~~~~~~~~~~~~~~~~~~
+Normally, libhegel never discards an opened span on its own, so the function
+that opens a span is responsible for closing it (including on an exception).
+
+Recursive draws, however, can be closed by libhegel at which point we must
+consider the span to have been closed by the engine (and thus not issue a
+call to 'stopSpan' ourselves). This is indicated with an exception, and so
+we /don't/ bracket `subtree` with `startSpan`/`stopSpan`.
+-}
 
 import Control.Exception (Handler (..), bracket, catches)
 import Control.Monad (when)
@@ -44,11 +58,10 @@ import Hegel.Internal.TestCase (TestCase)
 -- | A branch node's position in the recursion, handed to the branch function
 -- alongside its subtree generator.
 data RecursionContext = RecursionContext
-  { -- | The nesting depth of the branch node about to be built: 0 for the
-    -- root, one more than its parent for every deeper branch.
+  { -- | The nesting depth of the branch node about to be built.
     depth :: !Word64,
-    -- | The generator's configured 'maxDepth': a sub-value at this depth is
-    -- always a leaf.
+    -- | The generator's configured 'maxDepth'; anything at this depth must
+    -- be a leaf value.
     maxDepth :: !Word64
   }
   deriving stock (Show, Eq)
@@ -60,45 +73,24 @@ data RecursiveBuilder a = RecursiveBuilder
     rMaxLeaves :: !Int
   }
 
--- | Generate recursively defined data by decomposing it into non-recursive
--- base cases and a rule for combining sub-values into one more level of
--- structure.
+-- | Given two generators for a self-referential type: a generator for leaf
+-- values and a function that can unfold into additional recursive sub-structure,
+-- produce a generator
+-- | A generator for recursive data types, such that @libhegel@ can shrink
+-- around its sub-structure.
 --
--- @leaf@ generates the base cases. @branch@ receives the branch node's
--- 'RecursionContext' and a generator of sub-values of the same type, and
--- returns a generator combining some number of them into a compound value;
--- it runs once per branch node generated.
---
--- The engine owns branch probability, the depth cap ('maxDepth', default 32),
--- the leaf budget ('maxLeaves', default 100), and the per-value target size,
--- so a generator built this way is identically distributed across every
--- @hegel@ frontend, and the shrinker can replace a generated value with one
--- of its own subtrees.
---
--- 'Hegel.Gen.Internal.defer' remains how to write recursion that doesn't
--- decompose into a leaf generator and a branch function over sub-values;
--- 'recursive' trades that generality for the depth cap, leaf budget, and
--- subtree-replacement shrinking above.
+-- 'Hegel.defer' is slightly more convenient for simple recursive types, but
+-- this combinator should be preferred for anything complicated or particularly
+-- self-referential (e.g. complex JSON documents).
 recursive :: Gen a -> (RecursionContext -> Gen a -> Gen a) -> RecursiveBuilder a
 recursive leaf branch =
   RecursiveBuilder {rLeaf = leaf, rBranch = branch, rMaxDepth = 32, rMaxLeaves = 100}
 
--- | Set the maximum nesting depth of branches (default 32).
---
--- A sub-value at this depth is always a leaf, so a 'maxDepth' of 0 generates
--- only leaves.
+-- | Set the maximum nesting depth of branches produced by a generator.
 maxDepth :: Int -> RecursiveBuilder a -> RecursiveBuilder a
 maxDepth n b = b {rMaxDepth = n}
 
--- | Set the maximum number of leaves one generated value may contain
--- (default 100).
---
--- Each generated value steers toward a target size drawn from across this
--- budget, adapting to the number of sub-values the branch function actually
--- draws, so typical sizes span the whole budget. An attempt that draws more
--- than 'maxLeaves' leaves is discarded and retried steering toward a smaller
--- target; the test case is rejected as invalid when several retries in a row
--- fail to fit.
+-- | Set the maximum number of leaves the generator should produce.
 maxLeaves :: Int -> RecursiveBuilder a -> RecursiveBuilder a
 maxLeaves n b = b {rMaxLeaves = n}
 
@@ -114,21 +106,11 @@ instance Build (RecursiveBuilder a) a where
 -- | Regenerate the whole value from the root after a 'LeafBudgetExceeded' or
 -- 'AttemptMispriced' unwind out of 'subtree'.
 retryLoop :: TestCase -> RecursiveBuilder a -> Ptr HegelRecursion -> IO a
-retryLoop tc b recursion =
-  subtree tc recursion b 0
-    `catches` [ Handler \LeafBudgetExceeded -> recursionRetry tc recursion *> retryLoop tc b recursion,
-                Handler \AttemptMispriced -> retryLoop tc b recursion
-              ]
+retryLoop tc b recursion = retryLoopWith (subtree tc recursion b 0) (recursionRetry tc recursion)
 
--- | Draw one sub-value at @depth@: the leaf-or-branch decision, then either a
--- leaf or a further call through the caller's branch function.
---
--- The engine closes and discards every span this attempt opened when either
--- retry signal fires, so this never runs 'stopSpan' on the way out through an
--- exception: the span open\/close here is a plain sequence with no
--- 'bracket'\/'finally' around it, which is what leaves an exception room to
--- skip 'stopSpan' on unwind instead of closing a span the engine already
--- closed.
+-- see [span-discipline] above for why this doesn't open/close spans under
+-- a `bracket`.
+
 subtree :: TestCase -> Ptr HegelRecursion -> RecursiveBuilder a -> Word64 -> IO a
 subtree tc recursion b depth = do
   startSpan tc LabelRecursive
@@ -142,6 +124,14 @@ subtree tc recursion b depth = do
   when (depth == 0) (recursionFinish tc recursion)
   stopSpan tc False
   pure result
+
+-- | Helper to handle looping on a recursive draw, exposed for testing only.
+retryLoopWith :: IO a -> IO () -> IO a
+retryLoopWith attempt onLeafBudgetExceeded =
+  attempt
+    `catches` [ Handler \LeafBudgetExceeded -> onLeafBudgetExceeded *> retryLoopWith attempt onLeafBudgetExceeded,
+                Handler \AttemptMispriced -> retryLoopWith attempt onLeafBudgetExceeded
+              ]
 
 -- | The generator handed to the caller's branch function: one more sub-value,
 -- one level deeper.

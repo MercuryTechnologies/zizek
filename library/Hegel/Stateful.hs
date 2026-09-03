@@ -69,10 +69,9 @@ import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Foldable (for_)
 import Data.Text (Text)
-import Data.Text qualified as T
 import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Assertion (callSite)
-import Hegel.Internal.Control (MalformedTest (..), onFailure)
+import Hegel.Internal.Control (MalformedTest (..))
 import Hegel.Internal.DataSource
   ( Label (LabelStatefulRule),
     freeStateMachine,
@@ -81,18 +80,16 @@ import Hegel.Internal.DataSource
     stateMachineNextGroup,
     stopSpan,
   )
-import Hegel.Internal.StatefulRound (RoundVerdict (..), Worker (..), runRound)
+import Hegel.Internal.StatefulRound (RoundSpan (..), RoundVerdict (..), Worker (..), lookupRule, runRound, stepText)
 import Hegel.Property.Internal
   ( Env (..),
-    Journal (..),
     PropertyT,
     Scope (..),
     askEnv,
-    failureDetails,
     nested,
     note,
-    noteFailure,
     registerFinalizer,
+    withFailureNoteIn,
     withScope,
   )
 import Hegel.Report (NoteKind (Annotation, Response, StepHeader), renderValue)
@@ -184,30 +181,11 @@ run machine = do
   env <- askEnv
   let tc = env.testCase
 
-      -- Journal a real failure as an in-band 'Failure' note, then re-throw so
-      -- the runner still sees the counterexample and drives shrinking.
-      -- 'onFailure' passes control signals and async exceptions through
-      -- untouched (see its haddock); do not replace it with a bare
-      -- @catch \@SomeException@, which would swallow discard\/stop signals.
-      --
-      -- Under 'Silent' the bracket is skipped entirely: the failure note
-      -- would go nowhere and the failure propagates to the runner either
-      -- way, so only the 'Recording' reconstruction replay pays for the
-      -- per-step catch machinery.
-      withFailureNote :: forall a. PropertyT m a -> PropertyT m a
-      withFailureNote = case env.journal of
-        Silent -> id
-        Recording _ -> \act ->
-          withRunInIO \runInIO ->
-            runInIO act `onFailure` \e ->
-              let (message, loc, diff) = failureDetails e
-               in runInIO (noteFailure loc diff message)
-
       -- Each invariant's draws (and any failure) report one level below the
       -- step header, via 'nested'.
       checkInvariants s =
         for_ machine.invariants \invariant ->
-          nested (withFailureNote (withScope InStep (invariant.check s)))
+          nested (withFailureNoteIn env.journal (withScope InStep (invariant.check s)))
 
   -- Acquire the state-machine handle and register its release atomically
   -- under 'mask_', the same fix 'Hegel.Property.Internal.resource' applies,
@@ -222,7 +200,7 @@ run machine = do
         runInIO (registerFinalizer (freeStateMachine tc sm))
         pure sm
 
-  s0 <- withFailureNote (withScope CaseSetup machine.initial)
+  s0 <- withFailureNoteIn env.journal (withScope CaseSetup machine.initial)
   stepNote "Initial invariant check."
   checkInvariants s0
 
@@ -249,35 +227,28 @@ run machine = do
   -- then lets 'Hegel.Internal.StatefulRound.runRound' pull this round's rules
   -- until the one worker's own budget is exhausted.
   withRunInIO \runInIO -> do
-    let dispatch ruleIndex = do
-          let matchedRule = case lookup ruleIndex (zip [0 ..] machine.rules) of
-                Just r -> r
-                -- @libhegel@ guarantees indices in @[0, num_rules)@, so
-                -- this is unreachable unless the engine itself is
-                -- misbehaving.
-                Nothing ->
-                  error
-                    ( "Hegel.Stateful.run: libhegel returned rule index "
-                        <> show ruleIndex
-                        <> " for a machine with "
-                        <> show (length machine.rules)
-                        <> " rules. This should be impossible; please report it as a libhegel bug."
-                    )
+    let indexedRules = zip [0 ..] machine.rules
+
+        dispatch ruleIndex = do
+          let matchedRule = lookupRule "Hegel.Stateful.run" ruleIndex indexedRules
           stepIndex <- atomicModifyIORef' attemptsRef \a -> (a + 1, a + 1)
           runInIO $
             note
               (StepHeader stepIndex matchedRule.name)
               Nothing
-              ("Step " <> T.pack (show stepIndex) <> ": " <> matchedRule.name)
+              (stepText stepIndex matchedRule.name)
           s <- readIORef stateRef
-          s' <- runInIO (nested (withFailureNote (withScope InStep (matchedRule.apply s))))
+          s' <- runInIO (nested (withFailureNoteIn env.journal (withScope InStep (matchedRule.apply s))))
           writeIORef stateRef s'
 
         onRejected = do
           writeIORef rejectedRef True
           runInIO (stepNote "Rule stopped early due to violated assumption.")
 
-        worker = Worker {testCase = tc, dispatch, onRejected}
+        -- This round's own 'LabelStatefulRule' span is opened\/closed below,
+        -- around the 'stateMachineNextGroup' draw 'runWorkerRound' never
+        -- sees, so the caller, not the worker, owns it.
+        worker = Worker {testCase = tc, dispatch, onRejected, roundSpan = Caller}
 
         -- A round's draws share one 'LabelStatefulRule' span. On
         -- 'ContinueRound' it closes discarded exactly when some rule this
@@ -298,10 +269,16 @@ run machine = do
                   s' <- readIORef stateRef
                   runInIO (checkInvariants s')
                   roundLoop
-                -- NOTE: This /must/ be 'Control.Exception.throwIO', as
+                -- The round is concluding outright, not being rejected, so
+                -- this closes discarded = 'False' — matching every other exit
+                -- from this loop, every one of which closes its span.
+                --
+                -- NOTE: The rethrow /must/ be 'Control.Exception.throwIO', as
                 -- 'UnliftIO.throwIO' applies a synchronous exception wrapper,
                 -- which can mess up our async control signals.
-                Conclude e -> Control.Exception.throwIO e
+                Conclude e -> do
+                  stopSpan tc False
+                  Control.Exception.throwIO e
 
     roundLoop
 {-# INLINEABLE run #-}

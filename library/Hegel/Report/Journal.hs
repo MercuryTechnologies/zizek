@@ -1,9 +1,7 @@
 -- | Recovering the journal's step structure at the render boundary, and the
--- structured (non-source-spliced) rendering of the recovered tree.
+-- structured rendering of the recovered tree.
 --
--- The journal itself is a flat, depth-stamped @['Note']@ — an append-only
--- streaming sink that stays correct across exception boundaries. The tree is a
--- rendering concern, recovered here by a pure fold over the depth stamps.
+-- The journal itself is a flat, depth-stamped @['Note']@.
 module Hegel.Report.Journal
   ( -- * Regrouping
     groupByDepth,
@@ -92,10 +90,7 @@ numberDraws = snd . mapAccumL numberTree 1
           children' = snd (mapAccumL numberTree 1 children)
        in (i', Node x children')
 
--- | Render the journal: notes regrouped for sibling-scoped draw numbering
--- ('groupByDepth', 'numberDraws'), flattened back to journal order, and
--- rendered one line per note ('noteLineAtDepth'). Footnotes are hoisted to
--- the end at a fixed indent, discarding both their position and their depth.
+-- | Render the journal.
 journalDocs :: [Note] -> [Doc Ann]
 journalDocs notes = treeDocs <> footnoteDocs notes
   where
@@ -103,9 +98,10 @@ journalDocs notes = treeDocs <> footnoteDocs notes
     treeDocs :: [Doc Ann]
     treeDocs = noteLineAtDepth <$> concatMap flatten (numberDraws $ groupByDepth inline)
 
--- | Footnotes ('Footnote' kind) rendered at a fixed indent, in order — hoisted
--- to the end of a report body, their position and depth discarded. Shared by
--- 'journalDocs', 'Hegel.Report.Stateful', and 'Hegel.Report'.
+-- | Footnotes rendered at a fixed indent, in order, and hoisted to the end of
+-- a report body.
+--
+-- Shared between 'journalDocs', 'Hegel.Report.Stateful', and 'Hegel.Report'.
 footnoteDocs :: [Note] -> [Doc Ann]
 footnoteDocs notes =
   [PP.indent 2 (PP.annotate NoteAnn (PP.pretty n.text)) | n <- notes, n.kind == Footnote]
@@ -113,13 +109,11 @@ footnoteDocs notes =
 -- | Render one numbered note at its stamped depth's indent, one level per
 -- two spaces.
 --
--- Shared by 'journalDocs' and 'Hegel.Report.Stateful''s per-note fallback, so
--- both renderers place a note at the same column.
+-- Shared between 'journalDocs' and 'Hegel.Report.Stateful''s per-note fallback.
 noteLineAtDepth :: (Maybe Int, Note) -> Doc Ann
 noteLineAtDepth x@(_, n) = PP.indent ((n.depth + 1) * 2) (noteLineDoc x)
 
--- | Render one numbered note in its structured (non-source-spliced) form:
--- a @Draw N:@ line, an annotation line, or an in-band failure block.
+-- | Render one numbered note in its structured form.
 noteLineDoc :: (Maybe Int, Note) -> Doc Ann
 noteLineDoc (mIx, n) = case mIx of
   -- An index means a 'Drawn' note: only draws are numbered.
@@ -128,16 +122,10 @@ noteLineDoc (mIx, n) = case mIx of
     Failure diff -> failureNoteDoc diff n
     BranchFailure diff -> failureNoteDoc diff n
     BranchHeader _ -> PP.annotate BranchLabelAnn (PP.pretty n.text)
-    -- 'Annotation' and 'StepOrigin' render as a plain label line; 'Footnote'
-    -- and unnumbered 'Drawn' are unreachable (footnotes are hoisted before
-    -- grouping, draws always numbered).
     _ -> PP.annotate NoteAnn (PP.pretty n.text)
 
--- | Render an in-band 'Failure' or 'BranchFailure' note: a marked headline,
--- the structured diff (if any) indented under it, then the source location.
--- Rendered at the note's tree position, so the offsets are relative: @+4@ for
--- the diff (one nesting level plus two to clear the @✗ @ marker), @+2@ for the
--- location.
+-- | Render an in-band 'Failure' or 'BranchFailure' note as a marked headline,
+-- the structured diff indented under it, followed by the source location.
 failureNoteDoc :: Maybe Diff -> Note -> Doc Ann
 failureNoteDoc diff n =
   PP.vsep $
@@ -149,10 +137,7 @@ failureNoteDoc diff n =
 locDoc :: SrcLoc -> Doc Ann
 locDoc sl = PP.pretty sl.srcLocFile <> ":" <> PP.pretty sl.srcLocStartLine
 
--- | The failure headline plus its indented diff\/location block, headline first.
--- Shared by the ordinary report body ("Hegel.Report") and the composed trace
--- report's 'Failure'-less prelude ("Hegel.Report.Trace.Compose") so the two
--- agree on the block's shape.
+-- | The failure headline plus its indented diff\/location block.
 headlineBlock :: Text -> Maybe Diff -> Maybe SrcLoc -> [Doc Ann]
 headlineBlock message diff loc =
   PP.annotate MessageAnn (PP.pretty message)

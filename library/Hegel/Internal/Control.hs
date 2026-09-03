@@ -191,7 +191,8 @@ isControlSignal e =
     || isJust (fromException @LeafBudgetExceeded e)
     || isJust (fromException @AttemptMispriced e)
 
--- | Discriminated form of one of Hegel's two control signals.
+-- | Discriminated form of one of the two control signals 'catchControl'
+-- handles.
 --
 -- Used with 'catchControl' when a handler needs to know /which/ signal fired,
 -- not merely whether one did.

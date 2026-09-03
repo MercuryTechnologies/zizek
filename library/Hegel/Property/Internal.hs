@@ -5,6 +5,7 @@ module Hegel.Property.Internal
     Env (..),
     Journal (..),
     newRecordingJournal,
+    newChildJournal,
     Scope (..),
     withScope,
     hoist,
@@ -18,6 +19,7 @@ module Hegel.Property.Internal
     -- * Notes
     note,
     noteFailure,
+    withFailureNoteIn,
     nested,
     annotate,
     annotateShow,
@@ -84,7 +86,7 @@ import GHC.Stack (HasCallStack, SrcLoc, callStack, withFrozenCallStack)
 import Hegel.Assertion (AssertionFailure (..), callSite)
 import Hegel.Diff (Diff)
 import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
-import Hegel.Internal.Control (MalformedTest (..), NoBacktrace (..), isControlSignal, isFailure)
+import Hegel.Internal.Control (MalformedTest (..), NoBacktrace (..), isControlSignal, isFailure, onFailure)
 import Hegel.Internal.Event qualified as Event
 import Hegel.Internal.TestCase (TestCase (..))
 import Hegel.Internal.TestCase qualified as TestCase
@@ -105,13 +107,24 @@ newRecordingJournal = do
   ref <- newIORef Seq.empty
   pure (Recording \n -> modifyIORef' ref (|> n), toList <$> readIORef ref)
 
+-- | A fresh journal for one child scope, mirroring its parent's recording
+-- state: 'Silent' stays 'Silent', a 'Recording' parent gets its own private
+-- buffer.
+newChildJournal :: Journal -> IO (Journal, IO [Note])
+newChildJournal parent = do
+  ref <- newIORef Seq.empty
+  let childJournal = case parent of
+        Silent -> Silent
+        Recording _ -> Recording \n -> modifyIORef' ref (|> n)
+  pure (childJournal, Tick.drainAndReset ref)
+
 -- | How restricted the ambient context is for primitives like 'resource'
--- whose release is deferred to the case boundary.
+-- whose release is deferred to the case boundary; ordered from least to most
+-- restrictive.
 --
--- Ordered least to most restrictive. 'withScope' only ever raises the
--- ambient scope via 'max', so 'InStep', the type's maximum, absorbs any other
--- scope once a call chain has entered it and cannot be downgraded by
--- anything nested inside.
+-- 'withScope' only ever raises the ambient scope via 'max', so 'InStep', the
+-- type's maximum, absorbs any other scope once a call chain has entered it and
+-- cannot be downgraded by anything nested inside.
 data Scope
   = -- | The default: no restriction from this mechanism.
     Unrestricted
@@ -126,15 +139,15 @@ data Scope
 data Env = Env
   { testCase :: !TestCase,
     journal :: !Journal,
-    -- | Ambient nesting level stamped onto each journaled 'Note'; raised by
-    -- 'nested'.
+    -- | Ambient nesting level stamped onto each journaled 'Note'.
     noteDepth :: !Int,
     -- | Cleanup actions registered by 'registerFinalizer'.
     finalizers :: !Finalizers,
-    -- | Forks spawned in this scope, settled at scope exit.
+    -- | Forks spawned in this scope, which must be settled on exit.
     openForks :: !OpenForks,
-    -- | Clone-stream nesting depth of this scope: 0 at the top level, one
-    -- higher in each concurrent branch or fork body.
+    -- | Clone-stream nesting depth of this scope.
+    --
+    -- Starts at @0@ and increments in each concurrent branch or fork body.
     cloneDepth :: !Int,
     -- | Ceiling 'cloneDepth' is checked against before acquiring another
     -- clone, constant for the whole run.
@@ -147,13 +160,8 @@ data Env = Env
 -- test case.
 --
 -- Unlike @'Hegel.Property.forEach' gen body@, where all draws happen up
--- front, a 'PropertyT' may draw ('forAll'), perform effects, and make
--- assertions in any order.
---
--- Failure is exception-based ('Hegel.Assertion.AssertionFailure' from
--- 'Hegel.Assertion.assert'\/'Hegel.Assertion.failure', or any other
--- exception), so assertions work unchanged under any transformer stack
--- layered on top.
+-- front, a 'PropertyT' may draw, perform effects, and make assertions in any
+-- order.
 --
 -- __NOTE__: The entire body of a 'Property' is re-run on every shrink attempt,
 -- and once more to reconstruct the failure report; effects must tolerate
@@ -178,28 +186,36 @@ askEnv :: (Monad m) => PropertyT m Env
 askEnv = PropertyT ask
 {-# INLINE askEnv #-}
 
--- | Send a note to the journal. The primitive underneath 'annotate' and
--- 'footnote', for library-internal callers that need to control the recorded
--- 'SrcLoc' (or omit it) explicitly.
+-- | Send a note to the journal.
 note :: (MonadIO m) => NoteKind -> Maybe SrcLoc -> Text -> PropertyT m ()
 note = journalNote
 {-# INLINE note #-}
 
--- | Journal a 'Failure': an assertion's message, source location, and diff,
--- to be rendered in-band in the report.
+-- | Record a 'Failure', capturing an assertion's message, source location, and
+-- diff, to be rendered in-band in the report.
 --
 -- See 'Hegel.Report.Failure'.
 noteFailure :: (MonadIO m) => Maybe SrcLoc -> Maybe Diff -> Text -> PropertyT m ()
 noteFailure loc diff = journalNote (Failure diff) loc
 {-# INLINE noteFailure #-}
 
--- | The sole 'Note' construction site: stamp the ambient 'noteDepth' and a
--- fresh clock from the shared event-stream counter onto the note, and hand it
--- to the journal.
+-- | Record in-band 'Failure' note under the given @journal@, then re-throw it
+-- so the caller still sees the counterexample.
 --
--- Under 'Silent' the 'Note' is never constructed, so its strict fields never
--- force @loc@ or @text@ and the clock is never ticked. 'Journal' explains why
--- silent notes must cost nothing.
+-- 'onFailure' passes control signals and async exceptions through
+-- untouched; do not replace it with a bare @catch \@SomeException@, which
+-- would swallow discard\/stop signals.
+withFailureNoteIn :: (MonadUnliftIO m) => Journal -> PropertyT m a -> PropertyT m a
+withFailureNoteIn journal = case journal of
+  Silent -> id
+  Recording _ -> \act ->
+    withRunInIO \runInIO ->
+      runInIO act `onFailure` \e ->
+        let (message, loc, diff) = failureDetails e
+         in runInIO (noteFailure loc diff message)
+
+-- | Stamp the ambient 'noteDepth' and a fresh clock from the shared event-stream
+-- counter, and hand it to the journal.
 journalNote :: (MonadIO m) => NoteKind -> Maybe SrcLoc -> Text -> PropertyT m ()
 journalNote kind loc text = PropertyT do
   env <- ask
@@ -312,24 +328,21 @@ assume cond = if cond then pure () else discard
 
 -- | Discard the current test case unconditionally.
 --
--- The discard signal is delivered as an asynchronous exception
--- ('Hegel.Internal.Control.AssumeRejected') so that catch-all handlers in the
--- property body may pass it through to the runner instead of silently ignoring
--- them.
+-- The discard signal is delivered as an asynchronous exception so that catch-all
+-- handlers in the property body may pass it through to the runner instead of
+-- silently ignoring them.
 --
 -- __NOTE__: A bare 'Control.Exception.try' @\@SomeException@ will catch
--- asynchronous exceptions, which will produce undefined behavior from this
--- library.
+-- asynchronous exceptions, and can produce undefined behavior with respect to
+-- this library.
 discard :: (MonadIO m) => m a
-discard = liftIO (E.throwIO AssumeRejected)
+discard = liftIO $ E.throwIO AssumeRejected
 {-# INLINE discard #-}
 
 -- * Finalizers
 
--- | A per-case stack of cleanup actions, drained (LIFO) at the case boundary.
---
--- Opaque, so only 'newFinalizers'\/'registerFinalizer'\/'drainFinalizers' touch
--- the underlying reference.
+-- | A per-case stack of cleanup actions, drained in LIFO order at the test
+-- case boundary.
 newtype Finalizers = Finalizers (IORef [IO ()])
 
 -- | A fresh, empty registry.
@@ -338,10 +351,11 @@ newFinalizers = Finalizers <$> newIORef []
 
 -- | Register a cleanup action to run at the end of the current test case.
 --
--- The primitive for releasing resources acquired mid-property, when release
--- must happen outside your lexical scope; the canonical case is a resource
--- acquired in a stateful 'Hegel.Stateful.Machine'\'s @initial@, torn down at
--- the case boundary the engine controls:
+-- This is the primitive for releasing resources acquired mid-property, when
+-- release must happen outside your lexical scope.
+--
+-- The canonical case is a resource acquired in a stateful 'Hegel.Stateful.Machine',
+-- so it can be torn down at the case boundary the engine controls:
 --
 -- > initial = do
 -- >   mc <- liftIO (spawnMockCore ...)
@@ -360,20 +374,12 @@ newFinalizers = Finalizers <$> newIORef []
 --   reverse acquisition order.
 --
 -- * __Must not draw against the test case's choice stream__: registration is
---   a plain list push that replays identically, and a finalizer that drew
---   ('forAll') would misalign the choice sequence. Finalizers also run after
---   the case has been reported to the engine, so the borrowed test-case
---   handle is stale for that purpose — do not call back into generation or
---   span\/completion primitives from one. Releasing an independent
---   caller-owned handle that outlives the test case, such as
---   'Hegel.Pool.Pool'\'s own native handle, is fine: its free function only
---   ever needs the run-scoped @HegelContext@ for diagnostics, never the
---   test case's own choice stream.
+--   a plain list push that replays identically, and a finalizer that drew with
+--   'forAll' would misalign the choice sequence.
 --
--- * __Acquire, then register, with no draw in between__: a draw ('forAll') can
---   discard or stop the case, so acquiring a resource and then drawing before
---   'registerFinalizer' runs leaks it on that path. Register immediately after
---   acquisition, or use 'resource' to pair the two atomically.
+-- * __Acquire, then register, with no draw in between__: a draw can discard
+--   or stop the case, so acquiring a resource and then drawing before
+--   'registerFinalizer' runs leaks it on that path.
 --
 -- * __Must return promptly__: finalizers drain under
 --   'Control.Exception.uninterruptibleMask_', so one that blocks indefinitely
@@ -381,17 +387,11 @@ newFinalizers = Finalizers <$> newIORef []
 --
 -- * __A finalizer that throws aborts the run__ as 'Hegel.Report.Errored': a
 --   failed teardown means per-case isolation may be broken and later
---   cases\/replays can no longer be trusted. If the case had already failed,
---   the abort discards that counterexample — but a persisted database has
---   already stored its blob (so it replays next run); under the default
---   settings (database disabled) the drawn values are lost.
+--   cases\/replays can no longer be trusted.
 registerFinalizer :: (MonadIO m) => IO () -> PropertyT m ()
 registerFinalizer act = do
   env <- askEnv
   let Finalizers ref = env.finalizers
-  -- Newest-first, so 'drainFinalizers' can run the stack LIFO. The push is
-  -- atomic so that concurrent registrations against one shared registry do
-  -- not lose each other's entries.
   liftIO (atomicModifyIORef' ref \xs -> (act : xs, ()))
 {-# INLINEABLE registerFinalizer #-}
 
@@ -475,11 +475,6 @@ deregisterFork (OpenForks ref) k = atomicModifyIORef' ref \m -> (IntMap.delete k
 
 -- | Settle every fork still in the registry, in creation order, and report
 -- whether any of them had never been joined or cancelled by their owner.
---
--- Always settles regardless of the outcome, so every clone is freed and no
--- forked thread survives the scope closing; callers decide whether an
--- unjoined fork should abort the run, as 'closeOpenForks' does, or be
--- discarded quietly because a more pressing exception is already in flight.
 collectLeaks :: OpenForks -> IO (Maybe Text)
 collectLeaks (OpenForks ref) = do
   leaked <- atomicModifyIORef' ref \m -> (IntMap.empty, IntMap.toAscList m)
@@ -512,12 +507,11 @@ closeOpenForks forks = collectLeaks forks >>= traverse_ (E.throwIO . MalformedTe
 -- * Concurrent-branch mechanics
 
 -- | Fail the case immediately when the ambient clone-stream nesting depth has
--- already reached 'cloneDepthLimit', rather than letting the engine's own
--- clone-depth limit invalidate the whole clone family.
+-- already reached 'cloneDepthLimit'.
 checkCloneDepth :: Env -> IO ()
 checkCloneDepth env =
-  when (env.cloneDepth >= env.cloneDepthLimit) $
-    E.throwIO (MalformedTest (cloneDepthMessage env.cloneDepthLimit))
+  when (env.cloneDepth >= env.cloneDepthLimit) do
+    E.throwIO . MalformedTest $ cloneDepthMessage env.cloneDepthLimit
 
 -- | Describe a tripped clone-depth guard.
 cloneDepthMessage :: Int -> Text
@@ -529,15 +523,12 @@ cloneDepthMessage limit =
     <> " Hegel.Property.Branch.replicateConcurrently for fan-out"
 
 -- | Obtain a way to run the base monad's actions in 'IO', independent of the
--- ambient 'Env'. "Hegel.Property.Branch" and "Hegel.Property.Fork" use
--- this to step outside the parent's environment before assembling each
--- branch's own.
+-- ambient 'Env'.
 withBaseRunInIO :: (MonadUnliftIO m) => ((forall x. m x -> IO x) -> IO b) -> PropertyT m b
 withBaseRunInIO inner = withRunInIO \run -> inner (run . lift)
 
 -- | Fold one branch's or fork's buffered notes into the ambient journal, one
--- level deeper than the caller's own 'noteDepth', under a header labeled
--- with the given word ("Branch" or "Fork") and index.
+-- level deeper than the caller's own 'noteDepth'.
 --
 -- A no-op under a 'Silent' journal, matching every other journaling
 -- primitive's cost discipline.
@@ -549,9 +540,7 @@ foldForkNotes env label i notes = case env.journal of
     sink Note {kind = BranchHeader i, text = label <> " " <> T.pack (show i), loc = Nothing, depth = env.noteDepth, clock}
     for_ notes sink
 
--- | 'foldForkNotes' over every branch of a fixed-arity combinator
--- ('Hegel.Property.Branch.concurrently' and its siblings), labeled
--- "Branch" and numbered in call order.
+-- | 'foldForkNotes' over every branch of a fixed-arity combinator.
 foldBranchNotes :: Env -> [[Note]] -> IO ()
 foldBranchNotes env branchNotes =
   for_ (zip [1 :: Int ..] branchNotes) \(i, notes) -> foldForkNotes env "Branch" i notes
@@ -567,11 +556,8 @@ runBranch ::
 runBranch runBase parentEnv testCase body = do
   finalizers <- newFinalizers
   openForks <- newOpenForks
-  notesRef <- newIORef Seq.empty
-  let branchJournal = case parentEnv.journal of
-        Silent -> Silent
-        Recording _ -> Recording \n -> modifyIORef' notesRef (|> n)
-      branchEnv =
+  (branchJournal, drainNotes) <- newChildJournal parentEnv.journal
+  let branchEnv =
         Env
           { testCase,
             journal = branchJournal,
@@ -590,7 +576,7 @@ runBranch runBase parentEnv testCase body = do
     [] -> pure ()
     e : _ -> E.throwIO e
   closeOpenForks openForks
-  notes <- toList <$> readIORef notesRef
+  notes <- drainNotes
   failureNotes <- case (branchJournal, eRes) of
     (Recording _, Left e) | isFailure e -> do
       clock <- Tick.next testCase.recording
@@ -613,8 +599,8 @@ propertyAction journal cloneDepthLimit prop finalizers openForks testCase =
     Env {testCase, journal, noteDepth = 0, finalizers, openForks, cloneDepth = 0, cloneDepthLimit, scope = Unrestricted}
     prop
 
--- | Run every registered finalizer, LIFO, capturing each one's exception so a
--- thrower does not skip the rest, and returning them all.
+-- | Run every registered finalizer, in LIFO order, and capture each one's
+-- exception so a thrower does not skip the rest, and returning them all.
 --
 -- __NOTE__: Runs under 'E.uninterruptibleMask_'; finalizers /must/ execute
 -- promptly.
@@ -675,8 +661,7 @@ observeProperty cloneDepthLimit testCase prop = do
   pure (eRes, notes, events)
 
 -- NOTE: This function _needs_ to use 'Control.Exception.throwIO' so that
--- all non-Hegel async exceptions are rethrown _as_ async exceptions (and not
--- re-wrapped in a synchronous exception wrapper by safe-exceptions).
+-- all non-Hegel async exceptions are rethrown _as_ async exceptions.
 --
 -- The canonical home of this discipline is 'Hegel.Internal.Control'
 -- ('isFailure'\/'Hegel.Internal.Control.onFailure').
@@ -691,14 +676,13 @@ tryProperty act =
     Right a -> pure (Right a)
     Left e
       | isControlSignal e || isFailure e -> pure (Left e)
-      -- Base 'E.throwIO' to preserve the exception's async flavor on rethrow;
+      -- 'E.throwIO' to preserve the exception's async flavor on rethrow;
       -- 'E.NoBacktrace' because the original throw already collected any
-      -- backtrace it wanted (see the same wrapper in
-      -- 'Hegel.Internal.Control.onFailure').
+      -- backtrace it wanted.
       | otherwise -> E.throwIO $ NoBacktrace e
 
--- | Attempt to recover an 'AssertionFailure' from the given exception, and (if
--- present) extract the message, callsite, and diff associated with it.
+-- | Attempt to recover an 'AssertionFailure' from the given exception, and
+-- extract the message, callsite, and diff associated with it.
 --
 -- If the given exception is /not/ an 'AssertionFailure', render it with
 -- 'displayException' and return that on its own.
