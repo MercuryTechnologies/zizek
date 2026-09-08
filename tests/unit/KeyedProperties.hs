@@ -1,4 +1,4 @@
--- | Path-derived example-database keys for the hspec and tasty integrations.
+-- | Path-derived Hspec identities and explicit native Tasty keys.
 module KeyedProperties (spec, tastyTree) where
 
 import Control.Monad.Trans.Class (lift)
@@ -186,12 +186,12 @@ isDirectory :: Database -> Bool
 isDirectory (DatabaseDirectory _) = True
 isDirectory _ = False
 
--- | tasty leaves exercising auto-keying and an explicit-key override.
+-- | Native Tasty leaves with default settings and an explicit key.
 tastyTree :: TestTree
 tastyTree =
   testGroup
     "keyed properties (tasty)"
-    [ Hegel.Tasty.testProperty "auto-keyed leaf" passing,
+    [ Hegel.Tasty.testProperty "unpersisted leaf" passing,
       Hegel.Tasty.testPropertyWith
         defaultSettings {databaseKey = Just "explicit-tasty-key"}
         "explicit key respected"

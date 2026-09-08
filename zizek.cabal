@@ -134,6 +134,7 @@ library
     Hegel.Internal.Foreign.Raw
     Hegel.Internal.Reconstruction
     Hegel.Internal.Replay
+    Hegel.Internal.RunnerConfig
     Hegel.Internal.StatefulRound
     Hegel.Internal.TestCase
     Hegel.Internal.Tick
@@ -234,6 +235,7 @@ test-suite unit
     RecursiveGenerators
     ReportRendering
     Resources
+    RunnerConfiguration
     Sampling
     SourceRendering
     StandardGenerators

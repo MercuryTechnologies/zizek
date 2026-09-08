@@ -1,6 +1,7 @@
 -- | @libhegel@ property runner.
 module Hegel.Runner
   ( check,
+    checkWithProgress,
     replay,
     sample,
     samples,
@@ -55,7 +56,12 @@ import Witch qualified
 
 -- | Run a 'Property' through @libhegel@.
 check :: Settings -> Property () -> IO Report
-check settings prop =
+check = checkWithProgress (\_ -> pure ())
+
+-- | Run a property and report cumulative completed engine cases after cleanup.
+-- Shrink probes count as cases; reconstruction replays do not.
+checkWithProgress :: (Int -> IO ()) -> Settings -> Property () -> IO Report
+checkWithProgress progress settings prop =
   withAsyncBound go wait
     `catch` (\(e :: MalformedTest) -> pure . aborted . Errored $ toException e)
     `catch` (\(e :: HegelError) -> pure . aborted . Errored $ toException e)
@@ -73,7 +79,7 @@ check settings prop =
         -- it on bracket exit (see 'readRunOutcome').
         lastFailure <- newIORef Nothing
         (nValid, nInvalid, outcome) <- withRun ctx s \run -> do
-          (nv, ni) <- driveLoop ctx (\journal -> propertyAction journal settings.maxCloneDepth prop) run lastFailure
+          (nv, ni) <- driveLoop ctx (\journal -> propertyAction journal settings.maxCloneDepth prop) run lastFailure progress
           o <- readRunOutcome ctx run
           pure (nv, ni, o)
         result <- case outcome.status of
@@ -405,10 +411,11 @@ driveLoop ::
   (Journal -> Finalizers -> OpenForks -> TestCase -> IO ()) ->
   Ptr HegelRun ->
   IORef (Maybe LiveFailure) ->
+  (Int -> IO ()) ->
   IO (Int, Int)
-driveLoop ctx action run lastFailure = loop 0 0
+driveLoop ctx action run lastFailure progress = loop 0 0 0
   where
-    loop !nValid !nInvalid = do
+    loop !nValid !nInvalid !completed = do
       tcPtr <- alloca \out -> do
         throwOnError ctx =<< hegel_next_test_case ctx run out
         peek out
@@ -416,11 +423,12 @@ driveLoop ctx action run lastFailure = loop 0 0
         then pure (nValid, nInvalid)
         else do
           status <- runTestCase ctx action tcPtr lastFailure `finally` void (hegel_test_case_free ctx tcPtr)
+          progress (completed + 1)
           case status of
-            Valid -> loop (nValid + 1) nInvalid
-            Invalid -> loop nValid (nInvalid + 1)
-            Interesting _ -> loop nValid nInvalid
-            Overrun -> loop nValid nInvalid
+            Valid -> loop (nValid + 1) nInvalid (completed + 1)
+            Invalid -> loop nValid (nInvalid + 1) (completed + 1)
+            Interesting _ -> loop nValid nInvalid (completed + 1)
+            Overrun -> loop nValid nInvalid (completed + 1)
 
 -- | Run one engine-produced test case.
 runTestCase ::

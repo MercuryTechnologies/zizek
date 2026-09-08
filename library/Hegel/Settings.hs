@@ -83,7 +83,7 @@ instance Default Settings where
 -- | Set the stable 'databaseKey' used to file and replay failures, leaving the
 -- 'database' (where, or whether, they are persisted) untouched.
 --
--- This backs the automatic keying in "Hegel.Hspec" and "Hegel.Tasty";
--- persistence itself is chosen by 'database'.
+-- Keys must distinguish properties sharing a database; persistence itself
+-- is chosen by 'database'.
 withDatabaseKey :: Text -> Settings -> Settings
 withDatabaseKey key s = s {databaseKey = Just key}

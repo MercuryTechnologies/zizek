@@ -17,6 +17,7 @@ import PropertyChecks qualified
 import RecursiveGenerators qualified
 import ReportRendering qualified
 import Resources qualified
+import RunnerConfiguration qualified
 import Sampling qualified
 import SourceRendering qualified
 import StandardGenerators qualified
@@ -53,10 +54,12 @@ main = do
   forkProperties <- testSpec "fork combinators" ForkProperties.spec
   sampling <- testSpec "sampling" Sampling.spec
   recursiveGenerators <- testSpec "recursive generators" RecursiveGenerators.spec
+  runnerConfiguration <- testSpec "runner configuration" RunnerConfiguration.spec
   defaultMain
     ( testGroup
         "zizek:unit"
-        [ alphabet,
+        [ runnerConfiguration,
+          alphabet,
           controlSignals,
           rendering,
           sourceRendering,

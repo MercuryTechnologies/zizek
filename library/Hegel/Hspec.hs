@@ -15,6 +15,22 @@
 -- Use 'propWith' for explicit 'Settings'; for example @propWith def@ runs a
 -- property without the replay database.
 --
+-- 'propModify' customizes the persisted defaults. 'propFor' provides the same
+-- identity and persistence for a property that consumes an Hspec fixture.
+-- Direct @it "name" (\fixture -> property)@ uses unkeyed, nonpersisted defaults.
+--
+-- Shared @HEGEL_TEST_CASES@, @HEGEL_STATEFUL_STEPS@, @HEGEL_SEED@, and
+-- @HEGEL_DATABASE@ overrides are read during each example's execution.
+-- Database values are @off@, @default@, or @directory:PATH@.
+-- @HEGEL_REPLAY@ and @HEGEL_REPLAY_KEY@ must be supplied together and select
+-- one replay for the exact matching key, bypassing phases and database access.
+-- Filter with Hspec's @--match@ and check the replay-selection message;
+-- leaf integrations cannot detect a key that matched no selected example.
+--
+-- Specs converted with @tasty-hspec@ retain these identities and shared
+-- environment controls. Outer Tasty groups do not contribute to their keys,
+-- and native Hegel Tasty options do not configure adapted examples.
+--
 -- For a property over a custom base monad, use 'propT'\/'propWithT'.
 --
 -- __NOTE__: While the @arg ->@ 'Hspec.Example' instance composes with hspec's
@@ -25,6 +41,11 @@ module Hegel.Hspec
     propT,
     propWith,
     propWithT,
+    propFor,
+    propForWith,
+    propModify,
+    propForModify,
+    propModifyT,
   )
 where
 
@@ -37,6 +58,7 @@ import Data.Text qualified as T
 import GHC.Stack (CallStack, HasCallStack, SrcLoc (..), callStack, withFrozenCallStack)
 import Hegel.Database (Database (..))
 import Hegel.Internal.DatabaseKey (propKey)
+import Hegel.Internal.RunnerConfig qualified as Config
 import Hegel.Property.Internal (Property, PropertyT, hoist)
 import Hegel.Report
   ( Abort (..),
@@ -50,7 +72,6 @@ import Hegel.Report
     renderReportAuto,
   )
 import Hegel.Report.Style qualified as Style
-import Hegel.Runner (check)
 import Hegel.Settings (Settings (..), defaultSettings, withDatabaseKey)
 import System.Environment (lookupEnv)
 import System.IO (hIsTerminalDevice, stderr, stdout)
@@ -59,7 +80,7 @@ import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 
 -- | A property that takes a fixture is an hspec 'Hspec.Example', so it composes
 -- with @around@\/@aroundWith@. This path runs with 'defaultSettings' (no key,
--- no persistence); use 'prop' for keyed, persisted properties.
+-- no persistence); use 'propFor' for keyed, persisted properties.
 instance (m ~ IO) => Hspec.Example (arg -> PropertyT m ()) where
   type Arg (arg -> PropertyT m ()) = arg
   evaluateExample mkProp _params aroundAction _progress =
@@ -108,10 +129,18 @@ withAroundResult aroundAction mk = do
 -- | Check a property and render its 'Report' as an hspec 'Hspec.Result'.
 runProperty :: Settings -> Property () -> IO Hspec.Result
 runProperty settings body = do
-  report <- check settings body
-  useColor <- shouldUseColor
-  pref <- Style.preference stdout
-  toHspecResult useColor pref report
+  overrides <- Config.readOverrides
+  case overrides >>= \o -> (,o) <$> Config.resolve settings o of
+    Left message -> pure (Hspec.Result "" (Hspec.Failure Nothing (Hspec.Reason message)))
+    Right (resolved, o) -> do
+      report <- Config.execute (\_ -> pure ()) resolved o body
+      useColor <- shouldUseColor
+      pref <- Style.preference stdout
+      Hspec.Result info status <- toHspecResult useColor pref report
+      let instructions = T.unpack (Style.cleanFor pref (Config.replayInstructions False resolved o))
+      pure case status of
+        Hspec.Failure loc (Hspec.Reason reason) -> Hspec.Result info (Hspec.Failure loc (Hspec.Reason (reason <> instructions)))
+        _ -> Hspec.Result (info <> instructions) status
 
 -- | A property as a keyed hspec example: a drop-in for @it@ that derives a
 -- stable example-database key from the test's @describe@ & @it@ labels (salted
@@ -257,3 +286,36 @@ hspecLocation sl =
       Hspec.locationLine = sl.srcLocStartLine,
       Hspec.locationColumn = sl.srcLocStartCol
     }
+
+-- | Customize the persisted defaults of 'prop'.
+propModify :: (HasCallStack) => (Settings -> Settings) -> String -> Property () -> Hspec.Spec
+propModify modify = withFrozenCallStack (propWith (modify defaultSettings {database = DatabaseDefault}))
+
+-- | Run a fixture property with a key derived from its module and describe path.
+-- The fixture spans the whole run; per-case cleanup belongs in the property.
+propFor :: (HasCallStack) => String -> (fixture -> Property ()) -> Hspec.SpecWith fixture
+propFor = withFrozenCallStack (propForWith defaultSettings {database = DatabaseDefault})
+
+-- | 'propFor' with explicit settings, honoring an explicit database key.
+propForWith :: (HasCallStack) => Settings -> String -> (fixture -> Property ()) -> Hspec.SpecWith fixture
+propForWith settings label body = do
+  path <- Hspec.getSpecDescriptionPath
+  let keyed = case settings.databaseKey of
+        Just _ -> settings
+        Nothing -> withDatabaseKey (propKey callStack path label) settings
+  Hspec.it label (HegelFixture keyed body)
+
+data HegelFixture fixture = HegelFixture Settings (fixture -> Property ())
+
+instance Hspec.Example (HegelFixture fixture) where
+  type Arg (HegelFixture fixture) = fixture
+  evaluateExample (HegelFixture settings body) _params aroundAction _progress =
+    withAroundResult aroundAction (runProperty settings . body)
+
+-- | Customize the persisted defaults of 'propFor'.
+propForModify :: (HasCallStack) => (Settings -> Settings) -> String -> (fixture -> Property ()) -> Hspec.SpecWith fixture
+propForModify modify = withFrozenCallStack (propForWith (modify defaultSettings {database = DatabaseDefault}))
+
+-- | Customize the persisted defaults of 'propT'.
+propModifyT :: (HasCallStack) => (Settings -> Settings) -> (env -> forall x. m x -> IO x) -> String -> PropertyT m () -> Hspec.SpecWith env
+propModifyT modify = keyedT callStack (modify defaultSettings {database = DatabaseDefault})
