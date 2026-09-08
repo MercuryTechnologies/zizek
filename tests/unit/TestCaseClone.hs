@@ -26,6 +26,7 @@ import Hegel.Property.Internal (Env (..), askEnv)
 import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..))
 import Hegel.Settings (Settings (..), defaultSettings)
 import Test.Hspec
+import TestSupport (failureNotes, noteKind)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 intGen :: Gen Int
@@ -40,9 +41,9 @@ isOk = \case
 -- journal, in this test's case the value drawn from a clone via
 -- 'annotateShow'. Empty for any other 'Result'.
 annotatedValues :: Result -> [Text]
-annotatedValues = \case
-  Counterexample {notes} -> [n.text | n <- notes, n.kind == Annotation]
-  _ -> []
+annotatedValues result = [noteText note | note <- failureNotes result, noteKind note == Annotation]
+  where
+    noteText Note {text} = text
 
 spec :: Spec
 spec = describe "TestCase.withClone" do

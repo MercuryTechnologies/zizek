@@ -13,15 +13,16 @@ import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), midnight)
 import Hegel (prop)
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Builder (ValidationError (..), checkNonNegative, checkOrdered, checkOrderedMaybe, checkSizeBounds)
-import Hegel.Report (PropertyFailed (..))
+import Hegel.Report (PropertyFailed (..), Report (..))
 import Test.Hspec
+import TestSupport (failureMessages)
 
 -- | Does this 'PropertyFailed's message contain @needle@?
 --
 -- Builder misuse reaches 'prop' as a failing property whose message is the
 -- checker's 'displayException', so the 'Gen'-level tests match on that.
 messageContains :: T.Text -> PropertyFailed -> Bool
-messageContains needle PropertyFailed {message} = needle `T.isInfixOf` message
+messageContains needle PropertyFailed {report = Report {result}} = any (T.isInfixOf needle) (failureMessages result)
 
 spec :: Spec
 spec = do

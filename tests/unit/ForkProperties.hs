@@ -23,9 +23,10 @@ import Hegel.Property
   )
 import Hegel.Property.Branch qualified as Branch
 import Hegel.Property.Fork qualified as Fork
-import Hegel.Report (Abort (..), Note (..), Report (..), Result (..), isBranchHeader, renderReportRich)
+import Hegel.Report (Abort (..), FailureEvidence (..), Note (..), Report (..), Result (..), isBranchHeader, renderReportRich)
 import Hegel.Settings (Settings (..), defaultSettings)
 import Test.Hspec
+import TestSupport (singleReconstructedEvidence)
 import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 
 intR :: (Int, Int) -> Gen Int
@@ -79,9 +80,9 @@ spec = describe "Hegel.Property.Fork" do
       report <- check def do
         f <- Fork.spawn (assert False "fork failed")
         Fork.join f
-      case report.result of
-        Counterexample {message} -> message `shouldBe` "fork failed"
-        other -> expectationFailure ("expected Counterexample, got: " <> show other)
+      case singleReconstructedEvidence report.result of
+        Just FailureEvidence {message} -> message `shouldBe` "fork failed"
+        other -> expectationFailure ("expected failure, got: " <> show other)
 
     it "surfaces the first-joined failing fork's message deterministically" do
       -- Unlike Branch.concurrently's two-branch race, join order here is
@@ -101,8 +102,8 @@ spec = describe "Hegel.Property.Fork" do
                   _ <- Fork.join f1
                   _ <- Fork.join f2
                   pure ()
-            pure case report.result of
-              Counterexample {message} -> Just message
+            pure case singleReconstructedEvidence report.result of
+              Just FailureEvidence {message} -> Just message
               _ -> Nothing
       results <- replicateM 20 oneRun
       results `shouldSatisfy` all (== Just "first")
@@ -112,11 +113,11 @@ spec = describe "Hegel.Property.Fork" do
         f <- Fork.spawn (annotateShow (1 :: Int))
         _ <- Fork.join f
         assert False "force a counterexample so the journal renders"
-      case report.result of
-        Counterexample {notes} -> do
+      case singleReconstructedEvidence report.result of
+        Just FailureEvidence {notes} -> do
           let headers = [n.text | n <- notes, isBranchHeader n]
           headers `shouldBe` ["Fork 1"]
-        other -> expectationFailure ("expected Counterexample, got: " <> show other)
+        other -> expectationFailure ("expected failure, got: " <> show other)
 
     it "splices a fork's source into the rich report under Fork N:, distinct from Branch N:" do
       report <- check def do
@@ -252,9 +253,9 @@ spec = describe "Hegel.Property.Fork" do
     it "propagates a body failure when joined inside use" do
       report <- check def do
         Fork.scoped (assert False "scoped body failed") Fork.join
-      case report.result of
-        Counterexample {message} -> message `shouldBe` "scoped body failed"
-        other -> expectationFailure ("expected Counterexample, got: " <> show other)
+      case singleReconstructedEvidence report.result of
+        Just FailureEvidence {message} -> message `shouldBe` "scoped body failed"
+        other -> expectationFailure ("expected failure, got: " <> show other)
 
     it "yields the cancelled outcome when polled after Fork.scoped already released it" do
       report <- check def do

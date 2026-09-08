@@ -3,9 +3,12 @@
 -- the full path.
 module LogRendering (spec) where
 
+import Control.Monad (unless)
 import Data.Default.Class (def)
+import Data.Foldable (for_)
 import Data.Function ((&))
 import Data.List (nub)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Golden (shouldRenderAs)
@@ -14,6 +17,9 @@ import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, forAll, forAllWithLabel)
 import Hegel.Report
   ( Event (..),
+    FailureEvidence (..),
+    FailureEvidenceStatus (..),
+    FailureOutcome (..),
     Note (..),
     NoteKind (..),
     Operation (..),
@@ -35,6 +41,7 @@ import Hegel.Stateful qualified as Stateful
 import System.Environment (setEnv, unsetEnv)
 import System.IO (stdout)
 import Test.Hspec
+import TestSupport (allFailureOutcomes, failureResult, forRenderers, singleReconstructedEvidence)
 import TraceFixtures (eventAt, eventfulMachine, flatFixture, h1, handoffFixture, handoffTrace, header, ledgerFixture, ledgerTrace, noPoolTrace, noteAt)
 
 -- ---------------------------------------------------------------------------
@@ -292,34 +299,58 @@ spec = do
         check def do
           n <- forAllWithLabel "qty" (Gen.int & Gen.min 5 & Gen.max 5 & Gen.build)
           assert (n /= (5 :: Int)) "boom"
-      case report.result of
-        Counterexample {notes} -> fmap (.text) notes `shouldSatisfy` elem "qty=5"
+      case singleReconstructedEvidence report.result of
+        Just FailureEvidence {notes} -> fmap (.text) notes `shouldSatisfy` elem "qty=5"
         _ -> expectationFailure "expected a counterexample"
 
   describe "end to end (engine)" do
+    it "retains actual pool evidence and replay tokens across report renderers" do
+      report <- check def (Stateful.run eventfulMachine)
+      case allFailureOutcomes report.result of
+        [outcome@FailureOutcome {failureEvidence = Reconstructed FailureEvidence {events}}] -> do
+          events `shouldNotSatisfy` null
+          outcome.failureReplayToken `shouldNotBe` Nothing
+          let multiple = report {result = Failures (outcome :| [outcome])}
+          for_ [report, multiple] \base -> do
+            let actual = base {reproduction = Stored "pool-rendering"}
+            forRenderers actual \out -> do
+              for_ ["register", "v₁", "replay token:", "pool-rendering"] \needle ->
+                unless (needle `T.isInfixOf` out) (expectationFailure ("missing " <> T.unpack needle))
+              whenMultiple actual out
+        other -> expectationFailure (show other)
+
     it "a real pool machine renders an event log with a failing row" do
       report <- check def (Stateful.run eventfulMachine)
-      case report.result of
-        Counterexample {notes, events} -> do
+      case singleReconstructedEvidence report.result of
+        Just FailureEvidence {notes, events} -> do
           let trace = Trace.build notes events
               out = docToText (Layout.logDoc (defaultStyle Style.unicode) trace)
           out `shouldSatisfy` T.isInfixOf "✗"
           out `shouldSatisfy` T.isInfixOf "register"
-        other -> expectationFailure ("expected Counterexample, got: " <> show other)
+        other -> expectationFailure ("expected failure, got: " <> show other)
+
+whenMultiple :: Report -> Text -> Expectation
+whenMultiple report out =
+  if length (allFailureOutcomes report.result) > 1
+    then do
+      out `shouldSatisfy` T.isInfixOf "failure 1"
+      out `shouldSatisfy` T.isInfixOf "failure 2"
+    else pure ()
 
 -- | A synthetic stateful counterexample report over the fixture streams.
 reportOf :: [Event] -> [Note] -> Report
 reportOf events notes =
   Report
     { result =
-        Counterexample
-          { message = "read returned stale bytes",
-            notes,
-            events,
-            loc = Nothing,
-            diff = Nothing
-          },
-      stats = Stats {valid = 1, invalid = 0},
+        failureResult
+          FailureEvidence
+            { message = "read returned stale bytes",
+              notes,
+              events,
+              loc = Nothing,
+              diff = Nothing
+            },
+      stats = Stats 1 0 Nothing,
       reproduction = Unstored
     }
 

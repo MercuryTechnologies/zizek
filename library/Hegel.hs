@@ -20,6 +20,7 @@ module Hegel
     resource_,
 
     -- * Sampling
+    replay,
     sample,
     samples,
 
@@ -53,6 +54,7 @@ module Hegel
     module Hegel.Database,
     module Hegel.HealthCheck,
     module Hegel.Report,
+    module Hegel.Replay,
     module Hegel.Phase,
 
     -- * Writing properties
@@ -99,8 +101,9 @@ import Hegel.Property
     resource,
     resource_,
   )
+import Hegel.Replay
 import Hegel.Report
-import Hegel.Runner (sample, samples)
+import Hegel.Runner (replay, sample, samples)
 import Hegel.Settings
 import Hegel.Verbosity
 

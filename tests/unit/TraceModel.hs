@@ -7,11 +7,11 @@ import Data.Maybe (isJust)
 import Data.Text (Text)
 import Hegel.Report
   ( Event (..),
+    FailureEvidence (..),
     Note (..),
     NoteKind (..),
     Operation (..),
     Report (..),
-    Result (..),
     Tick (..),
     Var (..),
   )
@@ -20,6 +20,7 @@ import Hegel.Report.Trace qualified as Trace
 import Hegel.Runner (check)
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
+import TestSupport (singleReconstructedEvidence)
 import TraceFixtures (eventAt, eventfulMachine, h1, header, noteAt)
 
 -- ---------------------------------------------------------------------------
@@ -227,19 +228,19 @@ spec = do
   describe "end to end (engine)" do
     it "a real pool machine builds a trace with a failure and identities" do
       report <- check def (Stateful.run eventfulMachine)
-      case report.result of
-        Counterexample {notes, events} -> do
+      case singleReconstructedEvidence report.result of
+        Just FailureEvidence {notes, events} -> do
           let t = Trace.build notes events
           t.failure `shouldSatisfy` isJust
           t.identities `shouldSatisfy` (not . null)
-        other -> expectationFailure ("expected Counterexample, got: " <> show other)
+        other -> expectationFailure ("expected failure, got: " <> show other)
 
     it "respond reaches Step.response through a real run" do
       report <- check def (Stateful.run eventfulMachine)
-      case report.result of
-        Counterexample {notes, events} -> do
+      case singleReconstructedEvidence report.result of
+        Just FailureEvidence {notes, events} -> do
           let t = Trace.build notes events
           -- Every fired consume step declared its response.
           [s.response | s <- t.steps, s.rule == "consume"] `shouldSatisfy` all (== Just "consumed ok")
           [s | s <- t.steps, s.rule == "consume"] `shouldSatisfy` (not . null)
-        other -> expectationFailure ("expected Counterexample, got: " <> show other)
+        other -> expectationFailure ("expected failure, got: " <> show other)

@@ -3,8 +3,19 @@ module Hegel.Report
   ( -- * Reports
     Report (..),
     Result (..),
+    FailureOutcome (..),
+    FailureEvidence (..),
+    FailureEvidenceStatus (..),
+    CleanupDiagnostic (..),
+    ReplayReason (..),
+    SkipReason (..),
     Abort (..),
+    ReplayDivergence (..),
+    replayDivergenceReason,
     Stats (..),
+    pattern RunStats,
+    pattern ReplayedStats,
+    ReplayStats (..),
     Reproduction (..),
     aborted,
     throwOnFailure,
@@ -46,7 +57,9 @@ where
 
 import Control.Exception (Exception (displayException), SomeException, throwIO)
 import Data.Either (partitionEithers)
+import Data.Foldable (toList)
 import Data.List (partition)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (catMaybes, maybeToList)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -54,6 +67,7 @@ import GHC.Stack (SrcLoc (..))
 import Hegel.Diff (Diff)
 import Hegel.Internal.Event (Event (..), Operation (..), Var (..))
 import Hegel.Internal.Tick (Tick (..))
+import Hegel.Replay (ReplayToken, encodeReplayToken)
 import Hegel.Report.Ann (Ann (..), docToAnsi, docToText)
 import Hegel.Report.Concurrent (concurrentGroupsDoc)
 import Hegel.Report.Discovery (Declarations, loadDeclarations)
@@ -85,9 +99,27 @@ data Stats = Stats
     -- | How many cases were rejected as invalid (via 'Hegel.Gen.assume',
     -- 'Hegel.Gen.filtered', 'Hegel.Gen.discard', or 'Hegel.Gen.mapMaybe'
     -- exhaustion).
-    invalid :: !Int
+    invalid :: !Int,
+    -- | Accounting for an explicit replay, when this report describes one.
+    replayStats :: !(Maybe ReplayStats)
   }
   deriving stock (Show)
+
+pattern RunStats :: Int -> Int -> Stats
+pattern RunStats valid invalid = Stats valid invalid Nothing
+
+pattern ReplayedStats :: Int -> Int -> ReplayStats -> Stats
+pattern ReplayedStats valid invalid replay = Stats valid invalid (Just replay)
+
+-- | Execution counts for an explicit replay, independent of cleanup success.
+data ReplayStats = ReplayStats
+  { attempted :: !Int,
+    replayValid :: !Int,
+    replayInvalid :: !Int,
+    exhausted :: !Int,
+    reproduced :: !Int
+  }
+  deriving stock (Show, Eq)
 
 -- | What happened when a property was run, plus run statistics.
 data Report = Report
@@ -115,29 +147,86 @@ data Reproduction
 data Result
   = -- | Every attempted test case passed.
     Ok
-  | -- | A counterexample was found, described by its journal: every drawn
-    -- value and annotation recorded while re-executing the minimal failing
-    -- case.
-    Counterexample
-      { -- | The failure message: the reproducing assertion's message when
-        -- available, otherwise the engine's diagnostic or stable origin
-        -- string.
-        message :: Text,
-        -- | Journal entries describing the failing case.
-        notes :: [Note],
-        -- | Pool events recorded alongside the journal (empty when the case
-        -- used no pools); shares a clock with 'Note.clock'.
-        events :: [Event],
-        -- | Source location of the failing assertion, when known.
-        loc :: Maybe SrcLoc,
-        -- | Structural or line-level diff, when the failure came from '(===)'.
-        diff :: Maybe Diff
-      }
+  | -- | The ordered failures found by a run, retaining reconstruction status
+    -- for every engine failure.
+    Failures !(NonEmpty FailureOutcome)
   | -- | No valid examples were generated.
     GaveUp Text
   | -- | The run stopped before reaching a verdict.
     Aborted Abort
   deriving stock (Show)
+
+-- | A failure whose engine example could not be reconstructed.
+newtype ReplayDivergence = ReplayDivergence
+  { replayReason :: ReplayReason
+  }
+  deriving stock (Show, Eq)
+
+-- | Why an attempted replay did not produce its expected failure.
+data ReplayReason
+  = UnexpectedSuccess
+  | UnexpectedDiscard
+  | ExhaustedChoices
+  | ChangedOrigin !Text
+  | InvalidReplayBlob !Text
+  | MissingReplayData
+  | IncompatibleVersions {tokenVersion :: !Text, engineVersion :: !Text}
+  deriving stock (Show, Eq)
+
+-- | Why reconstruction did not run for an engine failure.
+data SkipReason = SkippedAfterCleanupFailure
+  deriving stock (Show, Eq)
+
+-- | The result of reconstructing one engine failure.
+data FailureEvidenceStatus
+  = -- | The failure replayed with its original origin.
+    Reconstructed !FailureEvidence
+  | -- | The replay was attempted but did not reproduce the expected failure.
+    Diverged !ReplayDivergence
+  | -- | Reconstruction was not attempted after an earlier replay cleanup failed.
+    Skipped !SkipReason
+  | -- | The failing case was observed live on a nondeterministic run.
+    Observed !FailureEvidence
+  deriving stock (Show)
+
+-- | One exception raised while draining a case's cleanup actions.
+newtype CleanupDiagnostic = CleanupDiagnostic
+  { cleanupMessage :: Text
+  }
+  deriving stock (Show, Eq)
+
+-- | An engine failure's identity and reconstruction diagnostic.
+data FailureOutcome = FailureOutcome
+  { failureOrigin :: !Text,
+    failureReplayToken :: !(Maybe ReplayToken),
+    failureEvidence :: !FailureEvidenceStatus,
+    cleanupDiagnostics :: ![CleanupDiagnostic]
+  }
+  deriving stock (Show)
+
+replayDivergenceReason :: ReplayDivergence -> Text
+replayDivergenceReason = renderReplayReason . (.replayReason)
+
+-- | The diagnostic payload captured from a failed property body.
+data FailureEvidence = FailureEvidence
+  { message :: !Text,
+    notes :: ![Note],
+    events :: ![Event],
+    loc :: !(Maybe SrcLoc),
+    diff :: !(Maybe Diff)
+  }
+  deriving stock (Show)
+
+renderReplayReason :: ReplayReason -> Text
+renderReplayReason = \case
+  UnexpectedSuccess -> "the replay passed instead of failing"
+  UnexpectedDiscard -> "the replay discarded instead of failing"
+  ExhaustedChoices -> "the replay exhausted its choices"
+  ChangedOrigin origin -> "replay failed at a different origin: " <> origin
+  InvalidReplayBlob detail -> "the replay token was rejected by the engine: " <> detail
+  MissingReplayData -> "the engine exposed no replay data for this failure"
+  IncompatibleVersions {tokenVersion, engineVersion} ->
+    "token was produced by libhegel " <> tokenVersion <> ", but this run uses " <> engineVersion
 
 -- | Why a run stopped without reaching a verdict.
 data Abort
@@ -145,28 +234,21 @@ data Abort
     Errored SomeException
   | -- | A health check failed before the property ran.
     UnhealthyInput Text
-  | -- | The engine reported a failure but its reproduction blob did not
-    -- re-trigger it on replay (it passed or discarded) — the stored example
-    -- may be stale, or the system under test is nondeterministic. A distinct
-    -- verdict, never conflated with an error.
-    ReplayDiverged Text
   deriving stock (Show)
 
 -- | A report for a run that stopped before any test case could run.
 aborted :: Abort -> Report
-aborted a = Report {result = Aborted a, stats = Stats {valid = 0, invalid = 0}, reproduction = Unstored}
+aborted a = Report {result = Aborted a, stats = Stats {valid = 0, invalid = 0, replayStats = Nothing}, reproduction = Unstored}
 
 -- | Throw on anything other than 'Ok': 'PropertyFailed' on a counterexample,
 -- the original exception on 'Errored', and 'fail' otherwise.
 throwOnFailure :: Report -> IO ()
 throwOnFailure report = case report.result of
   Ok -> pure ()
-  Counterexample {message, notes, loc, diff} ->
-    throwIO PropertyFailed {message, notes, loc, diff, reproduction = report.reproduction}
+  Failures {} -> throwIO (PropertyFailed report)
   GaveUp msg -> fail ("Property rejected all inputs: " <> show msg)
   Aborted (Errored exc) -> throwIO exc
   Aborted (UnhealthyInput msg) -> fail ("Health check failed: " <> show msg)
-  Aborted (ReplayDiverged msg) -> fail ("Replay diverged: " <> show msg)
 
 -- * Pure rendering (always succeeds, no IO)
 
@@ -183,9 +265,7 @@ renderReportAnsi = docToAnsi . reportDoc
 renderFailure :: Text -> [Note] -> Maybe SrcLoc -> Maybe Diff -> Reproduction -> Text
 renderFailure message notes loc diff reproduction = docToText (withFooter Style.english reproduction body)
   where
-    -- In-band journals suppress the headline in 'failureDoc'; the report
-    -- renderers substitute @"failed after N tests"@, but 'PropertyFailed''s
-    -- 'displayException' has no such summary, so restore the headline here.
+    -- In-band journals retain their own failure headline.
     body
       | hasInBandFailure notes = PP.vsep [headlineDoc message, failureDoc message notes loc diff]
       | otherwise = failureDoc message notes loc diff
@@ -234,25 +314,15 @@ renderRichImpl style plain toText report = do
   pure case mdoc of
     Nothing -> plain report
     Just body ->
-      toText (withFooter style.phrases report.reproduction (PP.vsep ["failed after" <+> statsDoc report.stats, body]))
+      toText (withFooter style.phrases report.reproduction (PP.vsep [failureSummary report, body]))
 
--- | Attempt to build the rich failure doc, falling back to 'Nothing' when the
--- result is not a counterexample or no declaration could be read for any
--- location. 'classifyJournal' picks the layout. A step-structured, stateful
--- failure composes the same way whether or not it touched a pool. A
--- concurrent-combinator failure splices its branches, see 'composedConcurrent'.
--- Anything else is a plain top-level property.
+-- | Render every failure outcome with source-aware evidence where available.
 richDoc :: Style -> Report -> IO (Maybe (Doc Ann))
 richDoc style report = case report.result of
-  Counterexample {message, notes, events, loc, diff} -> case classifyJournal notes of
-    StatefulShape -> do
-      decls <- loadDeclarations (noteFiles notes)
-      let trace = Trace.build notes events
-      pure (Just (composed style decls trace notes message loc diff))
-    ConcurrentShape -> do
-      decls <- loadDeclarations (noteFiles notes)
-      pure (composedConcurrent style.phrases decls notes message loc diff)
-    PlainShape -> plainRichDoc message notes loc diff
+  Failures outcomes -> do
+    let total = length (toList outcomes)
+    rendered <- traverse (\(index, outcome) -> failureRichOutcomeDoc style total index outcome) (zip [1 :: Int ..] (toList outcomes))
+    pure (Just (PP.vsep rendered))
   _ -> pure Nothing
 
 -- | Assemble a stateful failure report from its sections, rendered in order
@@ -359,16 +429,55 @@ reportDoc report = case report.result of
   GaveUp msg -> "gave up after" <+> statsDoc report.stats <> ":" <+> PP.pretty msg
   Aborted (Errored e) -> "aborted:" <+> PP.pretty (displayException e)
   Aborted (UnhealthyInput msg) -> "aborted: health check failed:" <+> PP.pretty msg
-  Aborted (ReplayDiverged msg) -> "aborted: replay diverged:" <+> PP.pretty msg
-  Counterexample {message, notes, loc, diff} ->
+  Failures outcomes ->
     withFooter
       Style.english
       report.reproduction
-      ( PP.vsep
-          [ "failed after" <+> statsDoc report.stats,
-            failureDoc message notes loc diff
-          ]
-      )
+      (PP.vsep (failureSummary report : rendered))
+    where
+      rendered = zipWith (renderOutcome (length (toList outcomes))) [1 :: Int ..] (toList outcomes)
+
+failureSummary :: Report -> Doc Ann
+failureSummary report = case report.result of
+  Failures (outcome :| [])
+    | Just accounting <- report.stats.replayStats ->
+        PP.vsep [replaySummary outcome.failureEvidence, replayStatsDoc accounting]
+    | otherwise -> singletonSummary outcome.failureEvidence <+> "after" <+> statsDoc report.stats
+  Failures outcomes ->
+    "failed with" <+> PP.hsep (PP.punctuate "," (categories outcomes)) <+> "after" <+> statsDoc report.stats
+  _ -> "failed after" <+> statsDoc report.stats
+  where
+    categories :: NonEmpty FailureOutcome -> [Doc Ann]
+    categories outcomes =
+      [ PP.pretty n <+> label
+      | (n, label) <-
+          [ (length [() | Reconstructed _ <- statuses outcomes], "reconstructed"),
+            (length [() | Observed _ <- statuses outcomes], "observed"),
+            (length [() | Diverged _ <- statuses outcomes], "divergent"),
+            (length [() | Skipped _ <- statuses outcomes], "skipped")
+          ],
+        n > 0
+      ]
+    statuses :: NonEmpty FailureOutcome -> [FailureEvidenceStatus]
+    statuses = fmap (.failureEvidence) . toList
+
+singletonSummary :: FailureEvidenceStatus -> Doc Ann
+singletonSummary = \case
+  Diverged _ -> "failure reconstruction diverged"
+  Skipped _ -> "failure reconstruction skipped"
+  _ -> "failed"
+
+replaySummary :: FailureEvidenceStatus -> Doc Ann
+replaySummary = \case
+  Reconstructed _ -> "replay reproduced the failure"
+  Observed _ -> "replay observed a failure"
+  Skipped _ -> "replay was skipped"
+  Diverged (ReplayDivergence reason) -> case reason of
+    UnexpectedSuccess -> "replay passed instead of failing"
+    UnexpectedDiscard -> "replay discarded instead of failing"
+    ExhaustedChoices -> "replay exhausted its choices"
+    ChangedOrigin _ -> "replay failed at a different origin"
+    _ -> "replay was not executed"
 
 -- | The headline @message@ line of a failure report.
 headlineDoc :: Text -> Doc Ann
@@ -380,31 +489,109 @@ failureDoc message notes loc diff
   | hasInBandFailure notes = PP.vsep (journalDocs notes)
   | otherwise = PP.vsep (headlineBlock message diff loc <> journalDocs notes)
 
+-- | Render pool evidence together with the failure journal.
+failureEventsDoc :: Text -> [Note] -> [Event] -> Maybe SrcLoc -> Maybe Diff -> Doc Ann
+failureEventsDoc message notes events loc diff
+  | null events = failureDoc message notes loc diff
+  | otherwise = case classifyJournal notes of
+      StatefulShape -> composed (defaultStyle Style.unicode) mempty (Trace.build notes events) notes message loc diff
+      ConcurrentShape -> failureDoc message notes loc diff
+      PlainShape -> failureDoc message notes loc diff
+
+renderFailureEvidence :: FailureEvidence -> Doc Ann
+renderFailureEvidence evidence =
+  failureEventsDoc evidence.message evidence.notes evidence.events evidence.loc evidence.diff
+
+renderOutcome :: Int -> Int -> FailureOutcome -> Doc Ann
+renderOutcome total i outcome =
+  outcomeFrame total i outcome (renderEvidence outcome.failureEvidence)
+
+outcomeFrame :: Int -> Int -> FailureOutcome -> Doc Ann -> Doc Ann
+outcomeFrame total i outcome body =
+  withCleanupDiagnostics
+    outcome.cleanupDiagnostics
+    ( if total == 1
+        then PP.vsep [body, maybe mempty replayTokenDoc outcome.failureReplayToken]
+        else PP.vsep [outcomeHeading total i outcome, body, maybe mempty replayTokenDoc outcome.failureReplayToken]
+    )
+
+outcomeHeading :: Int -> Int -> FailureOutcome -> Doc Ann
+outcomeHeading total index outcome
+  | total == 1 = mempty
+  | otherwise = PP.annotate MessageAnn (PP.pretty ("failure " <> T.pack (show index) <> status))
+  where
+    status = case outcome.failureEvidence of
+      Reconstructed _ -> ""
+      Observed _ -> " (observed)"
+      Diverged _ -> " (replay diverged)"
+      Skipped _ -> " (replay skipped)"
+
+renderEvidence :: FailureEvidenceStatus -> Doc Ann
+renderEvidence = \case
+  Reconstructed evidence -> renderFailureEvidence evidence
+  Observed evidence -> renderFailureEvidence evidence
+  Diverged divergence -> PP.pretty (replayDivergenceReason divergence)
+  Skipped SkippedAfterCleanupFailure -> "reconstruction skipped after replay cleanup failed"
+
+withCleanupDiagnostics :: [CleanupDiagnostic] -> Doc Ann -> Doc Ann
+withCleanupDiagnostics diagnostics body = case diagnostics of
+  [] -> body
+  xs -> PP.vsep [body, PP.vsep [PP.annotate NoteAnn (PP.pretty ("cleanup: " <> d.cleanupMessage)) | d <- xs]]
+
+replayTokenDoc :: ReplayToken -> Doc Ann
+replayTokenDoc token =
+  PP.vsep
+    [ PP.annotate LocAnn (PP.pretty ("replay token: " <> encodeReplayToken token)),
+      PP.annotate LocAnn "decode with Hegel.decodeReplayToken, then run Hegel.replay settings token property"
+    ]
+
+failureRichDoc :: Style -> FailureEvidence -> IO (Doc Ann)
+failureRichDoc style evidence = do
+  body <- case classifyJournal evidence.notes of
+    StatefulShape -> do
+      decls <- loadDeclarations (noteFiles evidence.notes)
+      let trace = Trace.build evidence.notes evidence.events
+      pure (composed style decls trace evidence.notes evidence.message evidence.loc evidence.diff)
+    ConcurrentShape -> do
+      decls <- loadDeclarations (noteFiles evidence.notes)
+      pure (maybe (failureDoc evidence.message evidence.notes evidence.loc evidence.diff) id (composedConcurrent style.phrases decls evidence.notes evidence.message evidence.loc evidence.diff))
+    PlainShape -> do
+      mdoc <- plainRichDoc evidence.message evidence.notes evidence.loc evidence.diff
+      pure (maybe (failureDoc evidence.message evidence.notes evidence.loc evidence.diff) id mdoc)
+  pure body
+
+failureRichOutcomeDoc :: Style -> Int -> Int -> FailureOutcome -> IO (Doc Ann)
+failureRichOutcomeDoc style total index outcome = do
+  body <- case outcome.failureEvidence of
+    Reconstructed evidence -> failureRichDoc style evidence
+    Observed evidence -> failureRichDoc style evidence
+    status -> pure (renderEvidence status)
+  pure (outcomeFrame total index outcome body)
+
 statsDoc :: Stats -> Doc Ann
 statsDoc stats
+  | Just replay <- stats.replayStats = replayStatsDoc replay
   | stats.invalid == 0 = PP.pretty stats.valid <+> "tests"
   | otherwise =
       PP.pretty stats.valid <+> "tests" <+> PP.parens (PP.pretty stats.invalid <+> "discarded")
 
+replayStatsDoc :: ReplayStats -> Doc Ann
+replayStatsDoc replay =
+  PP.hsep (PP.punctuate "," ([PP.pretty replay.attempted <+> "attempted"] <> details))
+  where
+    details =
+      [ PP.pretty n <+> label
+      | (n, label) <- [(replay.replayValid, "passed"), (replay.replayInvalid, "discarded"), (replay.exhausted, "exhausted"), (replay.reproduced, "reproduced")],
+        n > 0
+      ]
+
 -- * Exceptions
 
--- | Counterexample wrapped for throwing from 'Hegel.prop' and
--- 'Hegel.Property.check_'. Carries the failure message, its source location,
--- the journal describing the failing case, and the diff (if any).
-data PropertyFailed = PropertyFailed
-  { -- | The failure message.
-    message :: Text,
-    -- | Journal entries describing the failing case.
-    notes :: [Note],
-    -- | Source location of the failing assertion, when known.
-    loc :: Maybe SrcLoc,
-    -- | Structural or line-level diff, when the failure came from '(===)'.
-    diff :: Maybe Diff,
-    -- | Where this failure can be found again, if it is reproducible.
-    reproduction :: !Reproduction
+-- | The complete failure report thrown by 'Hegel.prop' and 'Hegel.Property.check_'.
+newtype PropertyFailed = PropertyFailed
+  { report :: Report
   }
   deriving stock (Show)
 
 instance Exception PropertyFailed where
-  displayException f =
-    T.unpack $ renderFailure ("property failed: " <> f.message) f.notes f.loc f.diff f.reproduction
+  displayException = T.unpack . renderReport . (.report)

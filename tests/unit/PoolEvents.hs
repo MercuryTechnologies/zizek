@@ -8,26 +8,27 @@ import Data.List (nub, sort)
 import Hegel.Property (assert)
 import Hegel.Report
   ( Event (..),
+    FailureEvidence (..),
     Note (..),
     Operation (..),
     Report (..),
-    Result (..),
     Tick (..),
     isDrawn,
   )
 import Hegel.Runner (check)
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
+import TestSupport (singleReconstructedEvidence)
 import TraceFixtures (eventfulMachine)
 
 -- | Run 'eventfulMachine' to a counterexample and hand its journal and event
 -- stream to the assertion body.
-withEventfulCounterexample :: ([Note] -> [Event] -> Expectation) -> Expectation
-withEventfulCounterexample body = do
+withEventfulFailure :: ([Note] -> [Event] -> Expectation) -> Expectation
+withEventfulFailure body = do
   report <- check def (Stateful.run eventfulMachine)
-  case report.result of
-    Counterexample {notes, events} -> body notes events
-    other -> expectationFailure ("expected Counterexample, got: " <> show other)
+  case singleReconstructedEvidence report.result of
+    Just FailureEvidence {notes, events} -> body notes events
+    other -> expectationFailure ("expected failure, got: " <> show other)
 
 clocks :: [Event] -> [Tick]
 clocks = fmap (.clock)
@@ -35,19 +36,19 @@ clocks = fmap (.clock)
 spec :: Spec
 spec = describe "pool-event stream" do
   it "records all three event kinds for the eventful counterexample" do
-    withEventfulCounterexample \_notes events -> do
+    withEventfulFailure \_notes events -> do
       let kinds = fmap (.kind) events
       kinds `shouldSatisfy` any (\case Born _ -> True; _ -> False)
       kinds `shouldSatisfy` elem Reused
       kinds `shouldSatisfy` elem Consumed
 
   it "event clocks are strictly increasing" do
-    withEventfulCounterexample \_notes events -> do
+    withEventfulFailure \_notes events -> do
       let cs = clocks events
       cs `shouldSatisfy` \xs -> and (zipWith (<) xs (drop 1 xs))
 
   it "Born precedes every draw of the same value; Consumed is terminal" do
-    withEventfulCounterexample \_notes events -> do
+    withEventfulFailure \_notes events -> do
       -- (poolId, vid) pair.
       let refs = nub [e.var | e <- events]
           lifeOf ref = [e | e <- events, e.var == ref]
@@ -65,7 +66,7 @@ spec = describe "pool-event stream" do
         ]
 
   it "every pool draw's event immediately precedes its Drawn note (clock adjacency)" do
-    withEventfulCounterexample \notes events -> do
+    withEventfulFailure \notes events -> do
       let drawnClocks = [n.clock | n <- notes, isDrawn n.kind]
       sequence_
         [ succ e.clock `shouldSatisfy` (`elem` drawnClocks)
@@ -74,7 +75,7 @@ spec = describe "pool-event stream" do
         ]
 
   it "notes and events share one clock (no duplicate stamps across streams)" do
-    withEventfulCounterexample \notes events -> do
+    withEventfulFailure \notes events -> do
       let merged = sort (clocks events <> fmap (.clock) notes)
       merged `shouldSatisfy` \xs -> and (zipWith (<) xs (drop 1 xs))
 
@@ -90,6 +91,6 @@ spec = describe "pool-event stream" do
                 ]
             }
     report <- check def (Stateful.run machine)
-    case report.result of
-      Counterexample {events} -> events `shouldBe` []
-      other -> expectationFailure ("expected Counterexample, got: " <> show other)
+    case singleReconstructedEvidence report.result of
+      Just FailureEvidence {events} -> events `shouldBe` []
+      other -> expectationFailure ("expected failure, got: " <> show other)

@@ -16,11 +16,12 @@ import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, assume, forAll, forAllSilent)
-import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), isFailureNote, renderReportRich)
+import Hegel.Report (FailureEvidence (..), Note (..), NoteKind (..), Report (..), Result (..), isFailureNote, renderReportRich)
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..))
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
+import TestSupport (expectReconstructed, singleReconstructedEvidence)
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -113,7 +114,7 @@ poolSpec = describe "Pool" do
     -- Every case is discarded, so we expect GaveUp (all Invalid), never a failure.
     case report.result of
       GaveUp _ -> pure ()
-      Counterexample {} -> expectationFailure "expected GaveUp, got a counterexample"
+      Failures _ -> expectationFailure "expected GaveUp, got a failure"
       other -> expectationFailure ("expected GaveUp (all invalid), got: " <> show other)
 
   it "reuse returns an added value without removing it" do
@@ -166,14 +167,10 @@ statefulSpec = describe "Machine" do
               invariants = [neverAboveFive]
             }
     report <- check def (Stateful.run machine)
-    case report.result of
-      Counterexample {} -> pure ()
-      other -> expectationFailure ("expected Counterexample, got: " <> show other)
+    evidence <- expectReconstructed report.result
+    evidence.message `shouldBe` "counter does not exceed 5"
 
   it "a counterexample past step 50 under a higher statefulStepCount still reconstructs" do
-    -- libhegel 0.33's round-based state-machine protocol resolved the
-    -- upstream replay bug this pinned: a failure past step 50 under a
-    -- higher count now reproduces on replay like any other counterexample.
     let neverAbove150 :: Stateful.Invariant Counter IO
         neverAbove150 =
           Stateful.Invariant "never_above_150" \(Counter n) ->
@@ -185,9 +182,8 @@ statefulSpec = describe "Machine" do
               invariants = [neverAbove150]
             }
     report <- check def {statefulStepCount = 200} (Stateful.run machine)
-    case report.result of
-      Counterexample {} -> pure ()
-      other -> expectationFailure ("expected Counterexample, got: " <> show other)
+    evidence <- expectReconstructed report.result
+    evidence.message `shouldBe` "counter does not exceed 150"
 
   it "machinery annotations carry no source location" do
     -- The 'Step N: ...' / invariant-check annotations are emitted by
@@ -201,8 +197,8 @@ statefulSpec = describe "Machine" do
               invariants = [neverAboveFive]
             }
     report <- check def (Stateful.run machine)
-    case report.result of
-      Counterexample {notes} -> do
+    case singleReconstructedEvidence report.result of
+      Just FailureEvidence {notes} -> do
         let machinery = [n | n <- notes, isMachinery n.kind]
             isMachinery = \case
               Annotation -> True
@@ -211,7 +207,7 @@ statefulSpec = describe "Machine" do
         machinery `shouldNotSatisfy` null
         [n | n <- machinery, StepHeader _ _ <- [n.kind]] `shouldNotSatisfy` null
         machinery `shouldSatisfy` all (isNothing . (.loc))
-      other -> expectationFailure ("expected Counterexample, got: " <> show other)
+      other -> expectationFailure ("expected failure, got: " <> show other)
 
   it "journals the failing assertion in-band as a nested Failure note" do
     -- End-to-end: the caught failure is journaled in-band and still re-thrown,
@@ -223,15 +219,15 @@ statefulSpec = describe "Machine" do
               invariants = [neverAboveFive]
             }
     report <- check def (Stateful.run machine)
-    case report.result of
-      Counterexample {notes} ->
+    case singleReconstructedEvidence report.result of
+      Just FailureEvidence {notes} ->
         case filter isFailureNote notes of
           [f] -> do
             f.text `shouldBe` "counter does not exceed 5"
             f.depth `shouldBe` 1
             f.loc `shouldSatisfy` (not . isNothing)
           fs -> expectationFailure ("expected exactly one Failure note, got: " <> show (length fs))
-      other -> expectationFailure ("expected Counterexample, got: " <> show other)
+      other -> expectationFailure ("expected failure, got: " <> show other)
 
   it "rich report splices the failing invariant's source" do
     -- End-to-end through 'renderReportRich': the failing step's notes splice
@@ -250,10 +246,7 @@ statefulSpec = describe "Machine" do
     ("┏━━ tests/unit/Stateful.hs" `T.isInfixOf` rich) `shouldBe` True
 
   it "value-drawing counterexample reproduces on replay" do
-    -- Regression guard for choice-sequence alignment: with multiple rules that
-    -- draw values, the counterexample only reproduces if replay stays byte-
-    -- aligned with generation. A misalignment surfaces here as 'Aborted' (the
-    -- failure did not recur on replay), not 'Counterexample'.
+    -- Multiple drawing rules require choice alignment during reconstruction.
     let machine =
           Stateful.Machine
             { initial = pure (Stack []),
@@ -261,9 +254,8 @@ statefulSpec = describe "Machine" do
               invariants = []
             }
     report <- check def (Stateful.run machine)
-    case report.result of
-      Counterexample {} -> pure ()
-      other -> expectationFailure ("expected Counterexample, got: " <> show other)
+    evidence <- expectReconstructed report.result
+    evidence.notes `shouldNotSatisfy` null
 
   it "machine with no rules is aborted, not reported as a counterexample" do
     let machine :: Stateful.Machine Counter IO

@@ -159,25 +159,25 @@ instance Exception MalformedTest where
 -- The runner drains finalizers /outside/ the per-case classifier and lets this
 -- escape to 'Hegel.Runner.check', which reports it as 'Hegel.Report.Aborted'.
 --
--- This exception carries the origin text from a failed property run, if one
--- occurred at the time the finalizer was run, so the report doesn't hide that
--- a property failure was in-hand. When a database is enabled the engine has
+-- This exception carries the body exception from a failed property run, if one
+-- occurred at the time the finalizer was run, so the report retains its
+-- diagnostic. When a database is enabled the engine has
 -- already persisted that counterexample's reproduction blob (inside
 -- @markComplete@, before the drain runs), so the next run replays it; under the
 -- default settings (database disabled) the drawn values are not recoverable.
-data FinalizerFailed = FinalizerFailed (Maybe Text) [SomeException]
+data FinalizerFailed = FinalizerFailed (Maybe SomeException) [SomeException]
 
 instance Show FinalizerFailed where
-  show (FinalizerFailed origin es) =
-    "FinalizerFailed " <> show origin <> " " <> show (map displayException es)
+  show (FinalizerFailed body es) =
+    "FinalizerFailed " <> show (displayException <$> body) <> " " <> show (map displayException es)
 
 instance Exception FinalizerFailed where
-  displayException (FinalizerFailed origin es) =
+  displayException (FinalizerFailed body es) =
     "finalizer(s) failed: "
       <> intercalate "; " (map displayException es)
-      <> case origin of
+      <> case body of
         Nothing -> ""
-        Just o -> " (the case had already failed at " <> T.unpack o <> ")"
+        Just e -> " (the case body failed: " <> displayException e <> ")"
 
 -- | Is this exception one of Hegel's control signals ('AssumeRejected',
 -- 'TestStopped', 'LeafBudgetExceeded', or 'AttemptMispriced')?

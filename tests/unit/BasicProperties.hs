@@ -6,10 +6,11 @@ import Hegel (Gen, prop)
 import Hegel.Gen qualified as Gen
 import Hegel.Phase (Phase (..))
 import Hegel.Property (check_, forEach)
-import Hegel.Report (Note (..), Report (..), Result (..), isDrawn)
+import Hegel.Report (Report (..), isDrawn)
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..), defaultSettings)
 import Test.Hspec
+import TestSupport (failureNotes, noteKind, noteText)
 
 intR :: (Int, Int) -> Gen Int
 intR (lo, hi) = Gen.integral & Gen.min lo & Gen.max hi & Gen.build
@@ -23,10 +24,7 @@ spec = do
   it "shrinks to the smallest forbidden value" $ do
     report <- check def $ forEach (intR (0, 100)) $ \n ->
       n `shouldSatisfy` (< 42)
-    case report.result of
-      Counterexample {notes} ->
-        fmap (.text) (filter (\n -> isDrawn n.kind) notes) `shouldBe` ["42"]
-      other -> expectationFailure ("expected a counterexample, got: " <> show other)
+    fmap noteText (filter (isDrawn . noteKind) (failureNotes report.result)) `shouldBe` ["42"]
 
   it "honors phases = [Generate]" $ do
     check_ (defaultSettings {phases = [Generate]}) $ forEach (intR (0, 100)) $ \n ->

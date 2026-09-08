@@ -3,7 +3,7 @@ module Resources (spec) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (displayException, fromException)
-import Control.Monad (when)
+import Control.Monad (void, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Default.Class (def)
 import Data.Text (Text)
@@ -23,6 +23,7 @@ import Hegel.Report (Abort (..), Report (..), Result (..))
 import Hegel.Settings (Settings (..), defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
+import TestSupport (expectReconstructed)
 import UnliftIO.Exception (throwIO)
 import UnliftIO.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 
@@ -103,9 +104,7 @@ spec = describe "resource" do
               invariants = [neverAboveFive]
             }
     report <- check def (Stateful.run machine)
-    case report.result of
-      Counterexample {} -> pure ()
-      other -> expectationFailure ("expected Counterexample, got: " <> show other)
+    void (expectReconstructed report.result)
     o <- readIORef opened
     c <- readIORef closed
     o `shouldSatisfy` (> 0)

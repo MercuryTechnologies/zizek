@@ -151,10 +151,9 @@ summary scenario cases report =
 resultTag :: Result -> Text
 resultTag = \case
   Ok -> "Ok"
-  Counterexample {} -> "Counterexample"
+  Failures {} -> "Failures"
   GaveUp why -> "GaveUp (" <> why <> ")"
   Aborted (UnhealthyInput why) -> "Aborted (UnhealthyInput: " <> why <> ")"
-  Aborted (ReplayDiverged why) -> "Aborted (ReplayDiverged: " <> why <> ")"
   Aborted (Errored e) -> "Aborted (Errored: " <> T.pack (displayException e) <> ")"
 
 tshow :: (Show a) => a -> Text

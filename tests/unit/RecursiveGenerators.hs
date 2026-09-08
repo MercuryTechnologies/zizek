@@ -5,6 +5,7 @@
 module RecursiveGenerators (spec) where
 
 import Control.Exception (throwIO)
+import Control.Monad (void)
 import Data.Default.Class (def)
 import Data.Function ((&))
 import Data.Word (Word64)
@@ -13,9 +14,10 @@ import Hegel.Gen qualified as Gen
 import Hegel.Gen.Recursive (retryLoopWith)
 import Hegel.Internal.Control (AttemptMispriced (..), LeafBudgetExceeded (..))
 import Hegel.Property (check, check_, forEach)
-import Hegel.Report (Report (..), Result (..))
+import Hegel.Report (Report (..))
 import Hegel.Settings (Settings (..))
 import Test.Hspec
+import TestSupport (expectReconstructed)
 import UnliftIO.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 
 -- | A tree whose branches hold a variable number of children, built through
@@ -119,27 +121,24 @@ spec = describe "Gen.recursive" $ do
     report <- check def $ forEach (trees & Gen.build) $ \t -> do
       writeIORef capture t
       expectationFailure "always fails, to drive shrinking to the global minimum"
-    case report.result of
-      Counterexample {} -> readIORef capture >>= (`shouldBe` Leaf 0)
-      other -> expectationFailure ("expected a counterexample, got: " <> show other)
+    void (expectReconstructed report.result)
+    readIORef capture `shouldReturn` Leaf 0
 
   it "shrinks a branch predicate to the smallest branch" $ do
     capture <- newIORef (Branch [])
     report <- check def $ forEach (trees & Gen.build) $ \t -> do
       writeIORef capture t
       isTreeBranch t `shouldBe` False
-    case report.result of
-      Counterexample {} -> readIORef capture >>= (`shouldBe` Branch [])
-      other -> expectationFailure ("expected a counterexample, got: " <> show other)
+    void (expectReconstructed report.result)
+    readIORef capture `shouldReturn` Branch []
 
   it "hoists a deep witness toward the root instead of only shrinking leaves in place" $ do
     capture <- newIORef (ILeaf 0)
     report <- check def $ forEach (intTrees & Gen.maxDepth 3 & Gen.build) $ \t -> do
       writeIORef capture t
       hasOddLeafPair t `shouldBe` False
-    case report.result of
-      Counterexample {} -> readIORef capture >>= (`shouldBe` IBranch (ILeaf 1) (ILeaf 1))
-      other -> expectationFailure ("expected a counterexample, got: " <> show other)
+    void (expectReconstructed report.result)
+    readIORef capture `shouldReturn` IBranch (ILeaf 1) (ILeaf 1)
 
   -- Binary branches always draw exactly two children, so almost every
   -- generation attempt against a leaf budget this tight overruns it and
@@ -152,9 +151,8 @@ spec = describe "Gen.recursive" $ do
     report <- check def $ forEach (binTrees & Gen.maxLeaves 3 & Gen.build) $ \t -> do
       writeIORef capture t
       binLeafCount t `shouldSatisfy` (< 2)
-    case report.result of
-      Counterexample {} -> readIORef capture >>= (`shouldBe` BBranch BLeaf BLeaf)
-      other -> expectationFailure ("expected a counterexample, got: " <> show other)
+    void (expectReconstructed report.result)
+    readIORef capture `shouldReturn` BBranch BLeaf BLeaf
 
   -- 'retryLoopWith' drives the asymmetry directly, with no engine needed:
   -- neither retry signal has a settings knob or other deterministic trigger

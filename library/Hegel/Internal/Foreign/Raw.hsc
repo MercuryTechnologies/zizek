@@ -253,6 +253,7 @@ module Hegel.Internal.Foreign.Raw
     withSlotBytes,
     failureReproductionBlob,
     withTestCaseFromBlob,
+    testCaseFromBlob,
   )
 where
 
@@ -1733,15 +1734,14 @@ withTestCaseFromBlob
   -> (Ptr HegelTestCase -> IO a)
   -> IO a
 withTestCaseFromBlob ctx s blob action =
-  BS.useAsCString blob $ \blobPtr ->
-    bracket (acquire blobPtr) release action
-  where
-    acquire blobPtr = alloca $ \out -> do
-      rc <- hegel_test_case_from_blob ctx s blobPtr nullFunPtr nullPtr out
-      if rc == HEGEL_OK
-        then peek out
-        else lastErrorMessage ctx >>= \msg -> throwIO HegelError {code = rc, message = msg}
-    release tc = void (hegel_test_case_free ctx tc)
+  bracket (testCaseFromBlob ctx s blob) (void . hegel_test_case_free ctx) action
+
+-- | Acquire a replay handle that the caller must free with 'hegel_test_case_free'.
+testCaseFromBlob :: Ptr HegelContext -> Ptr HegelSettings -> ByteString -> IO (Ptr HegelTestCase)
+testCaseFromBlob ctx s blob =
+  BS.useAsCString blob $ \blobPtr -> alloca $ \out -> do
+    throwOnError ctx =<< hegel_test_case_from_blob ctx s blobPtr nullFunPtr nullPtr out
+    peek out
 
 -- | Reusable pinned block that a test case's per-call out-parameters write
 -- through, in place of a fresh 'alloca' every call. Covers single-word

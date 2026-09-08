@@ -132,6 +132,8 @@ library
     Hegel.Internal.Event
     Hegel.Internal.Foreign.CString
     Hegel.Internal.Foreign.Raw
+    Hegel.Internal.Reconstruction
+    Hegel.Internal.Replay
     Hegel.Internal.StatefulRound
     Hegel.Internal.TestCase
     Hegel.Internal.Tick
@@ -141,6 +143,7 @@ library
     Hegel.Property.Branch
     Hegel.Property.Fork
     Hegel.Property.Internal
+    Hegel.Replay
     Hegel.Report
     Hegel.Report.Ann
     Hegel.Report.Concurrent
@@ -237,10 +240,12 @@ test-suite unit
     Stateful
     StatefulRoundInternal
     TestCaseClone
+    TestSupport
     TraceFixtures
     TraceModel
 
   build-depends:
+    filepath ^>=1.5,
     hspec ^>=2.11,
     tasty-hspec ^>=1.2,
     zizek,

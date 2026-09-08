@@ -17,7 +17,7 @@ import Hegel.Gen qualified as Gen
 import Hegel.Internal.Control (MalformedTest (..))
 import Hegel.Property (assert, assume, forAll, resource, (===))
 import Hegel.Property.Fork qualified as Fork
-import Hegel.Report (Abort (..), Note (..), NoteKind (Annotation, StepHeader, StepOrigin), Report (..), Reproduction (..), Result (..), Stats (..), renderReport, renderReportRich)
+import Hegel.Report (Abort (..), FailureEvidence (..), FailureOutcome (..), Note (..), NoteKind (Annotation, StepHeader, StepOrigin), Report (..), Reproduction (..), Result (..), Stats (..), renderReport, renderReportRich)
 import Hegel.Report.Trace (Step (..), Trace (..))
 import Hegel.Report.Trace qualified as Trace
 import Hegel.Runner (check)
@@ -25,6 +25,7 @@ import Hegel.Settings (Settings (..))
 import Hegel.Stateful.Concurrent qualified as Concurrent
 import System.Timeout (timeout)
 import Test.Hspec
+import TestSupport (allFailureOutcomes, expectObserved, expectReconstructed, singleObservedEvidence, singleReconstructedEvidence)
 import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
@@ -38,11 +39,6 @@ newtype Counter = Counter Int
 isOk :: Result -> Bool
 isOk = \case
   Ok -> True
-  _ -> False
-
-isCounterexample :: Result -> Bool
-isCounterexample = \case
-  Counterexample {} -> True
   _ -> False
 
 -- | Whether a report aborted with a 'MalformedTest' whose message contains
@@ -141,7 +137,8 @@ behaviorSpec = describe "run (behavior)" do
             assert (n /= 42) "n is not 42"
         machine = Concurrent.Machine {initial = pure (Counter 0), rules = [failing], invariants = []}
     report <- check def {testCases = 200} (Concurrent.run (Concurrent.fixed 1) machine)
-    report.result `shouldSatisfy` isCounterexample
+    evidence <- expectReconstructed report.result
+    evidence.message `shouldBe` "n is not 42"
     report.stats.invalid `shouldBe` 0
 
   it "an invariant failure at a join point surfaces as a counterexample" do
@@ -159,7 +156,8 @@ behaviorSpec = describe "run (behavior)" do
               invariants = [neverAboveThree]
             }
     report <- check def {statefulStepCount = 10} (Concurrent.run (Concurrent.fixed 1) machine)
-    report.result `shouldSatisfy` isCounterexample
+    evidence <- expectReconstructed report.result
+    evidence.message `shouldBe` "counter stays small"
 
   it "attaches a join-point invariant failure to the round, not to the last worker step" do
     let bump :: Concurrent.Rule (IORef Int) IO
@@ -176,8 +174,8 @@ behaviorSpec = describe "run (behavior)" do
               invariants = [neverAboveThree]
             }
     report <- check def {statefulStepCount = 10} (Concurrent.run (Concurrent.fixed 1) machine)
-    case report.result of
-      Counterexample {notes, events} ->
+    case singleReconstructedEvidence report.result of
+      Just FailureEvidence {notes, events} ->
         let trace = Trace.build notes events
          in case trace.failure >>= Trace.step trace . (.step) of
               Nothing -> expectationFailure "expected the trace to locate the failing step"
@@ -185,7 +183,7 @@ behaviorSpec = describe "run (behavior)" do
               -- synthetic step rather than trail whichever worker step
               -- 'foldWorkerRound' happened to fold last.
               Just failingStep -> failingStep.rule `shouldSatisfy` ("invariant check" `T.isInfixOf`)
-      other -> expectationFailure ("expected Counterexample, got: " <> show other)
+      other -> expectationFailure ("expected failure, got: " <> show other)
 
   it "a rejected rule's assumption skips the step without discarding the case" do
     let sometimesRejects :: Concurrent.Rule (IORef Int) IO
@@ -210,13 +208,12 @@ behaviorSpec = describe "run (behavior)" do
             assert (n < 2) "fails on the second attempt"
         machine = Concurrent.Machine {initial = liftIO (newIORef 0), rules = [flaky], invariants = []}
     report <- check def {testCases = 1, statefulStepCount = 5} (Concurrent.run (Concurrent.fixed 1) machine)
-    report.result `shouldSatisfy` isCounterexample
-    case report.result of
-      Counterexample {notes} -> do
+    case singleReconstructedEvidence report.result of
+      Just FailureEvidence {notes} -> do
         let rejectionNotes =
               [n | n <- notes, n.kind == Annotation, "Rule stopped early due to violated assumption." `T.isInfixOf` n.text]
         length rejectionNotes `shouldBe` 1
-      _ -> expectationFailure "expected a Counterexample"
+      _ -> expectationFailure "expected a failure"
 
   it "settles a fork spawned by a rule that then rejects, rather than leaving it running" do
     -- The rule always rejects, immediately, always abandoning its fork
@@ -299,7 +296,8 @@ behaviorSpec = describe "run (behavior)" do
               invariants = [noLostUpdates]
             }
     report <- check def {testCases = 20, statefulStepCount = 30} (Concurrent.run (Concurrent.fixed 4) machine)
-    report.result `shouldSatisfy` isCounterexample
+    evidence <- expectObserved report.result
+    evidence.diff `shouldSatisfy` (/= Nothing)
 
   it "a failure reports its own assertion message and no reproducer" $
     withSystemTempDirectory "zizek-concurrent-stateful" \dbDir -> do
@@ -313,11 +311,11 @@ behaviorSpec = describe "run (behavior)" do
                 databaseKey = Just "concurrent-stateful-origin-spec"
               }
       report <- check settings (Concurrent.run (Concurrent.upTo 2) machine)
-      report.result `shouldSatisfy` isCounterexample
       report.reproduction `shouldBe` Unreproducible
-      case report.result of
-        Counterexample {message} -> message `shouldBe` "always fails"
-        _ -> expectationFailure "expected a Counterexample"
+      map (.failureReplayToken) (allFailureOutcomes report.result) `shouldBe` [Nothing]
+      case singleObservedEvidence report.result of
+        Just FailureEvidence {message} -> message `shouldBe` "always fails"
+        _ -> expectationFailure "expected an observed failure"
       let rendered = renderReport report
       ("no stored example to replay" `T.isInfixOf` rendered) `shouldBe` True
       ("stored under" `T.isInfixOf` rendered) `shouldBe` False
@@ -330,9 +328,8 @@ behaviorSpec = describe "run (behavior)" do
         failing = Concurrent.rule "boom" \_ -> assert False "always fails"
         machine = Concurrent.Machine {initial = pure (Counter 0), rules = [failing], invariants = []}
     report <- check def {testCases = 5} (Concurrent.run (Concurrent.fixed 2) machine)
-    report.result `shouldSatisfy` isCounterexample
-    case report.result of
-      Counterexample {notes} -> do
+    case singleObservedEvidence report.result of
+      Just FailureEvidence {notes} -> do
         let isBoomStep :: Note -> Bool
             isBoomStep n = case n.kind of
               StepHeader _ label -> label == "boom"
@@ -349,7 +346,7 @@ behaviorSpec = describe "run (behavior)" do
               _ -> False
             roundWorkerNote [] = False
         afterEachBoomStep `shouldSatisfy` all roundWorkerNote
-      _ -> expectationFailure "expected a Counterexample"
+      _ -> expectationFailure "expected a failure"
     -- The richer, source-splicing renderer must not choke on a folded,
     -- multi-worker journal either, and must show the round/worker identity
     -- both in the event log's own origin column and spelled out under the

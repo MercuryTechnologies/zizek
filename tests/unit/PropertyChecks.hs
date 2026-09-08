@@ -22,9 +22,10 @@ import Hegel.Property
     hoist,
     (===),
   )
-import Hegel.Report (Note (..), NoteKind (..), Report (..), Result (..), Stats (..), isDrawn, renderReport)
+import Hegel.Report (FailureEvidence (..), Note (..), NoteKind (..), Report (..), Result (..), Stats (..), isDrawn, renderReport)
 import Hegel.Runner (check)
 import Test.Hspec
+import TestSupport (singleReconstructedEvidence)
 import UnliftIO.Exception (throwIO, tryAny)
 import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 
@@ -49,8 +50,8 @@ spec = do
       annotate "drew the first addend"
       y <- forAll (intR (0, 100))
       assert (x + y < 150) "sum stays small"
-    case report.result of
-      Counterexample {message, notes, loc} -> do
+    case singleReconstructedEvidence report.result of
+      Just FailureEvidence {message, notes, loc} -> do
         message `shouldBe` "sum stays small"
         length [n | n <- notes, isDrawn n.kind] `shouldBe` 2
         length [n | n <- notes, n.kind == Annotation] `shouldBe` 1
@@ -82,8 +83,8 @@ spec = do
     report <- check def do
       x <- forAll (intR (0, 100))
       if x >= 0 then throwIO (userError "boom") else pure ()
-    case report.result of
-      Counterexample {message} -> message `shouldSatisfy` T.isInfixOf "boom"
+    case singleReconstructedEvidence report.result of
+      Just FailureEvidence {message} -> message `shouldSatisfy` T.isInfixOf "boom"
       other -> expectationFailure ("expected a counterexample, got: " <> show other)
 
   it "shrinks dependent draws to a minimal counterexample" $ do
@@ -96,8 +97,8 @@ spec = do
       y <- forAll (intR (0, x))
       writeIORef capture (x, y)
       assert (x + y < 100) "sum stays under threshold"
-    case report.result of
-      Counterexample {notes} -> do
+    case singleReconstructedEvidence report.result of
+      Just FailureEvidence {notes} -> do
         (x, y) <- readIORef capture
         (x + y) `shouldBe` 100
         y `shouldSatisfy` (<= x)
@@ -111,8 +112,8 @@ spec = do
       _y <- forAllSilent (intR (0, 10))
       footnote "from the footer"
       failure "always fails"
-    case report.result of
-      Counterexample {message, notes} -> do
+    case singleReconstructedEvidence report.result of
+      Just FailureEvidence {message, notes} -> do
         message `shouldBe` "always fails"
         case notes of
           [drawn, foot] -> do
@@ -127,8 +128,8 @@ spec = do
     report <- check def do
       x <- forAll (intR (0, 100))
       x === x + 1
-    case report.result of
-      Counterexample {message, diff} -> do
+    case singleReconstructedEvidence report.result of
+      Just FailureEvidence {message, diff} -> do
         message `shouldBe` "=== failed, values are not equal"
         -- Structural diff: two integers are one-liners so they diff as
         -- a removed/added pair, not a structural field diff.

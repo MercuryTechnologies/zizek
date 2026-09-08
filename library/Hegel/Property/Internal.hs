@@ -34,6 +34,7 @@ module Hegel.Property.Internal
     newFinalizers,
     registerFinalizer,
     drainFinalizers,
+    cleanupFailures,
     resource,
     resource_,
 
@@ -343,11 +344,19 @@ discard = liftIO $ E.throwIO AssumeRejected
 
 -- | A per-case stack of cleanup actions, drained in LIFO order at the test
 -- case boundary.
-newtype Finalizers = Finalizers (IORef [IO ()])
+data Finalizers = Finalizers (IORef [IO ()]) (IORef [SomeException])
 
 -- | A fresh, empty registry.
 newFinalizers :: IO Finalizers
-newFinalizers = Finalizers <$> newIORef []
+newFinalizers = Finalizers <$> newIORef [] <*> newIORef []
+
+-- | All cleanup failures from this case and its child scopes.
+cleanupFailures :: Finalizers -> IO [SomeException]
+cleanupFailures (Finalizers _ failures) = readIORef failures
+
+-- | A child scope owns its releases and shares the case cleanup diagnostics.
+childFinalizers :: Finalizers -> IO Finalizers
+childFinalizers (Finalizers _ failures) = (\ref -> Finalizers ref failures) <$> newIORef []
 
 -- | Register a cleanup action to run at the end of the current test case.
 --
@@ -385,13 +394,14 @@ newFinalizers = Finalizers <$> newIORef []
 --   'Control.Exception.uninterruptibleMask_', so one that blocks indefinitely
 --   hangs the run un-interruptibly.
 --
--- * __A finalizer that throws aborts the run__ as 'Hegel.Report.Errored': a
---   failed teardown means per-case isolation may be broken and later
---   cases\/replays can no longer be trusted.
+-- * __A finalizer that throws during a live case aborts the run__ as
+--   'Hegel.Report.Errored'. During failure reconstruction, cleanup diagnostics
+--   accompany the current outcome and later failures are reported as skipped.
+--   Every registered finalizer drains on either path.
 registerFinalizer :: (MonadIO m) => IO () -> PropertyT m ()
 registerFinalizer act = do
   env <- askEnv
-  let Finalizers ref = env.finalizers
+  let Finalizers ref _ = env.finalizers
   liftIO (atomicModifyIORef' ref \xs -> (act : xs, ()))
 {-# INLINEABLE registerFinalizer #-}
 
@@ -404,7 +414,7 @@ resource :: (MonadIO m) => IO a -> (a -> IO ()) -> PropertyT m a
 resource open close = do
   env <- askEnv
   when (env.scope >= InStep) $ liftIO (E.throwIO (MalformedTest inStepMessage))
-  let Finalizers ref = env.finalizers
+  let Finalizers ref _ = env.finalizers
   -- Acquire and register as one step under 'E.mask_': an async exception
   -- landing between the two, e.g. a sibling branch failing or a fork being
   -- cancelled, would otherwise leak the resource with nothing registered yet
@@ -553,8 +563,8 @@ runBranch ::
   TestCase ->
   PropertyT m a ->
   IO (Either E.SomeException a, [Note])
-runBranch runBase parentEnv testCase body = do
-  finalizers <- newFinalizers
+runBranch runBase parentEnv testCase body = E.mask \restore -> do
+  finalizers <- childFinalizers parentEnv.finalizers
   openForks <- newOpenForks
   (branchJournal, drainNotes) <- newChildJournal parentEnv.journal
   let branchEnv =
@@ -569,12 +579,9 @@ runBranch runBase parentEnv testCase body = do
             cloneDepthLimit = parentEnv.cloneDepthLimit
           }
   eRes <-
-    tryProperty (runBase (runPropertyT branchEnv body))
-      `E.onException` (drainFinalizers finalizers *> void (collectLeaks openForks))
-  failures <- drainFinalizers finalizers
-  case failures of
-    [] -> pure ()
-    e : _ -> E.throwIO e
+    tryProperty (restore (runBase (runPropertyT branchEnv body)))
+      `E.onException` void (collectLeaks openForks)
+      `E.finally` void (drainFinalizers finalizers)
   closeOpenForks openForks
   notes <- drainNotes
   failureNotes <- case (branchJournal, eRes) of
@@ -605,11 +612,13 @@ propertyAction journal cloneDepthLimit prop finalizers openForks testCase =
 -- __NOTE__: Runs under 'E.uninterruptibleMask_'; finalizers /must/ execute
 -- promptly.
 drainFinalizers :: Finalizers -> IO [SomeException]
-drainFinalizers (Finalizers ref) = E.uninterruptibleMask_ do
+drainFinalizers (Finalizers ref failures) = E.uninterruptibleMask_ do
   -- Newest-first already (registration conses onto the head), so a head-to-tail
   -- walk runs finalizers LIFO.
   fs <- atomicModifyIORef' ref \xs -> ([], xs)
-  go [] fs
+  errors <- go [] fs
+  atomicModifyIORef' failures \prior -> (prior <> errors, ())
+  pure errors
   where
     go acc [] = pure (reverse acc)
     go acc (f : rest) =
@@ -618,10 +627,9 @@ drainFinalizers (Finalizers ref) = E.uninterruptibleMask_ do
         Left (e :: SomeException) -> go (e : acc) rest
 
 -- | Run a property against a test case with a recording journal, returning
--- how the run ended together with the journal contents and the test case's
--- event stream.
-observeProperty :: Int -> TestCase -> Property () -> IO (Either SomeException (), [Note], [Event.Event])
-observeProperty cloneDepthLimit testCase prop = do
+-- the outcome, notes, pool events, and all finalizer failures.
+observeProperty :: Int -> TestCase -> Property () -> IO (Either SomeException (), [Note], [Event.Event], [SomeException])
+observeProperty cloneDepthLimit testCase prop = E.mask \restore -> do
   (journal, drainNotes) <- newRecordingJournal
   let record n = case journal of
         Recording sink -> sink n
@@ -630,35 +638,26 @@ observeProperty cloneDepthLimit testCase prop = do
   openForks <- newOpenForks
   eRes <-
     tryProperty
-      ( runPropertyT
-          Env {testCase, journal, noteDepth = 0, finalizers, openForks, cloneDepth = 0, cloneDepthLimit, scope = Unrestricted}
-          prop
+      ( restore $
+          runPropertyT
+            Env {testCase, journal, noteDepth = 0, finalizers, openForks, cloneDepth = 0, cloneDepthLimit, scope = Unrestricted}
+            prop
       )
-      `E.onException` (drainFinalizers finalizers *> void (collectLeaks openForks))
-  -- This is the terminal replay: nothing runs after it, so a failed teardown
-  -- cannot contaminate another case.
-  failures <- drainFinalizers finalizers
-  for_ failures \e -> do
-    clock <- Tick.next testCase.recording
-    record
-      Note
-        { kind = Footnote,
-          text = "finalizer failed during replay: " <> T.pack (E.displayException e),
-          loc = Nothing,
-          depth = 0,
-          clock
-        }
+      `E.onException` void (collectLeaks openForks)
+      `E.finally` void (drainFinalizers finalizers)
+  mLeak <- collectLeaks openForks
+  -- The caller stops later reconstructions if cleanup failed.
+  failures <- cleanupFailures finalizers
   -- A leak here should never actually happen: if the original run had left a
   -- fork unjoined, it would have aborted the whole run as a 'MalformedTest'
   -- before ever reaching a stored reproduction blob for this replay to
   -- reconstruct.
-  mLeak <- collectLeaks openForks
   for_ mLeak \msg -> do
     clock <- Tick.next testCase.recording
     record Note {kind = Footnote, text = "fork leak during replay: " <> msg, loc = Nothing, depth = 0, clock}
   notes <- drainNotes
   events <- Tick.drain testCase.events
-  pure (eRes, notes, events)
+  pure (eRes, notes, events, failures)
 
 -- NOTE: This function _needs_ to use 'Control.Exception.throwIO' so that
 -- all non-Hegel async exceptions are rethrown _as_ async exceptions.

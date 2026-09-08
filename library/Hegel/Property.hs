@@ -18,10 +18,8 @@
 --     'assert' (reverse (reverse xs) == xs) "reverse is involutive"
 -- @
 --
--- Failures are reported through the journal: each 'forAll' value and
--- 'annotate' call becomes a 'Hegel.Report.Note' on the
--- 'Hegel.Report.Counterexample', which are collected when the engine's
--- minimal failing case is replayed.
+-- Each reconstructed failure retains its 'forAll' values and 'annotate'
+-- entries as 'Hegel.Report.Note' values in the report.
 module Hegel.Property
   ( -- * Properties
     Property,

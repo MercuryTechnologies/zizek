@@ -30,7 +30,9 @@ where
 
 import Control.Monad ((>=>))
 import Data.Default.Class (def)
-import Data.Maybe (isJust)
+import Data.Foldable (toList)
+import Data.List.NonEmpty (NonEmpty)
+import Data.Maybe (isJust, listToMaybe, mapMaybe)
 import Data.Text qualified as T
 import GHC.Stack (CallStack, HasCallStack, SrcLoc (..), callStack, withFrozenCallStack)
 import Hegel.Database (Database (..))
@@ -38,6 +40,9 @@ import Hegel.Internal.DatabaseKey (propKey)
 import Hegel.Property.Internal (Property, PropertyT, hoist)
 import Hegel.Report
   ( Abort (..),
+    FailureEvidence (..),
+    FailureEvidenceStatus (..),
+    FailureOutcome (..),
     Report (..),
     Result (..),
     renderReport,
@@ -212,25 +217,37 @@ shouldUseColor = do
 toHspecResult :: Bool -> Style.Preference -> Report -> IO Hspec.Result
 toHspecResult useColor pref report = case report.result of
   Ok -> pure (Hspec.Result (T.unpack (clean (render report))) Hspec.Success)
-  Counterexample {loc} -> do
+  Failures outcomes ->
     -- The ┏━━ header already shows the file, so there's no need to duplicate
     -- it in hspec's Location slot — but we still fill that slot so hspec can
     -- jump to the right line.
-    rendered <- renderReportAuto useColor pref report
-    pure (failed (hspecLocation <$> loc) (Hspec.Reason (T.unpack rendered)))
+    renderFailureAt (firstOutcomeLoc outcomes)
   GaveUp msg ->
     pure (failed Nothing (Hspec.Reason (T.unpack (clean ("gave up: " <> msg)))))
   Aborted (Errored e) ->
     pure (failed Nothing (Hspec.Error Nothing e))
   Aborted (UnhealthyInput msg) ->
     pure (failed Nothing (Hspec.Reason (T.unpack (clean ("health check failed: " <> msg)))))
-  Aborted (ReplayDiverged msg) ->
-    pure (failed Nothing (Hspec.Reason (T.unpack (clean ("replay diverged: " <> msg)))))
   where
     render = if useColor then renderReportAnsi else renderReport
+    renderFailureAt loc = do
+      rendered <- renderReportAuto useColor pref report
+      pure (failed (hspecLocation <$> loc) (Hspec.Reason (T.unpack rendered)))
     -- Every string handed to hspec is cleaned: the 7-bit guarantee covers
     -- gave-up and abort messages (user text) too, not just counterexamples.
     clean = Style.cleanFor pref
+
+    firstOutcomeLoc :: NonEmpty FailureOutcome -> Maybe SrcLoc
+    firstOutcomeLoc =
+      listToMaybe
+        . mapMaybe
+          ( \outcome -> case outcome.failureEvidence of
+              Reconstructed evidence -> evidence.loc
+              Observed evidence -> evidence.loc
+              Diverged _ -> Nothing
+              Skipped _ -> Nothing
+          )
+        . toList
     failed loc reason = Hspec.Result "" (Hspec.Failure loc reason)
 
 hspecLocation :: SrcLoc -> Hspec.Location
