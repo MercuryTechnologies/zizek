@@ -20,6 +20,7 @@ module Hegel.Gen.Internal
     maybe,
     either,
     enumerate,
+    prefixSelect,
 
     -- * Exceptions
     -- $exceptions
@@ -270,19 +271,21 @@ frequency pairs
   | any ((<= 0) . fst) pairs = error "Gen.frequency: all weights must be positive"
   | otherwise = Draw \tc -> do
       startSpan tc LabelOneOf
-      i <- drawInteger tc 0 (toInteger (total - 1))
-      let chosen = prefixSelect (fromInteger i) pairs
+      i <- drawInteger tc 0 (total - 1)
+      let chosen = prefixSelect i weighted
       v <- runGenerator tc chosen
       stopSpan tc False
       pure v
   where
-    total = sum (fmap fst pairs)
+    weighted = [(toInteger w, g) | (w, g) <- pairs]
+    total = foldl' (\acc (w, _) -> acc + w) 0 weighted
 
-    prefixSelect :: Int -> [(Int, Gen a)] -> Gen a
-    prefixSelect _ [] = error "Gen.frequency: prefix-sum invariant violated (unreachable)"
-    prefixSelect n ((w, g) : rest)
-      | n < w = g
-      | otherwise = prefixSelect (n - w) rest
+-- | Select the branch containing an index in the total positive weight range.
+prefixSelect :: Integer -> [(Integer, a)] -> a
+prefixSelect _ [] = error "Gen.frequency: prefix-sum invariant violated (unreachable)"
+prefixSelect n ((w, g) : rest)
+  | n < w = g
+  | otherwise = prefixSelect (n - w) rest
 
 -- | Generate either 'Nothing' or 'Just' a value from the given generator.
 maybe :: Gen a -> Gen (Maybe a)

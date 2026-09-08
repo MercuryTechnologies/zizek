@@ -8,6 +8,7 @@ import Data.Time.Clock (NominalDiffTime)
 import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), midnight)
 import Hegel (Gen, prop)
 import Hegel.Gen qualified as Gen
+import Hegel.Gen.Internal qualified as Internal
 import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Property (check, check_, forEach)
 import Hegel.Report (Report (..), Result (..), Stats (..))
@@ -101,6 +102,20 @@ spec = do
         length xs `shouldSatisfy` (<= 4)
 
   describe "Gen.frequency" $ do
+    it "selects exact prefix boundaries with arbitrary precision" $ do
+      let w = toInteger (maxBound :: Int)
+          weights = [(w, 'a'), (w, 'b'), (w, 'c')]
+      map (`Internal.prefixSelect` weights) [0, w - 1, w, 2 * w - 1, 2 * w, 3 * w - 1]
+        `shouldBe` "aabbcc"
+      map (`Internal.prefixSelect` [(2, 'a'), (1, 'b')]) [0, 1, 2] `shouldBe` "aab"
+    it "accepts totals larger than a machine word" $ do
+      mapM_
+        ( \n -> check_ (defaultSettings {testCases = 20}) $
+            forEach (Gen.frequency [(maxBound, pure i) | i <- [1 .. n :: Int]]) $
+              \i -> i `shouldSatisfy` (\x -> x >= 1 && x <= n)
+        )
+        [2, 3]
+
     it "covers all branches across many draws" $ do
       seen <- newIORef ([] :: [Int])
       check_

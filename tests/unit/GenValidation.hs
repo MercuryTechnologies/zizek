@@ -6,6 +6,7 @@
 -- 'HegelError'.
 module GenValidation (spec) where
 
+import Control.Exception (evaluate)
 import Data.Function ((&))
 import Data.Text qualified as T
 import Data.Time.Calendar (fromGregorian)
@@ -26,6 +27,17 @@ messageContains needle PropertyFailed {report = Report {result}} = any (T.isInfi
 
 spec :: Spec
 spec = do
+  describe "Gen.frequency validation" $ do
+    it "rejects empty choices at the call site" $ do
+      evaluate (Gen.frequency @Int []) `shouldThrow` errorCall "Gen.frequency: used with empty list"
+    it "rejects zero and negative weights at the call site" $ do
+      mapM_
+        ( \w ->
+            evaluate (Gen.frequency [(1, pure True), (w, pure False)])
+              `shouldThrow` errorCall "Gen.frequency: all weights must be positive"
+        )
+        [0, -1, minBound]
+
   describe "Hegel.Gen.Builder checkers" $ do
     describe "checkOrdered" $ do
       it "passes when lo <= hi" $ do
