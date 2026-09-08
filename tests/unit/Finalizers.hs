@@ -15,7 +15,7 @@ import Hegel (Gen)
 import Hegel.Assertion (AssertionFailure (..))
 import Hegel.Diff (renderDiff)
 import Hegel.Gen qualified as Gen
-import Hegel.Internal.Control (FinalizerFailed (..), MalformedTest (..))
+import Hegel.Internal.Control (FinalizerFailed (..), malformedTest)
 import Hegel.Property
   ( Property,
     assert,
@@ -141,7 +141,7 @@ spec = describe "registerFinalizer" do
   it "retains the test run failure alongside cleanup diagnostics" do
     report <- check def do
       registerFinalizer (throwIO (userError "teardown boom"))
-      throwIO (MalformedTest "malformed body")
+      throwIO (malformedTest "test" "malformed body" [])
     case report.result of
       Aborted (Errored e) -> do
         let msg = T.pack (displayException e)

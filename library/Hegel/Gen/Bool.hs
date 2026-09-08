@@ -11,6 +11,8 @@ where
 
 import Control.Exception (throwIO)
 import Data.Text qualified as T
+import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
+import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), ValidationError (..))
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (drawBool)
@@ -32,17 +34,14 @@ weighted :: Double -> BoolBuilder -> BoolBuilder
 weighted p b = b {probability = p}
 
 instance Build BoolBuilder Bool where
-  build b = Draw \tc -> do
+  build b = withFrozenCallStack $ Draw \tc -> do
     checkProbability b.probability
     drawBool tc b.probability
 
 -- | Require @p@ to be a valid probability: in @[0,1]@ and not NaN.
-checkProbability :: Double -> IO ()
+checkProbability :: (HasCallStack) => Double -> IO ()
 checkProbability p
   | isNaN p || p < 0 || p > 1 =
       throwIO
-        ValidationError
-          { context = "Hegel.Gen.Bool",
-            detail = "probability (" <> T.pack (show p) <> ") outside [0, 1]"
-          }
+        (ValidationError Diagnostic {context = "Hegel.Gen.Bool", detail = "probability must be in [0, 1]", values = [("probability", T.pack (show p))], callStack = callStack})
   | otherwise = pure ()

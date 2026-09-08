@@ -30,6 +30,8 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time.Calendar (Day, fromGregorian, toGregorian)
+import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
+import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasYear (..), ValidationError (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (drawDate)
@@ -55,7 +57,7 @@ instance HasYear DateBuilder where
   maxYear y b = b {bMax = Just (fromGregorian y 12 31)}
 
 instance Build DateBuilder Day where
-  build b = Draw \tc -> do
+  build b = withFrozenCallStack $ Draw \tc -> do
     checkYearRange "Hegel.Gen.Date" lo
     checkYearRange "Hegel.Gen.Date" hi
     checkOrdered "Hegel.Gen.Date" lo hi
@@ -66,14 +68,11 @@ instance Build DateBuilder Day where
 
 -- | Require the year to fall in @[-999999, 999999]@, throwing
 -- 'ValidationError' otherwise.
-checkYearRange :: Text -> Day -> IO ()
+checkYearRange :: (HasCallStack) => Text -> Day -> IO ()
 checkYearRange ctx d
   | y < -999999 || y > 999999 =
       throwIO
-        ValidationError
-          { context = ctx,
-            detail = "year (" <> T.pack (show y) <> ") outside libhegel's [-999999, 999999] range"
-          }
+        (ValidationError Diagnostic {context = ctx, detail = "year must be in [-999999, 999999]", values = [("year", T.pack (show y))], callStack = callStack})
   | otherwise = pure ()
   where
     (y, _, _) = toGregorian d

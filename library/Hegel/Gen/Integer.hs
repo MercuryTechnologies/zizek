@@ -31,6 +31,7 @@ where
 import Data.Int (Int16, Int32, Int64, Int8)
 import Data.Maybe (fromMaybe)
 import Data.Word (Word16, Word32, Word64, Word8)
+import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (drawInteger)
@@ -100,7 +101,7 @@ instance HasMax (IntegralBuilder a) a where
   max hi b = b {bMax = Just hi}
 
 instance (Bounded a, Integral a, Show a) => Build (IntegralBuilder a) a where
-  build b = Draw \tc -> do
+  build b = withFrozenCallStack $ Draw \tc -> do
     checkOrdered "Hegel.Gen.Integer" lo hi
     fromInteger <$> drawInteger tc loI hiI
     where
@@ -112,21 +113,23 @@ instance (Bounded a, Integral a, Show a) => Build (IntegralBuilder a) a where
       hiI = toInteger hi
 
 -- | Generate an enumeration, drawing from 'minBound' to 'maxBound'.
-enumBounded :: forall a. (Bounded a, Enum a) => Gen a
+enumBounded :: forall a. (HasCallStack, Bounded a, Enum a) => Gen a
 enumBounded =
-  toEnum
-    <$> build
-      IntegralBuilder
-        { bMin = Just (fromEnum (minBound :: a)),
-          bMax = Just (fromEnum (maxBound :: a))
-        }
+  withFrozenCallStack $
+    toEnum
+      <$> build
+        IntegralBuilder
+          { bMin = Just (fromEnum (minBound :: a)),
+            bMax = Just (fromEnum (maxBound :: a))
+          }
 
 -- | Generate a value of an enumeration within the given inclusive range.
-enum :: (Enum a) => a -> a -> Gen a
+enum :: (HasCallStack, Enum a) => a -> a -> Gen a
 enum lo hi =
-  toEnum
-    <$> build
-      IntegralBuilder
-        { bMin = Just (fromEnum lo),
-          bMax = Just (fromEnum hi)
-        }
+  withFrozenCallStack $
+    toEnum
+      <$> build
+        IntegralBuilder
+          { bMin = Just (fromEnum lo),
+            bMax = Just (fromEnum hi)
+          }

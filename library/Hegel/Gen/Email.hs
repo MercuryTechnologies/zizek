@@ -8,6 +8,7 @@ module Hegel.Gen.Email
 where
 
 import Data.Text (Text)
+import GHC.Stack (withFrozenCallStack)
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Internal.String (stringGen)
 import Hegel.Internal.DataSource (buildEmailGen)
@@ -19,4 +20,4 @@ email :: EmailBuilder
 email = EmailBuilder
 
 instance Build EmailBuilder Text where
-  build _ = stringGen buildEmailGen
+  build _ = withFrozenCallStack $ stringGen buildEmailGen

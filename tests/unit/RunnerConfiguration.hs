@@ -1,8 +1,9 @@
 -- | Configuration resolution and runner execution contracts.
 module RunnerConfiguration (spec) where
 
-import Control.Monad (forM_, void)
+import Control.Monad (void)
 import Data.Either (isLeft)
+import Data.Foldable (for_)
 import Data.Function ((&))
 import Data.Text qualified as T
 import Data.Word (Word64)
@@ -36,6 +37,28 @@ import UnliftIO.Temporary (withSystemTempDirectory)
 spec :: Spec
 spec = do
   describe "runner configuration" do
+    it "validates effective programmatic settings after overrides" do
+      let invalid = defaultSettings {testCases = -1}
+      Config.resolve invalid Config.emptyOverrides `shouldSatisfy` isLeft
+      override <- parsed [("test-cases", "1")]
+      resolved <- either fail pure (Config.resolve invalid override)
+      resolved.testCases `shouldBe` 1
+      for_ [defaultSettings {statefulStepCount = 0}, defaultSettings {maxCloneDepth = -1}] \settings ->
+        Config.resolve settings Config.emptyOverrides `shouldSatisfy` isLeft
+
+    it "renders invalid programmatic settings consistently in Hspec and Tasty" do
+      ran <- newIORef False
+      let settings = defaultSettings {statefulStepCount = 0}
+          body = liftIO (writeIORef ran True)
+      native <- runTree mempty (Native.testPropertyWith settings "bad settings" body)
+      Tree.resultSuccessful native `shouldBe` False
+      Tree.resultDescription native `shouldContain` "SettingsError"
+      Tree.resultDescription native `shouldContain` "tests/unit/RunnerConfiguration.hs"
+      hspecResult <- evalFixture () (Hspec.propForWith settings "bad settings" (const body))
+      reason hspecResult `shouldContain` "SettingsError"
+      reason hspecResult `shouldContain` "tests/unit/RunnerConfiguration.hs"
+      readIORef ran `shouldReturn` False
+
     it "preserves absent values and overlays only supplied settings" do
       low <- parsed [("test-cases", "7"), ("seed", "11"), ("database", "off")]
       high <- parsed [("stateful-steps", "3"), ("seed", "12")]
@@ -47,18 +70,18 @@ spec = do
       show unchanged `shouldBe` show resolved
 
     it "accepts numeric bounds and rejects malformed and overflowing inputs" do
-      forM_ [("test-cases", "0"), ("test-cases", show (maxBound :: Int)), ("stateful-steps", "1"), ("seed", show (maxBound :: Word64))] \entry -> void (parsed [entry])
-      forM_ [("test-cases", "-1"), ("test-cases", "1.0"), ("test-cases", " 2"), ("test-cases", "+2"), ("test-cases", show (toInteger (maxBound :: Int) + 1)), ("stateful-steps", "0"), ("seed", "18446744073709551616"), ("seed", ""), ("database", "directory:"), ("database", "somewhere")] \entry@(name, _) ->
+      for_ [("test-cases", "0"), ("test-cases", show (maxBound :: Int)), ("stateful-steps", "1"), ("seed", show (maxBound :: Word64))] \entry -> void (parsed [entry])
+      for_ [("test-cases", "-1"), ("test-cases", "1.0"), ("test-cases", " 2"), ("test-cases", "+2"), ("test-cases", show (toInteger (maxBound :: Int) + 1)), ("stateful-steps", "0"), ("seed", "18446744073709551616"), ("seed", ""), ("database", "directory:"), ("database", "somewhere")] \entry@(name, _) ->
         case Config.parseOverrides (`lookup` [entry]) of
           Left message -> message `shouldContain` name
           Right value -> expectationFailure (show value)
 
     it "requires complete replay pairs within each source" do
-      forM_ [[("replay", "bad")], [("replay-key", "id")], [("replay", "bad"), ("replay-key", "id")], [("replay", "bad"), ("replay-key", "")]] \values ->
+      for_ [[("replay", "bad")], [("replay-key", "id")], [("replay", "bad"), ("replay-key", "id")], [("replay", "bad"), ("replay-key", "")]] \values ->
         Config.parseOverrides (`lookup` values) `shouldSatisfy` isLeft
 
     it "rejects persistence with missing or empty keys but permits a key alone" do
-      forM_ [Nothing, Just ""] \key ->
+      for_ [Nothing, Just ""] \key ->
         Config.resolve defaultSettings {database = DatabaseDefault, databaseKey = key} Config.emptyOverrides `shouldSatisfy` isLeft
       resolved <- either fail pure (Config.resolve defaultSettings {databaseKey = Just "id"} Config.emptyOverrides)
       show resolved.database `shouldBe` "DatabaseDisabled"
@@ -189,7 +212,7 @@ spec = do
         empty <- runTree mempty (tree "second" [Reuse])
         Tree.resultDescription empty `shouldContain` "gave up"
         void (runTree mempty (tree "second" defaultSettings.phases))
-        forM_ ["first", "second"] \key -> do
+        for_ ["first", "second"] \key -> do
           stored <- runTree mempty (tree key [Reuse])
           Tree.resultDescription stored `shouldContain` "runner failure"
 

@@ -13,6 +13,7 @@ where
 import Data.HashSet (HashSet)
 import Data.HashSet qualified as HashSet
 import Data.Hashable (Hashable)
+import GHC.Stack (withFrozenCallStack)
 import Hegel.Collection qualified as Collection
 import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw)
@@ -33,7 +34,7 @@ instance HasSize (HashSetBuilder a) where
   maxSize n b = b {sMaxSize = Just n}
 
 instance (Hashable a) => Build (HashSetBuilder a) (HashSet a) where
-  build b = Draw $ \tc -> do
+  build b = withFrozenCallStack $ Draw $ \tc -> do
     checkSizeBounds "Hegel.Gen.HashSet" b.sMinSize b.sMaxSize
     startSpan tc LabelList
     -- See Note [Variable-size mode required for reject] in Hegel.Collection.

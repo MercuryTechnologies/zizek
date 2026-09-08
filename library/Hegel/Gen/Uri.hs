@@ -21,6 +21,7 @@ where
 import Control.Exception (throwIO)
 import Data.Text (Text)
 import Data.Text qualified as T
+import GHC.Stack (withFrozenCallStack)
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Internal.String (stringDraw, stringGen)
 import Hegel.Internal.DataSource (InvariantViolation (..), buildUrlGen)
@@ -40,7 +41,7 @@ uriText :: UriTextBuilder
 uriText = UriTextBuilder
 
 instance Build UriBuilder URI where
-  build _ = stringDraw buildUrlGen postProcess
+  build _ = withFrozenCallStack $ stringDraw buildUrlGen postProcess
     where
       postProcess :: TestCase -> Text -> IO URI
       postProcess _tc t = case parseURI (T.unpack t) of
@@ -49,4 +50,4 @@ instance Build UriBuilder URI where
           throwIO InvariantViolation {detail = "libhegel: unparseable URI from a url draw: " <> t}
 
 instance Build UriTextBuilder Text where
-  build _ = stringGen buildUrlGen
+  build _ = withFrozenCallStack $ stringGen buildUrlGen

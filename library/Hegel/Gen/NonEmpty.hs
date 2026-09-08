@@ -13,7 +13,9 @@ import Control.Exception (throwIO)
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text qualified as T
+import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Collection qualified as Collection
+import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), HasSize (..), ValidationError (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw)
 import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
@@ -37,7 +39,7 @@ instance HasSize (NonEmptyBuilder a) where
   maxSize n b = b {neMaxSize = Just n}
 
 instance Build (NonEmptyBuilder a) (NonEmpty a) where
-  build b = Draw $ \tc -> do
+  build b = withFrozenCallStack $ Draw $ \tc -> do
     checkSizeBounds "Hegel.Gen.NonEmpty" b.neMinSize b.neMaxSize
     checkAtLeastOne b.neMinSize
     startSpan tc LabelList
@@ -57,12 +59,9 @@ instance Build (NonEmptyBuilder a) (NonEmpty a) where
     pure (NonEmpty.fromList trimmed)
 
 -- | Require @n >= 1@, throwing 'ValidationError' otherwise.
-checkAtLeastOne :: Int -> IO ()
+checkAtLeastOne :: (HasCallStack) => Int -> IO ()
 checkAtLeastOne n
   | n >= 1 = pure ()
   | otherwise =
       throwIO
-        ValidationError
-          { context = "Hegel.Gen.NonEmpty",
-            detail = "minSize (" <> T.pack (show n) <> ") must be at least 1"
-          }
+        (ValidationError Diagnostic {context = "Hegel.Gen.NonEmpty", detail = "minSize must be at least 1", values = [("minSize", T.pack (show n))], callStack = callStack})

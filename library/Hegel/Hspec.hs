@@ -1,3 +1,4 @@
+{-# LANGUAGE ImplicitParams #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 -- | hspec integration.
@@ -88,23 +89,23 @@ instance (m ~ IO) => Hspec.Example (arg -> PropertyT m ()) where
 
 -- | A property paired with the 'Settings' it should run under, so the
 -- example-database key derived by 'prop'\/'propWith' reaches the runner.
-data HegelExample = HegelExample Settings (Property ())
+data HegelExample = HegelExample CallStack Settings (Property ())
 
 instance Hspec.Example HegelExample where
   type Arg HegelExample = ()
-  evaluateExample (HegelExample settings body) _params aroundAction _progress =
-    withAroundResult aroundAction \() -> runProperty settings body
+  evaluateExample (HegelExample cs settings body) _params aroundAction _progress =
+    let ?callStack = cs in withFrozenCallStack $ withAroundResult aroundAction \() -> runProperty settings body
 
 -- | A property over an arbitrary base monad @m@ (e.g. an application stack),
 -- paired with the 'Settings' to run under and a runner that — given the fixture
 -- @env@ — collapses @m@ to 'IO'. Built by 'propT'\/'propWithT'.
 data HegelExampleT env m
-  = HegelExampleT Settings (env -> forall x. m x -> IO x) (PropertyT m ())
+  = HegelExampleT CallStack Settings (env -> forall x. m x -> IO x) (PropertyT m ())
 
 instance Hspec.Example (HegelExampleT env m) where
   type Arg (HegelExampleT env m) = env
-  evaluateExample (HegelExampleT settings nat body) _params aroundAction _progress =
-    withAroundResult aroundAction \env -> runProperty settings (hoist (nat env) body)
+  evaluateExample (HegelExampleT cs settings nat body) _params aroundAction _progress =
+    let ?callStack = cs in withFrozenCallStack $ withAroundResult aroundAction \env -> runProperty settings (hoist (nat env) body)
 
 -- | Run @mk@ inside hspec's around-action (which owns any fixture) and return
 -- its result.
@@ -127,10 +128,10 @@ withAroundResult aroundAction mk = do
             \not invoke its callback). This should be impossible; please report it."
 
 -- | Check a property and render its 'Report' as an hspec 'Hspec.Result'.
-runProperty :: Settings -> Property () -> IO Hspec.Result
+runProperty :: (HasCallStack) => Settings -> Property () -> IO Hspec.Result
 runProperty settings body = do
   overrides <- Config.readOverrides
-  case overrides >>= \o -> (,o) <$> Config.resolve settings o of
+  case overrides >>= \o -> (,o) <$> withFrozenCallStack (Config.resolve settings o) of
     Left message -> pure (Hspec.Result "" (Hspec.Failure Nothing (Hspec.Reason message)))
     Right (resolved, o) -> do
       report <- Config.execute (\_ -> pure ()) resolved o body
@@ -175,7 +176,7 @@ propWith settings label body = do
   let settings' = case settings.databaseKey of
         Just _ -> settings
         Nothing -> withDatabaseKey (propKey callStack path label) settings
-  Hspec.it label (HegelExample settings' body)
+  Hspec.it label (HegelExample callStack settings' body)
 
 -- | 'prop' for a property over a custom base monad @m@.
 --
@@ -232,7 +233,7 @@ keyedT cs settings nat label body = do
   let settings' = case settings.databaseKey of
         Just _ -> settings
         Nothing -> withDatabaseKey (propKey cs path label) settings
-  Hspec.it label (HegelExampleT settings' nat body)
+  Hspec.it label (HegelExampleT cs settings' nat body)
 
 -- | Returns 'True' when ANSI color output is appropriate: the output handle
 -- is a terminal AND the @NO_COLOR@ environment variable is unset.
@@ -303,14 +304,14 @@ propForWith settings label body = do
   let keyed = case settings.databaseKey of
         Just _ -> settings
         Nothing -> withDatabaseKey (propKey callStack path label) settings
-  Hspec.it label (HegelFixture keyed body)
+  Hspec.it label (HegelFixture callStack keyed body)
 
-data HegelFixture fixture = HegelFixture Settings (fixture -> Property ())
+data HegelFixture fixture = HegelFixture CallStack Settings (fixture -> Property ())
 
 instance Hspec.Example (HegelFixture fixture) where
   type Arg (HegelFixture fixture) = fixture
-  evaluateExample (HegelFixture settings body) _params aroundAction _progress =
-    withAroundResult aroundAction (runProperty settings . body)
+  evaluateExample (HegelFixture cs settings body) _params aroundAction _progress =
+    let ?callStack = cs in withFrozenCallStack $ withAroundResult aroundAction (runProperty settings . body)
 
 -- | Customize the persisted defaults of 'propFor'.
 propForModify :: (HasCallStack) => (Settings -> Settings) -> String -> (fixture -> Property ()) -> Hspec.SpecWith fixture

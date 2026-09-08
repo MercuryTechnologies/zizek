@@ -23,6 +23,8 @@ import Data.Text qualified as T
 import Data.UUID (UUID)
 import Data.UUID qualified as UUID
 import Data.Word (Word8)
+import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
+import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), ValidationError (..))
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (InvariantViolation (..), drawUuid)
@@ -43,7 +45,7 @@ version :: Word8 -> UuidBuilder -> UuidBuilder
 version n b = b {bVersion = Just n}
 
 instance Build UuidBuilder UUID where
-  build b = Draw \tc -> do
+  build b = withFrozenCallStack $ Draw \tc -> do
     checkVersion b.bVersion
     bytes <- drawUuid tc b.bVersion
     case UUID.fromByteString (BSL.fromStrict bytes) of
@@ -52,12 +54,9 @@ instance Build UuidBuilder UUID where
         throwIO
           InvariantViolation {detail = "libhegel: uuid draw did not return 16 bytes"}
     where
-      checkVersion :: Maybe Word8 -> IO ()
+      checkVersion :: (HasCallStack) => Maybe Word8 -> IO ()
       checkVersion (Just v)
         | v > 15 =
             throwIO
-              ValidationError
-                { context = "Hegel.Gen.Uuid",
-                  detail = "version (" <> T.pack (show v) <> ") > 15 (RFC 4122 nibble range)"
-                }
+              (ValidationError Diagnostic {context = "Hegel.Gen.Uuid", detail = "version must be at most 15", values = [("version", T.pack (show v))], callStack = callStack})
       checkVersion _ = pure ()

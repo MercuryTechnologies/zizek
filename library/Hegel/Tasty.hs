@@ -1,3 +1,5 @@
+{-# LANGUAGE ImplicitParams #-}
+
 -- | tasty integration: run a 'Property' as a 'TestTree' leaf.
 --
 -- @
@@ -44,6 +46,7 @@ import Data.Maybe (isJust)
 import Data.Proxy (Proxy (..))
 import Data.Text qualified as T
 import GHC.Clock (getMonotonicTimeNSec)
+import GHC.Stack (CallStack, HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Internal.RunnerConfig qualified as Config
 import Hegel.Property.Internal (Property)
 import Hegel.Report (Report (..), Result (..), renderReportAuto)
@@ -58,7 +61,7 @@ import Test.Tasty.Providers (IsTest (..), Progress (..), singleTest, testFailed,
 import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 
 -- | A property scheduled with its 'Settings'.
-data HegelTest = HegelTest Settings (Property ())
+data HegelTest = HegelTest CallStack Settings (Property ())
 
 instance IsTest HegelTest where
   testOptions =
@@ -70,34 +73,36 @@ instance IsTest HegelTest where
         Option (Proxy @HegelReplay),
         Option (Proxy @HegelReplayKey)
       ]
-  run opts (HegelTest settings prop) progress = do
-    environment <- Config.readOverrides
-    let configuration = do
-          low <- environment
-          high <- optionOverrides opts
-          let combined = Config.overlay low high
-          resolved <- Config.resolve settings combined
-          pure (resolved, combined)
-    case configuration of
-      Left message -> pure (testFailed message)
-      Right (resolved, overrides) -> do
-        lastUpdate <- newIORef 0
-        let completed count = do
-              now <- getMonotonicTimeNSec
-              previous <- readIORef lastUpdate
-              if previous == 0 || now - previous >= 100000000
-                then do
-                  writeIORef lastUpdate now
-                  progress (Progress (show count <> " completed cases") 0)
-                else pure ()
-        report <- Config.execute completed resolved overrides prop
-        useColor <- resolveColor (lookupOption opts)
-        pref <- Style.preference stdout
-        rendered <- renderReportAuto useColor pref report
-        let output = T.unpack (rendered <> Style.cleanFor pref (Config.replayInstructions True resolved overrides))
-        pure case report.result of
-          Ok -> testPassed output
-          _ -> testFailed output
+  run opts (HegelTest cs settings prop) progress =
+    let ?callStack = cs
+     in withFrozenCallStack $ do
+          environment <- Config.readOverrides
+          let configuration = do
+                low <- environment
+                high <- optionOverrides opts
+                let combined = Config.overlay low high
+                resolved <- withFrozenCallStack (Config.resolve settings combined)
+                pure (resolved, combined)
+          case configuration of
+            Left message -> pure (testFailed message)
+            Right (resolved, overrides) -> do
+              lastUpdate <- newIORef 0
+              let completed count = do
+                    now <- getMonotonicTimeNSec
+                    previous <- readIORef lastUpdate
+                    if previous == 0 || now - previous >= 100000000
+                      then do
+                        writeIORef lastUpdate now
+                        progress (Progress (show count <> " completed cases") 0)
+                      else pure ()
+              report <- Config.execute completed resolved overrides prop
+              useColor <- resolveColor (lookupOption opts)
+              pref <- Style.preference stdout
+              rendered <- renderReportAuto useColor pref report
+              let output = T.unpack (rendered <> Style.cleanFor pref (Config.replayInstructions True resolved overrides))
+              pure case report.result of
+                Ok -> testPassed output
+                _ -> testFailed output
 
 -- | Resolve a 'UseColor' setting to a concrete 'Bool'. 'Auto' honors the
 -- @NO_COLOR@ environment variable (per <https://no-color.org>) and falls
@@ -114,18 +119,18 @@ resolveColor Auto = do
 -- | Run a native Tasty property with persistence disabled.
 -- Use 'testPropertyWith' with a unique explicit database key to persist failures.
 -- For automatic Hspec identities inside Tasty, convert Hspec specs with tasty-hspec.
-testProperty :: TestName -> Property () -> TestTree
-testProperty = testPropertyWith defaultSettings
+testProperty :: (HasCallStack) => TestName -> Property () -> TestTree
+testProperty = withFrozenCallStack $ testPropertyWith defaultSettings
 
 -- | Run with explicit settings. Persistence requires a nonempty database key
 -- that distinguishes this property from every other property sharing its database.
 -- A key alone leaves persistence disabled.
-testPropertyWith :: Settings -> TestName -> Property () -> TestTree
-testPropertyWith settings name prop = singleTest name (HegelTest settings prop)
+testPropertyWith :: (HasCallStack) => Settings -> TestName -> Property () -> TestTree
+testPropertyWith settings name prop = singleTest name (HegelTest callStack settings prop)
 
 -- | Customize native Tasty defaults, which disable persistence.
-testPropertyModify :: (Settings -> Settings) -> TestName -> Property () -> TestTree
-testPropertyModify modify = testPropertyWith (modify defaultSettings)
+testPropertyModify :: (HasCallStack) => (Settings -> Settings) -> TestName -> Property () -> TestTree
+testPropertyModify modify = withFrozenCallStack $ testPropertyWith (modify defaultSettings)
 
 -- | Optional native Tasty override for @--hegel-test-cases@.
 newtype HegelTestCases = HegelTestCases (Maybe String)

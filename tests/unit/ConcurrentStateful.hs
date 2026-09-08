@@ -13,6 +13,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Hegel (Gen)
 import Hegel.Database (Database (..))
+import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen qualified as Gen
 import Hegel.Internal.Control (MalformedTest (..))
 import Hegel.Property (assert, assume, forAll, resource, (===))
@@ -46,7 +47,7 @@ isOk = \case
 isMalformedTestAbort :: T.Text -> Result -> Bool
 isMalformedTestAbort needle = \case
   Aborted (Errored e) -> case fromException e of
-    Just (MalformedTest msg) -> needle `T.isInfixOf` msg
+    Just (MalformedTest msg) -> needle `T.isInfixOf` (msg.context <> ": " <> msg.detail)
     Nothing -> False
   _ -> False
 

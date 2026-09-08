@@ -16,10 +16,10 @@ import Hegel.Internal.Control
     AttemptMispriced (..),
     ControlSignal (..),
     LeafBudgetExceeded (..),
-    MalformedTest (..),
     TestStopped (..),
     catchControl,
     isFailure,
+    malformedTest,
     onFailure,
   )
 import Test.Hspec
@@ -68,7 +68,7 @@ spec = do
       isFailure (toException Interrupt) `shouldBe` False
 
     it "is True for MalformedTest (deliberate: aborted runs never render a journal)" do
-      isFailure (toException (MalformedTest "no rules")) `shouldBe` True
+      isFailure (toException (malformedTest "test" "no rules" [])) `shouldBe` True
 
   describe "onFailure" do
     it "fires the hook on a failure and still rethrows it" do

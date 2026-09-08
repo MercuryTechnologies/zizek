@@ -14,6 +14,7 @@ where
 
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
+import GHC.Stack (withFrozenCallStack)
 import Hegel.Collection qualified as Collection
 import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw)
@@ -36,7 +37,7 @@ instance HasSize (IntMapBuilder v) where
   maxSize n b = b {mMaxSize = Just n}
 
 instance Build (IntMapBuilder v) (IntMap v) where
-  build b = Draw $ \tc -> do
+  build b = withFrozenCallStack $ Draw $ \tc -> do
     checkSizeBounds "Hegel.Gen.IntMap" b.mMinSize b.mMaxSize
     startSpan tc LabelMap
     -- See Note [Variable-size mode required for reject] in Hegel.Collection.

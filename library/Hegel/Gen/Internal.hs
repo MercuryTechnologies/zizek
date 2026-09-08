@@ -28,8 +28,10 @@ module Hegel.Gen.Internal
   )
 where
 
-import Control.Exception (throwIO)
-import GHC.Stack (HasCallStack)
+import Control.Exception (throw, throwIO)
+import Data.Text qualified as T
+import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
+import Hegel.Exception (Diagnostic (..), InvariantViolation (..), ValidationError (..))
 import Hegel.Internal.Control (AssumeRejected (..))
 import Hegel.Internal.DataSource (Label (..), drawInteger, startSpan, stopSpan)
 import Hegel.Internal.TestCase (TestCase)
@@ -190,7 +192,7 @@ filtered :: (a -> Bool) -> Gen a -> Gen a
 filtered p = mapMaybe \a -> if p a then Prelude.Just a else Prelude.Nothing
 
 -- | Choose one of the given generators. The list must be non-empty;
--- passing @[]@ raises an error at the call site.
+-- passing @[]@ throws 'ValidationError' when evaluated.
 --
 -- /NOTE/: The empirical distribution across branches is __not__ uniform.
 --
@@ -202,15 +204,15 @@ filtered p = mapMaybe \a -> if p a then Prelude.Just a else Prelude.Nothing
 -- the run draws almost exclusively from @int32@. See 'frequency' for the
 -- underlying mechanism.
 oneOf :: (HasCallStack) => [Gen a] -> Gen a
-oneOf [] = error "Gen.oneOf: used with empty list"
+oneOf [] = throw (ValidationError Diagnostic {context = "Gen.oneOf", detail = "used with empty list", values = [("choices", "0")], callStack = callStack})
 oneOf gens = OneOf gens
 
 -- | Generate one of the given values (not uniformly — see the distribution
 -- note on 'oneOf'). The list must be non-empty; passing @[]@ raises an error
 -- at the call site.
 element :: (HasCallStack) => [a] -> Gen a
-element [] = error "Gen.element: used with empty list"
-element xs = oneOf (fmap pure xs)
+element [] = throw (ValidationError Diagnostic {context = "Gen.element", detail = "used with empty list", values = [("choices", "0")], callStack = callStack})
+element xs = withFrozenCallStack $ oneOf (fmap pure xs)
 
 -- | Wrap a generator so that schema expansion terminates when it appears
 -- on a recursive edge.  Without 'defer', a self-referential generator causes
@@ -249,7 +251,7 @@ enumerate _ = Nothing
 -- | Choose one of the given generators, weighted by the accompanying 'Int'.
 --
 -- The list must be non-empty and all weights must be positive; violations
--- raise an error at the call site.
+-- throw 'ValidationError' when evaluated.
 --
 -- /NOTE/: Weights bias which branch the engine prefers, especially early in a
 -- run, however they do __not__ describe a long-run sampling distribution:
@@ -266,9 +268,9 @@ enumerate _ = Nothing
 -- In this case, @frequency [(10, leaf), (1, recursive)]@ will spend most of
 -- its budget on @recursive@ once @leaf@'s novel paths are exhausted.
 frequency :: (HasCallStack) => [(Int, Gen a)] -> Gen a
-frequency [] = error "Gen.frequency: used with empty list"
+frequency [] = throw (ValidationError Diagnostic {context = "Gen.frequency", detail = "used with empty list", values = [("choices", "0")], callStack = callStack})
 frequency pairs
-  | any ((<= 0) . fst) pairs = error "Gen.frequency: all weights must be positive"
+  | any ((<= 0) . fst) pairs = throw (ValidationError Diagnostic {context = "Gen.frequency", detail = "all weights must be positive", values = [("weights", T.pack (show (map fst pairs)))], callStack = callStack})
   | otherwise = Draw \tc -> do
       startSpan tc LabelOneOf
       i <- drawInteger tc 0 (total - 1)
@@ -282,7 +284,7 @@ frequency pairs
 
 -- | Select the branch containing an index in the total positive weight range.
 prefixSelect :: Integer -> [(Integer, a)] -> a
-prefixSelect _ [] = error "Gen.frequency: prefix-sum invariant violated (unreachable)"
+prefixSelect _ [] = throw InvariantViolation {detail = "Gen.frequency: index exceeds the total weight"}
 prefixSelect n ((w, g) : rest)
   | n < w = g
   | otherwise = prefixSelect (n - w) rest

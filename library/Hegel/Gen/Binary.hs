@@ -10,6 +10,7 @@ module Hegel.Gen.Binary
 where
 
 import Data.ByteString (ByteString)
+import GHC.Stack (withFrozenCallStack)
 import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (drawBytes)
@@ -28,7 +29,7 @@ instance HasSize BinaryBuilder where
   maxSize n b = b {bMaxSize = Just n}
 
 instance Build BinaryBuilder ByteString where
-  build b = Draw \tc -> do
+  build b = withFrozenCallStack $ Draw \tc -> do
     checkSizeBounds "Hegel.Gen.Binary" b.bMinSize b.bMaxSize
     drawBytes tc wireLo wireHi
     where

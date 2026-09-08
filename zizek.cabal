@@ -96,6 +96,7 @@ library
     Hegel.Collection
     Hegel.Database
     Hegel.Diff
+    Hegel.Exception
     Hegel.Gen
     Hegel.Gen.Binary
     Hegel.Gen.Bool

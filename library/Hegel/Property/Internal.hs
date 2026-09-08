@@ -83,11 +83,12 @@ import Data.Sequence ((|>))
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
 import Data.Text qualified as T
-import GHC.Stack (HasCallStack, SrcLoc, callStack, withFrozenCallStack)
+import GHC.Stack (CallStack, HasCallStack, SrcLoc, callStack, withFrozenCallStack)
 import Hegel.Assertion (AssertionFailure (..), callSite)
 import Hegel.Diff (Diff)
+import Hegel.Exception (Diagnostic (..), ValidationError (..))
 import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
-import Hegel.Internal.Control (MalformedTest (..), NoBacktrace (..), isControlSignal, isFailure, onFailure)
+import Hegel.Internal.Control (MalformedTest (..), NoBacktrace (..), isControlSignal, isFailure, malformedTest, onFailure)
 import Hegel.Internal.Event qualified as Event
 import Hegel.Internal.TestCase (TestCase (..))
 import Hegel.Internal.TestCase qualified as TestCase
@@ -410,10 +411,10 @@ registerFinalizer act = do
 --
 -- Throws 'MalformedTest' when called from a stateful rule's @apply@ or an
 -- invariant's @check@.
-resource :: (MonadIO m) => IO a -> (a -> IO ()) -> PropertyT m a
+resource :: (HasCallStack, MonadIO m) => IO a -> (a -> IO ()) -> PropertyT m a
 resource open close = do
   env <- askEnv
-  when (env.scope >= InStep) $ liftIO (E.throwIO (MalformedTest inStepMessage))
+  when (env.scope >= InStep) $ liftIO (E.throwIO (withFrozenCallStack (malformedTest "resource" inStepMessage [])))
   let Finalizers ref _ = env.finalizers
   -- Acquire and register as one step under 'E.mask_': an async exception
   -- landing between the two, e.g. a sibling branch failing or a fork being
@@ -426,14 +427,14 @@ resource open close = do
 {-# INLINEABLE resource #-}
 
 -- | 'resource' for setup/teardown with no handle to thread through.
-resource_ :: (MonadIO m) => IO () -> IO () -> PropertyT m ()
-resource_ open close = resource open (const close)
+resource_ :: (HasCallStack, MonadIO m) => IO () -> IO () -> PropertyT m ()
+resource_ open close = withFrozenCallStack $ resource open (const close)
 {-# INLINEABLE resource_ #-}
 
 -- | Describe why 'resource' refused to run.
 inStepMessage :: Text
 inStepMessage =
-  "resource: called inside a stateful rule's apply or an invariant's check. \
+  "called inside a stateful rule's apply or an invariant's check. \
   \A rule or invariant can run any number of times per case, so its \
   \case-scoped release would never fire between applications. Acquire it in \
   \Machine.initial instead, or use Control.Exception.bracket/finally for \
@@ -451,6 +452,8 @@ data ForkState = NotJoined | JoinedOk | JoinedFailure | Cancelled
 data ForkEntry = ForkEntry
   { -- | The fork's current lifecycle state.
     state :: !(IORef ForkState),
+    -- | The public operation that created the fork.
+    spawnStack :: !CallStack,
     -- | Await-or-cancel the fork so its clone is freed, idempotently against
     -- a fork already joined or cancelled by its owner. Returns the fork's
     -- failure message when it was still 'NotJoined' and had already failed;
@@ -485,13 +488,13 @@ deregisterFork (OpenForks ref) k = atomicModifyIORef' ref \m -> (IntMap.delete k
 
 -- | Settle every fork still in the registry, in creation order, and report
 -- whether any of them had never been joined or cancelled by their owner.
-collectLeaks :: OpenForks -> IO (Maybe Text)
+collectLeaks :: OpenForks -> IO (Maybe MalformedTest)
 collectLeaks (OpenForks ref) = do
   leaked <- atomicModifyIORef' ref \m -> (IntMap.empty, IntMap.toAscList m)
   results <- traverse (\(_, e) -> e.settle) leaked
   pure case leaked of
     [] -> Nothing
-    _ -> Just (leakMessage (length leaked) (listToMaybe (catMaybes results)))
+    (_, entry) : _ -> Just (MalformedTest Diagnostic {context = "Hegel.Property.Fork.spawn", detail = leakMessage (length leaked) (listToMaybe (catMaybes results)), values = [("unjoined forks", T.pack (show (length leaked)))], callStack = entry.spawnStack})
 
 -- | Describe how many forks leaked and, when the first of them had already
 -- failed, what it said.
@@ -512,16 +515,16 @@ leakMessage n mFailure =
 -- against its clone when the parent completes fails with an engine error of
 -- its own, rather than the well-formed 'MalformedTest' this produces.
 closeOpenForks :: OpenForks -> IO ()
-closeOpenForks forks = collectLeaks forks >>= traverse_ (E.throwIO . MalformedTest)
+closeOpenForks forks = collectLeaks forks >>= traverse_ E.throwIO
 
 -- * Concurrent-branch mechanics
 
 -- | Fail the case immediately when the ambient clone-stream nesting depth has
 -- already reached 'cloneDepthLimit'.
-checkCloneDepth :: Env -> IO ()
+checkCloneDepth :: (HasCallStack) => Env -> IO ()
 checkCloneDepth env =
   when (env.cloneDepth >= env.cloneDepthLimit) do
-    E.throwIO . MalformedTest $ cloneDepthMessage env.cloneDepthLimit
+    E.throwIO (MalformedTest Diagnostic {context = "clone", detail = cloneDepthMessage env.cloneDepthLimit, values = [("maxCloneDepth", T.pack (show env.cloneDepthLimit))], callStack = callStack})
 
 -- | Describe a tripped clone-depth guard.
 cloneDepthMessage :: Int -> Text
@@ -631,9 +634,6 @@ drainFinalizers (Finalizers ref failures) = E.uninterruptibleMask_ do
 observeProperty :: Int -> TestCase -> Property () -> IO (Either SomeException (), [Note], [Event.Event], [SomeException])
 observeProperty cloneDepthLimit testCase prop = E.mask \restore -> do
   (journal, drainNotes) <- newRecordingJournal
-  let record n = case journal of
-        Recording sink -> sink n
-        Silent -> pure ()
   finalizers <- newFinalizers
   openForks <- newOpenForks
   eRes <-
@@ -648,16 +648,9 @@ observeProperty cloneDepthLimit testCase prop = E.mask \restore -> do
   mLeak <- collectLeaks openForks
   -- The caller stops later reconstructions if cleanup failed.
   failures <- cleanupFailures finalizers
-  -- A leak here should never actually happen: if the original run had left a
-  -- fork unjoined, it would have aborted the whole run as a 'MalformedTest'
-  -- before ever reaching a stored reproduction blob for this replay to
-  -- reconstruct.
-  for_ mLeak \msg -> do
-    clock <- Tick.next testCase.recording
-    record Note {kind = Footnote, text = "fork leak during replay: " <> msg, loc = Nothing, depth = 0, clock}
   notes <- drainNotes
   events <- Tick.drain testCase.events
-  pure (eRes, notes, events, failures)
+  pure (maybe eRes (Left . E.toException) mLeak, notes, events, failures)
 
 -- NOTE: This function _needs_ to use 'Control.Exception.throwIO' so that
 -- all non-Hegel async exceptions are rethrown _as_ async exceptions.
@@ -688,4 +681,6 @@ tryProperty act =
 failureDetails :: SomeException -> (Text, Maybe SrcLoc, Maybe Diff)
 failureDetails e = case fromException e of
   Just (af :: AssertionFailure) -> (af.message, callSite af.callStack, af.diff)
-  Nothing -> (T.pack (E.displayException e), Nothing, Nothing)
+  Nothing -> case fromException e of
+    Just (ValidationError d) -> (T.pack (E.displayException e), callSite d.callStack, Nothing)
+    Nothing -> (T.pack (E.displayException e), Nothing, Nothing)

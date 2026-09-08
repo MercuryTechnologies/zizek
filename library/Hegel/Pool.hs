@@ -46,7 +46,10 @@ import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Text (Text)
+import Data.Text qualified as T
 import Foreign (Ptr)
+import GHC.Stack (HasCallStack, withFrozenCallStack)
+import Hegel.Exception (InvariantViolation (..))
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.Control (AssumeRejected (..))
 import Hegel.Internal.DataSource (HegelPool, freePool, freshPoolIdentity, labelPool, newPool, poolAdd, poolAddFrom, poolGenerate)
@@ -72,8 +75,8 @@ data Pool a = Pool
 --
 -- The failure report automatically names the pool's values @v₁, w₁, ...@ based
 -- on their birth order; use 'named' to assign a name directly upon creation.
-new :: (MonadIO m) => PropertyT m (Pool a)
-new = do
+new :: (HasCallStack, MonadIO m) => PropertyT m (Pool a)
+new = withFrozenCallStack $ do
   env <- askEnv
   resource
     ( do
@@ -86,8 +89,8 @@ new = do
 
 -- | 'new' with a display label for the failure report: values of a pool
 -- named @"h"@ render as @h₁, h₂, ...@ in the event log.
-named :: (MonadIO m) => Text -> PropertyT m (Pool a)
-named label = do
+named :: (HasCallStack, MonadIO m) => Text -> PropertyT m (Pool a)
+named label = withFrozenCallStack $ do
   pool <- new
   env <- askEnv
   liftIO (labelPool env.testCase pool.identity label)
@@ -124,9 +127,7 @@ reuse pool = Draw \tc ->
         case IntMap.lookup vid vals of
           Just v -> pure v
           Nothing ->
-            -- Engine returned a variable id that was never added — engine-contract
-            -- violation, not a user error.
-            error ("Hegel.Pool.reuse: unknown variable id " <> show vid)
+            throwIO InvariantViolation {detail = "Hegel.Pool.reuse: unknown variable id " <> T.pack (show vid)}
 
 -- | A generator that consumes values from the pool, removing each yielded
 -- value so it is never drawn again.
@@ -150,9 +151,7 @@ drawConsuming caller pool tc =
         case IntMap.updateLookupWithKey (\_ _ -> Nothing) vid m of
           (Just v, m') -> pure (m', (vid, v))
           (Nothing, _) ->
-            -- Engine returned a variable id that was never added —
-            -- engine-contract violation, not a user error.
-            error ("Hegel.Pool." <> caller <> ": unknown variable id " <> show vid)
+            throwIO InvariantViolation {detail = "Hegel.Pool." <> T.pack caller <> ": unknown variable id " <> T.pack (show vid)}
 
 -- | A generator that moves a value from one pool to another: a consuming
 -- draw from @src@ whose value is immediately registered in @dst@, with the

@@ -169,12 +169,13 @@ data ReplayReason
   | ExhaustedChoices
   | ChangedOrigin !Text
   | InvalidReplayBlob !Text
+  | ReconstructionAborted !Text
   | MissingReplayData
   | IncompatibleVersions {tokenVersion :: !Text, engineVersion :: !Text}
   deriving stock (Show, Eq)
 
 -- | Why reconstruction did not run for an engine failure.
-data SkipReason = SkippedAfterCleanupFailure
+data SkipReason = SkippedAfterCleanupFailure | SkippedAfterReconstructionAbort
   deriving stock (Show, Eq)
 
 -- | The result of reconstructing one engine failure.
@@ -183,7 +184,7 @@ data FailureEvidenceStatus
     Reconstructed !FailureEvidence
   | -- | The replay was attempted but did not reproduce the expected failure.
     Diverged !ReplayDivergence
-  | -- | Reconstruction was not attempted after an earlier replay cleanup failed.
+  | -- | Reconstruction was not attempted because an earlier replay made further execution unsafe.
     Skipped !SkipReason
   | -- | The failing case was observed live on a nondeterministic run.
     Observed !FailureEvidence
@@ -223,6 +224,7 @@ renderReplayReason = \case
   UnexpectedDiscard -> "the replay discarded instead of failing"
   ExhaustedChoices -> "the replay exhausted its choices"
   ChangedOrigin origin -> "replay failed at a different origin: " <> origin
+  ReconstructionAborted detail -> "reconstruction aborted: " <> detail
   InvalidReplayBlob detail -> "the replay token was rejected by the engine: " <> detail
   MissingReplayData -> "the engine exposed no replay data for this failure"
   IncompatibleVersions {tokenVersion, engineVersion} ->
@@ -531,6 +533,7 @@ renderEvidence = \case
   Reconstructed evidence -> renderFailureEvidence evidence
   Observed evidence -> renderFailureEvidence evidence
   Diverged divergence -> PP.pretty (replayDivergenceReason divergence)
+  Skipped SkippedAfterReconstructionAbort -> "reconstruction skipped after an earlier reconstruction aborted"
   Skipped SkippedAfterCleanupFailure -> "reconstruction skipped after replay cleanup failed"
 
 withCleanupDiagnostics :: [CleanupDiagnostic] -> Doc Ann -> Doc Ann

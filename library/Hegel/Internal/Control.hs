@@ -15,6 +15,8 @@ module Hegel.Internal.Control
     LeafBudgetExceeded (..),
     AttemptMispriced (..),
     MalformedTest (..),
+    malformedTest,
+    isAborting,
     FinalizerFailed (..),
     NoBacktrace (..),
     isControlSignal,
@@ -35,6 +37,8 @@ import Control.Exception
     catches,
     throwIO,
   )
+import GHC.Stack (HasCallStack, callStack)
+import Hegel.Exception (Diagnostic (..), HegelError, InvariantViolation, MalformedTest (..), SettingsError)
 #if __GLASGOW_HASKELL__ >= 912
 import Control.Exception (NoBacktrace (..))
 #endif
@@ -42,7 +46,6 @@ import Control.Monad (when)
 import Data.List (intercalate)
 import Data.Maybe (isJust)
 import Data.Text (Text)
-import Data.Text qualified as T
 import UnliftIO.Exception (isSyncException)
 
 #if __GLASGOW_HASKELL__ < 912
@@ -134,19 +137,6 @@ instance Exception AttemptMispriced where
 #if __GLASGOW_HASKELL__ >= 912
   backtraceDesired _ = False
 #endif
-
--- | Thrown when a test is structurally invalid — a precondition on the test
--- /definition/ rather than a property failure (for example, a stateful
--- 'Hegel.Stateful.Machine' with no rules).
---
--- The runner reports this as 'Hegel.Report.Aborted', keeping "the test was
--- built wrong" distinct from "the property found a counterexample". Unlike the
--- control signals above, it is an ordinary synchronous exception.
-newtype MalformedTest = MalformedTest Text
-  deriving stock (Show)
-
-instance Exception MalformedTest where
-  displayException (MalformedTest msg) = T.unpack msg
 
 -- | Thrown when one or more registered finalizers
 -- ('Hegel.Property.registerFinalizer') failed while draining at the case
@@ -258,3 +248,23 @@ onFailure act hook =
   act `catch` \(e :: SomeException) -> do
     when (isFailure e) (hook e)
     throwIO (NoBacktrace e)
+
+-- | Capture the operation that rejected a malformed test.
+malformedTest :: (HasCallStack) => Text -> Text -> [(Text, Text)] -> MalformedTest
+malformedTest context detail values =
+  MalformedTest
+    Diagnostic
+      { context,
+        detail,
+        values,
+        callStack = callStack
+      }
+
+-- | Framework errors that invalidate further exploration or reconstruction.
+isAborting :: SomeException -> Bool
+isAborting e =
+  isJust (fromException @MalformedTest e)
+    || isJust (fromException @SettingsError e)
+    || isJust (fromException @HegelError e)
+    || isJust (fromException @InvariantViolation e)
+    || isJust (fromException @FinalizerFailed e)

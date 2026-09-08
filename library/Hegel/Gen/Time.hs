@@ -19,6 +19,8 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time.LocalTime (TimeOfDay (..), midnight)
+import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
+import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), ValidationError (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (drawTime)
@@ -40,7 +42,7 @@ instance HasMax TimeBuilder TimeOfDay where
   max hi b = b {bMax = Just hi}
 
 instance Build TimeBuilder TimeOfDay where
-  build b = Draw \tc -> do
+  build b = withFrozenCallStack $ Draw \tc -> do
     checkFields "Hegel.Gen.Time" lo
     checkFields "Hegel.Gen.Time" hi
     checkOrdered "Hegel.Gen.Time" lo hi
@@ -52,25 +54,19 @@ instance Build TimeBuilder TimeOfDay where
 -- | Require @hour@ in @[0, 23]@, @minute@\/@second@ in @[0, 59]@, and
 -- @second@'s fractional part to be a whole number of microseconds, throwing
 -- 'ValidationError' otherwise.
-checkFields :: Text -> TimeOfDay -> IO ()
+checkFields :: (HasCallStack) => Text -> TimeOfDay -> IO ()
 checkFields ctx t
   | t.todHour < 0 || t.todHour > 23 = invalid "hour" t.todHour
   | t.todMin < 0 || t.todMin > 59 = invalid "minute" t.todMin
   | t.todSec < 0 || t.todSec >= 60 = invalid "second" t.todSec
   | not (wholeMicroseconds t.todSec) =
       throwIO
-        ValidationError
-          { context = ctx,
-            detail = "second (" <> T.pack (show t.todSec) <> ") is finer than libhegel's microsecond resolution"
-          }
+        (ValidationError Diagnostic {context = ctx, detail = "second must have whole microsecond precision", values = [("second", T.pack (show t.todSec))], callStack = callStack})
   | otherwise = pure ()
   where
     wholeMicroseconds :: Pico -> Bool
     wholeMicroseconds (MkFixed ps) = ps `mod` 1_000_000 == 0
-    invalid :: (Show a) => Text -> a -> IO ()
+    invalid :: (HasCallStack, Show a) => Text -> a -> IO ()
     invalid field v =
       throwIO
-        ValidationError
-          { context = ctx,
-            detail = field <> " (" <> T.pack (show v) <> ") outside libhegel's range"
-          }
+        (ValidationError Diagnostic {context = ctx, detail = field <> " is outside its permitted range", values = [(field, T.pack (show v))], callStack = callStack})

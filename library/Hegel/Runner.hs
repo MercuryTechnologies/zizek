@@ -9,7 +9,7 @@ module Hegel.Runner
 where
 
 import Control.Concurrent.Async (wait, withAsyncBound)
-import Control.Exception (SomeException, bracket, finally, fromException, mask, toException, try)
+import Control.Exception (SomeException, bracket, finally, mask, toException, try)
 import Control.Monad (unless, void)
 import Data.Bits ((.|.))
 import Data.Foldable (for_)
@@ -21,11 +21,12 @@ import Data.Text qualified as T
 import Data.Word (Word32)
 import Foreign (Ptr, Storable, alloca, fromBool, nullPtr, peek)
 import Foreign.C.Types (CBool (..), CInt, CSize)
+import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Assertion (originOf)
 import Hegel.Database (Database (..))
 import Hegel.Gen.Internal (Gen, draw)
 import Hegel.HealthCheck (HealthCheck)
-import Hegel.Internal.Control (ControlSignal (..), FinalizerFailed (..), MalformedTest, NoBacktrace (..), catchControl)
+import Hegel.Internal.Control (ControlSignal (..), FinalizerFailed (..), NoBacktrace (..), catchControl, isAborting)
 import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
 import Hegel.Internal.Reconstruction (Failure (..), ReplayResult (..), reconstructFailures, replayOne)
@@ -50,66 +51,62 @@ import Hegel.Property.Internal
 import Hegel.Replay (ReplayToken)
 import Hegel.Report (Abort (..), Event (..), FailureEvidence (..), FailureEvidenceStatus (..), FailureOutcome (..), Note (..), ReplayStats (..), Report (..), Reproduction (..), Result (..), aborted, pattern ReplayedStats, pattern RunStats)
 import Hegel.Settings (Settings (..))
-import UnliftIO.Exception (catch, catchAny, throwIO)
+import Hegel.Settings qualified as Settings
+import UnliftIO.Exception (catchAny, throwIO)
 import UnliftIO.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Witch qualified
 
 -- | Run a 'Property' through @libhegel@.
-check :: Settings -> Property () -> IO Report
-check = checkWithProgress (\_ -> pure ())
+check :: (HasCallStack) => Settings -> Property () -> IO Report
+check = withFrozenCallStack $ checkWithProgress (\_ -> pure ())
 
 -- | Run a property and report cumulative completed engine cases after cleanup.
 -- Shrink probes count as cases; reconstruction replays do not.
-checkWithProgress :: (Int -> IO ()) -> Settings -> Property () -> IO Report
+checkWithProgress :: (HasCallStack) => (Int -> IO ()) -> Settings -> Property () -> IO Report
 checkWithProgress progress settings prop =
-  withAsyncBound go wait
-    `catch` (\(e :: MalformedTest) -> pure . aborted . Errored $ toException e)
-    `catch` (\(e :: HegelError) -> pure . aborted . Errored $ toException e)
-    -- A finalizer that threw while draining at the case boundary; teardown
-    -- failed, so per-case isolation may be broken.
-    --
-    -- Abort rather than trust the remaining cases or a shrink built on a
-    -- contaminated environment.
-    `catch` (\(e :: FinalizerFailed) -> pure . aborted . Errored $ toException e)
+  abortFramework (withAsyncBound go wait)
   where
-    go = withContext \ctx ->
-      withSettings ctx \s -> do
-        applySettings HEGEL_MODE_TEST_RUN ctx settings s
-        -- Read and copy everything out of the run handle before withRun frees
-        -- it on bracket exit (see 'readRunOutcome').
-        lastFailure <- newIORef Nothing
-        (nValid, nInvalid, outcome) <- withRun ctx s \run -> do
-          (nv, ni) <- driveLoop ctx (\journal -> propertyAction journal settings.maxCloneDepth prop) run lastFailure progress
-          o <- readRunOutcome ctx run
-          pure (nv, ni, o)
-        result <- case outcome.status of
-          RunPassed
-            | nValid == 0 -> pure (GaveUp "no valid examples found")
-            | otherwise -> pure Ok
-          RunFailed -> case outcome.failures of
-            [] -> pure (Aborted (Errored (toException (userError "run reported a failure but exposed no counterexample"))))
-            failure : failures -> do
-              version <- engineVersion ctx
-              reconstructed <- reconstructFailures ctx prop s settings.maxCloneDepth version (failure :| failures)
-              pure (Failures reconstructed)
-          -- The run itself failed (a health check, an engine panic) and
-          -- produced no verdict on the property.
-          RunErrored -> pure (Aborted (UnhealthyInput (fromMaybe "the run failed" outcome.runError)))
-          RunNondeterministic -> case outcome.failures of
-            f : _ -> do
-              mCapture <- readIORef lastFailure
-              pure (unreproducibleCounterexample mCapture f.origin)
-            [] ->
-              pure . Aborted . Errored . toException $
-                userError "the run reported a nondeterministic failure but exposed no counterexample"
-        pure
-          Report
-            { result,
-              stats = RunStats nValid nInvalid,
-              reproduction = case result of
-                Failures {} -> failureReproduction outcome.status settings
-                _ -> Unstored
-            }
+    go = either throwIO pure (withFrozenCallStack (Settings.validate settings)) *> execute
+    execute
+      | settings.testCases == 0, DatabaseDisabled <- settings.database = pure (Report (GaveUp "no valid examples found") (RunStats 0 0) Unstored)
+      | otherwise = withContext \ctx ->
+          withSettings ctx \s -> do
+            applySettings HEGEL_MODE_TEST_RUN ctx settings s
+            -- Read and copy everything out of the run handle before withRun frees
+            -- it on bracket exit (see 'readRunOutcome').
+            lastFailure <- newIORef Nothing
+            (nValid, nInvalid, outcome) <- withRun ctx s \run -> do
+              (nv, ni) <- driveLoop ctx (\journal -> propertyAction journal settings.maxCloneDepth prop) run lastFailure progress
+              o <- readRunOutcome ctx run
+              pure (nv, ni, o)
+            result <- case outcome.status of
+              RunPassed
+                | nValid == 0 -> pure (GaveUp "no valid examples found")
+                | otherwise -> pure Ok
+              RunFailed -> case outcome.failures of
+                [] -> pure (Aborted (Errored (toException (userError "run reported a failure but exposed no counterexample"))))
+                failure : failures -> do
+                  version <- engineVersion ctx
+                  reconstructed <- reconstructFailures ctx prop s settings.maxCloneDepth version (failure :| failures)
+                  pure (Failures reconstructed)
+              -- The run itself failed (a health check, an engine panic) and
+              -- produced no verdict on the property.
+              RunErrored -> pure (Aborted (UnhealthyInput (fromMaybe "the run failed" outcome.runError)))
+              RunNondeterministic -> case outcome.failures of
+                f : _ -> do
+                  mCapture <- readIORef lastFailure
+                  pure (unreproducibleCounterexample mCapture f.origin)
+                [] ->
+                  pure . Aborted . Errored . toException $
+                    userError "the run reported a nondeterministic failure but exposed no counterexample"
+            pure
+              Report
+                { result,
+                  stats = RunStats nValid nInvalid,
+                  reproduction = case result of
+                    Failures {} -> failureReproduction outcome.status settings
+                    _ -> Unstored
+                }
 
 failureReproduction :: RunStatus -> Settings -> Reproduction
 failureReproduction status settings = case (status, settings.database, settings.databaseKey) of
@@ -119,21 +116,22 @@ failureReproduction status settings = case (status, settings.database, settings.
   _ -> Unstored
 
 -- | Replay one failure token against a property without using the example database.
-replay :: Settings -> ReplayToken -> Property () -> IO Report
+replay :: (HasCallStack) => Settings -> ReplayToken -> Property () -> IO Report
 replay settings token prop =
-  withAsyncBound go wait
+  abortFramework (withAsyncBound go wait)
   where
-    go = withContext \ctx ->
-      withSettings ctx \s -> do
-        applySettings HEGEL_MODE_SINGLE_TEST_CASE ctx settings {database = DatabaseDisabled, databaseKey = Nothing} s
-        version <- engineVersion ctx
-        result <- replayOne ctx s settings.maxCloneDepth version token prop
-        pure
-          Report
-            { result = Failures (result.outcome :| []),
-              stats = ReplayedStats result.accounting.replayValid result.accounting.replayInvalid result.accounting,
-              reproduction = Unstored
-            }
+    go =
+      either throwIO pure (withFrozenCallStack (Settings.validate settings)) *> withContext \ctx ->
+        withSettings ctx \s -> do
+          applySettings HEGEL_MODE_SINGLE_TEST_CASE ctx settings {database = DatabaseDisabled, databaseKey = Nothing} s
+          version <- engineVersion ctx
+          result <- replayOne ctx s settings.maxCloneDepth version token prop
+          pure
+            Report
+              { result = Failures (result.outcome :| []),
+                stats = ReplayedStats result.accounting.replayValid result.accounting.replayInvalid result.accounting,
+                reproduction = Unstored
+              }
 
 -- | A test case 'runTestCase' itself classified 'Interesting'.
 --
@@ -179,14 +177,15 @@ unreproducibleCounterexample mCapture origin =
 -- different value than the live case did; the enclosing run detects this as
 -- nondeterminism, but only once it replays that case's prefix, so the
 -- failure may not appear on the first affected case.
-sample :: Settings -> Gen a -> IO a
+sample :: (HasCallStack) => Settings -> Gen a -> IO a
 sample settings gen =
   withAsyncBound go wait
   where
-    go = withContext \ctx ->
-      withSettings ctx \s -> do
-        applySettings HEGEL_MODE_SINGLE_TEST_CASE ctx settings s
-        withRun ctx s (drawOneCase ctx gen)
+    go =
+      either throwIO pure (withFrozenCallStack (Settings.validate settings)) *> withContext \ctx ->
+        withSettings ctx \s -> do
+          applySettings HEGEL_MODE_SINGLE_TEST_CASE ctx settings s
+          withRun ctx s (drawOneCase ctx gen)
 
 -- | Pull the one test case a single-test-case run offers, draw @gen@
 -- against it, and report the outcome.
@@ -220,25 +219,28 @@ drawOneCase ctx gen run = do
 -- __Do not call this from inside a 'Property' body!__
 --
 -- See the 'sample' documentation for additional details.
-samples :: Settings -> Int -> Gen a -> IO [a]
+samples :: (HasCallStack) => Settings -> Int -> Gen a -> IO [a]
 samples settings n gen =
   withAsyncBound go wait
   where
-    go = withContext \ctx ->
-      withSettings ctx \s -> do
-        applySettings HEGEL_MODE_TEST_RUN ctx settings {testCases = n, phases = [Generate]} s
-        acc <- newIORef []
-        outcome <- withRun ctx s \run -> do
-          collectCases ctx gen acc run
-          readRunOutcome ctx run
-        case outcome.status of
-          RunErrored -> throwIO (userError (T.unpack (fromMaybe "the run failed" outcome.runError)))
-          -- 'samples' runs no property body, so nothing can mark a case
-          -- 'Interesting', and 'RunFailed' should not arise here.
-          --
-          -- This arm covers it anyway, returning whatever was collected rather
-          -- than trying to interpret an outcome that should not occur.
-          _ -> reverse <$> readIORef acc
+    go = either throwIO pure (withFrozenCallStack (Settings.validate settings {testCases = n})) *> execute
+    execute
+      | n == 0 = pure []
+      | otherwise = withContext \ctx ->
+          withSettings ctx \s -> do
+            applySettings HEGEL_MODE_TEST_RUN ctx settings {testCases = n, phases = [Generate], database = DatabaseDisabled, databaseKey = Nothing} s
+            acc <- newIORef []
+            outcome <- withRun ctx s \run -> do
+              collectCases ctx gen acc run
+              readRunOutcome ctx run
+            case outcome.status of
+              RunErrored -> throwIO (userError (T.unpack (fromMaybe "the run failed" outcome.runError)))
+              -- 'samples' runs no property body, so nothing can mark a case
+              -- 'Interesting', and 'RunFailed' should not arise here.
+              --
+              -- This arm covers it anyway, returning whatever was collected rather
+              -- than trying to interpret an outcome that should not occur.
+              _ -> reverse <$> readIORef acc
 
 -- | Pull every test case the engine offers, drawing @gen@ against each and
 -- consing successes onto @acc@.
@@ -457,10 +459,7 @@ runTestCase ctx action tcPtr lastFailure = do
     case result of
       Left (e :: SomeException)
         | not (null failures),
-          Just (_ :: MalformedTest) <- fromException e ->
-            throwIO $ FinalizerFailed (Just e) failures
-        | not (null failures),
-          Just (_ :: HegelError) <- fromException e ->
+          isAborting e ->
             throwIO $ FinalizerFailed (Just e) failures
         | otherwise -> throwIO $ NoBacktrace e
       Right status -> case failures of
@@ -484,17 +483,16 @@ runTestCase ctx action tcPtr lastFailure = do
       status <-
         -- 'catchControl' catches only Hegel's async control signals via base
         -- 'E.catches'; 'catchAny' (unliftio) then catches all remaining
-        -- synchronous exceptions and marks them as failures /except/ for
-        -- 'MalformedTest', which is re-thrown so 'check' can abort the run.
+        -- synchronous user exceptions; framework errors abort exploration.
         (action journal finalizers forks tc $> Valid)
           `catchControl` \case
             Assume -> pure Invalid
             -- @libhegel@ owns the choice budget but does not observe that we
             -- stopped; report Overrun explicitly to let the engine shrink
             Stop -> pure Overrun
-          `catchAny` \e -> case fromException e of
-            Just malformed -> throwIO (malformed :: MalformedTest)
-            Nothing -> do
+          `catchAny` \e -> case isAborting e of
+            True -> throwIO e
+            False -> do
               writeIORef caseFailure (Just e)
               -- Stashed for 'check''s 'RunNondeterministic' arm, which has no
               -- reproduction blob to replay for its own failure content.
@@ -519,3 +517,11 @@ isNondeterministic :: Ptr HegelContext -> Ptr HegelTestCase -> IO Bool
 isNondeterministic ctx tcPtr = alloca \out -> do
   throwOnError ctx =<< hegel_test_case_is_nondeterministic ctx tcPtr out
   (\(CBool b) -> b /= 0) <$> peek out
+
+-- | Report framework aborts while preserving unrelated exceptions and cancellation.
+abortFramework :: IO Report -> IO Report
+abortFramework action =
+  action `catchAny` \e ->
+    if isAborting e
+      then pure (aborted (Errored e))
+      else throwIO (NoBacktrace e)

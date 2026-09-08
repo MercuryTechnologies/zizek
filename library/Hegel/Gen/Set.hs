@@ -12,6 +12,7 @@ where
 
 import Data.Set (Set)
 import Data.Set qualified as Set
+import GHC.Stack (withFrozenCallStack)
 import Hegel.Collection qualified as Collection
 import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw)
@@ -32,7 +33,7 @@ instance HasSize (SetBuilder a) where
   maxSize n b = b {sMaxSize = Just n}
 
 instance (Ord a) => Build (SetBuilder a) (Set a) where
-  build b = Draw $ \tc -> do
+  build b = withFrozenCallStack $ Draw $ \tc -> do
     checkSizeBounds "Hegel.Gen.Set" b.sMinSize b.sMaxSize
     startSpan tc LabelList
     -- See Note [Variable-size mode required for reject] in Hegel.Collection.

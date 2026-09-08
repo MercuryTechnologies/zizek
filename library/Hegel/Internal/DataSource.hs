@@ -70,12 +70,14 @@ module Hegel.Internal.DataSource
   )
 where
 
-import Control.Exception (Exception, finally, throwIO)
+import Control.Exception (finally, throwIO)
 import Control.Monad (void)
 import Data.Bits (bit, shiftL, shiftR, testBit, (.&.))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Fixed (Fixed (MkFixed), Pico)
+import GHC.Stack (HasCallStack)
+import Hegel.Exception (InvariantViolation (..))
 #ifdef HEGEL_CENSUS
 import Data.Foldable (traverse_)
 #endif
@@ -92,7 +94,7 @@ import Foreign (ForeignPtr, Ptr, alloca, allocaBytes, castPtr, nullPtr, peek, wi
 import Foreign.C.String (CString)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt, CSize (..))
 import Foreign.Concurrent qualified as Concurrent
-import Hegel.Internal.Control (AssumeRejected (..), AttemptMispriced (..), LeafBudgetExceeded (..), MalformedTest (..), TestStopped (..))
+import Hegel.Internal.Control (AssumeRejected (..), AttemptMispriced (..), LeafBudgetExceeded (..), TestStopped (..), malformedTest)
 import Hegel.Internal.Event qualified as Event
 import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
@@ -544,17 +546,6 @@ withNullableUtf8 Nothing k = k (nullPtr, 0)
 withNullableUtf8 (Just t) k =
   BS.useAsCStringLen (TE.encodeUtf8 t) \(p, len) -> k (castPtr p, fromIntegral len)
 
--- * Errors
-
--- | An engine guarantee we depend on didn't hold.
---
--- Anything that throws this exception should represent a bug in either
--- @libhegel@ or its C API.
-newtype InvariantViolation = InvariantViolation {detail :: Text}
-  deriving stock (Show)
-
-instance Exception InvariantViolation
-
 -- * Collections
 
 -- | Begin a variable-length collection.
@@ -677,7 +668,7 @@ freePool tc pool = void (hegel_pool_free tc.handle.ctx pool)
 -- | Register sequential state machine; returns its handle.
 --
 -- @ruleNames@ must be non-empty.
-newStateMachine :: TestCase -> [Text] -> [Text] -> IO (Ptr HegelStateMachine)
+newStateMachine :: (HasCallStack) => TestCase -> [Text] -> [Text] -> IO (Ptr HegelStateMachine)
 newStateMachine tc ruleNames invariantNames =
   -- One sequential group (id 0) for every rule.
   fst <$> newConcurrentStateMachine tc ruleNames (replicate (length ruleNames) 0) invariantNames 1 1
@@ -687,16 +678,15 @@ newStateMachine tc ruleNames invariantNames =
 --
 -- @ruleGroups@ must hold exactly one concurrency-group ID per @ruleNames@
 -- entry, in the same order; @ruleNames@ must be non-empty.
-newConcurrentStateMachine :: TestCase -> [Text] -> [Int64] -> [Text] -> Int64 -> Int64 -> IO (Ptr HegelStateMachine, Int)
+newConcurrentStateMachine :: (HasCallStack) => TestCase -> [Text] -> [Int64] -> [Text] -> Int64 -> Int64 -> IO (Ptr HegelStateMachine, Int)
 newConcurrentStateMachine tc ruleNames ruleGroups invariantNames minConcurrency maxConcurrency
   | length ruleGroups /= length ruleNames =
-      throwIO . MalformedTest $
-        "Hegel.Internal.DataSource.newConcurrentStateMachine: every rule name needs exactly one "
-          <> "corresponding entry in ruleGroups, in the same order, but got "
-          <> T.pack (show $ length ruleNames)
-          <> " rule name(s) and "
-          <> T.pack (show $ length ruleGroups)
-          <> " rule group(s)"
+      throwIO
+        ( malformedTest
+            "Hegel.Internal.DataSource.newConcurrentStateMachine"
+            "every rule name needs exactly one corresponding rule group"
+            [("rules", T.pack (show (length ruleNames))), ("ruleGroups", T.pack (show (length ruleGroups)))]
+        )
   | otherwise =
       withMany CString.withText ruleNames \rulePtrs ->
         withMany CString.withText invariantNames \invPtrs ->
@@ -834,14 +824,14 @@ freeRecursion tc recursion = void (hegel_recursion_free tc.handle.ctx recursion)
 startSpan :: TestCase -> Label -> IO ()
 startSpan tc label = do
   result <- hegel_start_span tc.handle.ctx tc.handle.ptr (Witch.into @Word64 label)
-  throwOnError tc.handle.ctx result
+  handleReturnCode tc result
 
 -- | Close the most-recently-opened span.
 -- Pass 'True' to mark it discarded.
 stopSpan :: TestCase -> Bool -> IO ()
 stopSpan tc isDiscard = do
   result <- hegel_stop_span tc.handle.ctx tc.handle.ptr (CBool (if isDiscard then 1 else 0))
-  throwOnError tc.handle.ctx result
+  handleReturnCode tc result
 
 -- | Span labels used to group related draws so the engine can shrink them
 -- as a unit. Numeric values match @libhegel@'s constants.

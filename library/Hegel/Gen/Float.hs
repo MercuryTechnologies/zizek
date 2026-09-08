@@ -26,6 +26,8 @@ import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Float (double2Float, float2Double)
+import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
+import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), ValidationError (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (FloatSpec (..), drawFloat)
@@ -103,7 +105,7 @@ smallestSubnormalFloat = float2Double (encodeFloat 1 (fst (floatRange (0 :: Floa
 --
 -- With an exclusive bound the two must be strictly ordered, since equal
 -- endpoints would leave the range empty.
-checkFloatBounds :: (RealFloat a, Show a) => Text -> FloatBuilder a -> IO ()
+checkFloatBounds :: (HasCallStack, RealFloat a, Show a) => Text -> FloatBuilder a -> IO ()
 checkFloatBounds what b = do
   checkNotNaN b.bMin
   checkNotNaN b.bMax
@@ -112,20 +114,17 @@ checkFloatBounds what b = do
       | b.bExclMin || b.bExclMax ->
           when (lo >= hi) $
             throwIO
-              ValidationError
-                { context = what,
-                  detail = "empty exclusive range: min (" <> T.pack (show lo) <> ") >= max (" <> T.pack (show hi) <> ")"
-                }
+              (ValidationError Diagnostic {context = what, detail = "min must be less than max for an exclusive range", values = [("min", T.pack (show lo)), ("max", T.pack (show hi))], callStack = callStack})
       | otherwise -> checkOrdered what lo hi
     _ -> pure ()
   where
     checkNotNaN Nothing = pure ()
     checkNotNaN (Just x)
-      | isNaN x = throwIO ValidationError {context = what, detail = "bound is NaN"}
+      | isNaN x = throwIO (ValidationError Diagnostic {context = what, detail = "bound is NaN", values = [("bound", T.pack (show x))], callStack = callStack})
       | otherwise = pure ()
 
 instance Build (FloatBuilder Float) Float where
-  build b = Draw \tc -> do
+  build b = withFrozenCallStack $ Draw \tc -> do
     checkFloatBounds "Hegel.Gen.Float" b
     double2Float <$> drawFloat tc 32 spec
     where
@@ -142,7 +141,7 @@ instance Build (FloatBuilder Float) Float where
           }
 
 instance Build (FloatBuilder Double) Double where
-  build b = Draw \tc -> do
+  build b = withFrozenCallStack $ Draw \tc -> do
     checkFloatBounds "Hegel.Gen.Float" b
     drawFloat tc 64 spec
     where

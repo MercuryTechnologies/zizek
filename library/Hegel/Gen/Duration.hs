@@ -25,6 +25,8 @@ import Data.Maybe (fromMaybe)
 import Data.Text qualified as T
 import Data.Time.Calendar (diffDays, fromGregorian)
 import Data.Time.Clock (NominalDiffTime, nominalDiffTimeToSeconds, secondsToNominalDiffTime)
+import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
+import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), ValidationError (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (drawInteger)
@@ -62,21 +64,18 @@ instance HasMax DurationBuilder NominalDiffTime where
   max hi b = b {bMax = Just hi}
 
 instance Build DurationBuilder NominalDiffTime where
-  build b = Draw \tc -> do
+  build b = withFrozenCallStack $ Draw \tc -> do
     checkOrdered "Hegel.Gen.Duration" lo hi
     checkNonNegative lo
     fromPicoseconds <$> drawInteger tc (toPicoseconds lo) (toPicoseconds hi)
     where
       lo = fromMaybe 0 b.bMin
       hi = fromMaybe defaultMax b.bMax
-      checkNonNegative :: NominalDiffTime -> IO ()
+      checkNonNegative :: (HasCallStack) => NominalDiffTime -> IO ()
       checkNonNegative n
         | n < 0 =
             throwIO
-              ValidationError
-                { context = "Hegel.Gen.Duration",
-                  detail = "negative duration (" <> T.pack (show n) <> ")"
-                }
+              (ValidationError Diagnostic {context = "Hegel.Gen.Duration", detail = "duration must be nonnegative", values = [("duration", T.pack (show n))], callStack = callStack})
         | otherwise = pure ()
 
 -- | The default upper bound: the number of seconds between

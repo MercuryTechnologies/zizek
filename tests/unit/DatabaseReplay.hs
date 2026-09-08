@@ -11,22 +11,23 @@ import Data.Text qualified as T
 import Hegel (Gen)
 import Hegel.Database (Database (..))
 import Hegel.Gen qualified as Gen
+import Hegel.Internal.Control (malformedTest)
 import Hegel.Internal.Foreign.Raw
 import Hegel.Internal.Reconstruction qualified as Reconstruction
 import Hegel.Internal.Replay qualified as InternalReplay
 import Hegel.Phase (Phase (..))
-import Hegel.Property (Property, assert, assume, forAll)
+import Hegel.Property (Property, assert, assume, forAll, registerFinalizer)
 import Hegel.Property.Internal (Env (..), Journal (..), askEnv)
 import Hegel.Replay (ReplayError (..), ReplayToken, decodeReplayToken, encodeReplayToken, replayTokenOrigin, replayTokenVersion)
-import Hegel.Report (FailureEvidence (..), FailureEvidenceStatus (..), FailureOutcome (..), ReplayDivergence (..), ReplayReason (..), ReplayStats (..), Report (..), Reproduction (..), Result (..), Stats (..))
+import Hegel.Report (CleanupDiagnostic (..), FailureEvidence (..), FailureEvidenceStatus (..), FailureOutcome (..), ReplayDivergence (..), ReplayReason (..), ReplayStats (..), Report (..), Reproduction (..), Result (..), SkipReason (..), Stats (..))
 import Hegel.Runner (check, replay)
 import Hegel.Settings (Settings (..), defaultSettings)
 import System.FilePath ((</>))
 import Test.Hspec
-import TestSupport (allFailureOutcomes, expectReconstructed, expectToken, failureEvidenceStatuses)
+import TestSupport (allFailureOutcomes, expectReconstructed, expectToken, failureEvidenceStatuses, forRenderers)
 import UnliftIO.Directory (doesDirectoryExist, listDirectory)
 import UnliftIO.Exception (throwIO)
-import UnliftIO.IORef (newIORef, readIORef, writeIORef)
+import UnliftIO.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 intR :: (Int, Int) -> Gen Int
@@ -40,6 +41,42 @@ oneFailure = assert False "one failure"
 
 spec :: Spec
 spec = do
+  for_ [False, True] \cleanupFails ->
+    it ("retains failures and skips later reconstructions after an abort, cleanup failure=" <> show cleanupFails) do
+      token <- singletonToken =<< check defaultSettings zeroFailure
+      ran <- newIORef (0 :: Int)
+      cleaned <- newIORef False
+      let body = do
+            modifyIORef' ran (+ 1)
+            registerFinalizer do
+              writeIORef cleaned True
+              when cleanupFails (throwIO (userError "cleanup diagnostic"))
+            throwIO (malformedTest "test" "test replay: malformed structure" [])
+          first = Reconstruction.Failure (replayTokenOrigin token) (Just (InternalReplay.tokenBlobOf token))
+          second = Reconstruction.Failure "second origin" (Just (InternalReplay.tokenBlobOf token))
+      withContext \ctx -> withSettings ctx \settings -> do
+        outcomes <- Reconstruction.reconstructFailures ctx body settings 10 (replayTokenVersion token) (first :| [second])
+        case outcomes of
+          a :| [b] -> do
+            a.failureReplayToken `shouldBe` Just token
+            a.failureOrigin `shouldBe` replayTokenOrigin token
+            b.failureOrigin `shouldBe` "second origin"
+            void (expectToken b)
+            case a.failureEvidence of
+              Diverged (ReplayDivergence (ReconstructionAborted detail)) -> detail `shouldSatisfy` T.isInfixOf "MalformedTest"
+              other -> expectationFailure (show other)
+            case b.failureEvidence of
+              Skipped why -> why `shouldBe` if cleanupFails then SkippedAfterCleanupFailure else SkippedAfterReconstructionAbort
+              other -> expectationFailure (show other)
+            if cleanupFails
+              then map (.cleanupMessage) a.cleanupDiagnostics `shouldSatisfy` any (T.isInfixOf "cleanup diagnostic")
+              else a.cleanupDiagnostics `shouldBe` []
+            forRenderers (Report (Failures outcomes) (Stats 1 0 Nothing) Unstored) \rendered ->
+              rendered `shouldSatisfy` T.isInfixOf "reconstruction aborted"
+          other -> expectationFailure (show other)
+      readIORef ran `shouldReturn` 1
+      readIORef cleaned `shouldReturn` True
+
   it "reports and replays multiple distinct deterministic failures" $ do
     let settings = defaultSettings {reportMultipleFailures = True, testCases = 200}
         failing :: Property ()
@@ -124,11 +161,11 @@ spec = do
       map (.failureReplayToken) (allFailureOutcomes report.result) `shouldBe` [Nothing]
       readIORef ran `shouldReturn` False
 
-  it "counts an execution-time engine exception as an attempted changed failure" do
+  it "counts an execution-time engine exception as an aborted reconstruction" do
     token <- singletonToken =<< check defaultSettings zeroFailure
     replayed <- replay defaultSettings token (throwIO HegelError {code = HEGEL_E_INVALID_ARG, message = Just "body engine error"})
     case failureEvidenceStatuses replayed.result of
-      [Diverged (ReplayDivergence (ChangedOrigin _))] -> pure ()
+      [Diverged (ReplayDivergence (ReconstructionAborted _))] -> pure ()
       other -> expectationFailure (show other)
     assertAccounting (ReplayStats 1 0 0 0 0) replayed
 
@@ -265,7 +302,7 @@ databaseContents root = go ""
     go relative = do
       entries <- sort <$> listDirectory (root </> relative)
       concat
-        <$> mapM
+        <$> traverse
           ( \entry -> do
               let path = relative </> entry
               directory <- doesDirectoryExist (root </> path)

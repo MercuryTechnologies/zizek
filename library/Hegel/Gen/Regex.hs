@@ -17,6 +17,7 @@ module Hegel.Gen.Regex
 where
 
 import Data.Text (Text)
+import GHC.Stack (withFrozenCallStack)
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Char (CharBuilder, HasAlphabet (..), buildCharTextGen)
 import Hegel.Gen.Internal.String (stringGen)
@@ -43,7 +44,7 @@ instance HasAlphabet RegexBuilder where
   alphabet cb b = b {bAlphabet = Just cb}
 
 instance Build RegexBuilder Text where
-  build b = stringGen gen
+  build b = withFrozenCallStack $ stringGen gen
     where
       -- The alphabet, if any, uses the same single-character bounds
       -- 'Hegel.Gen.Char' uses; see 'buildCharTextGen' for why.
@@ -51,4 +52,4 @@ instance Build RegexBuilder Text where
       -- The engine clones the alphabet's intervals rather than retaining the
       -- handle, so composing its construction into this one action, with
       -- nothing else holding a reference afterward, is safe.
-      gen = traverse (buildCharTextGen 1 1) b.bAlphabet >>= buildRegexGen b.bPattern b.bFullMatch
+      gen = withFrozenCallStack $ traverse (buildCharTextGen 1 1) b.bAlphabet >>= buildRegexGen b.bPattern b.bFullMatch

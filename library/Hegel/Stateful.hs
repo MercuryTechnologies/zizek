@@ -71,7 +71,7 @@ import Data.Foldable (for_)
 import Data.Text (Text)
 import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Assertion (callSite)
-import Hegel.Internal.Control (MalformedTest (..))
+import Hegel.Internal.Control (malformedTest)
 import Hegel.Internal.DataSource
   ( Label (LabelStatefulRule),
     freeStateMachine,
@@ -172,11 +172,11 @@ data Machine s m = Machine
 --
 -- The engine owns the step cap and bounds every case to at most
 -- 'Hegel.Settings.statefulStepCount' steps.
-run :: forall s m. (MonadUnliftIO m) => Machine s m -> PropertyT m ()
-run machine = do
+run :: forall s m. (HasCallStack, MonadUnliftIO m) => Machine s m -> PropertyT m ()
+run machine = withFrozenCallStack $ do
   when (null machine.rules) $
     throwIO $
-      MalformedTest "Hegel.Stateful.run: a Machine must have at least one rule"
+      malformedTest "Hegel.Stateful.run" "a Machine must have at least one rule" [("rules", "0")]
 
   env <- askEnv
   let tc = env.testCase

@@ -31,6 +31,7 @@ where
 import Data.Maybe (fromMaybe)
 import Data.Time.Calendar (Day, fromGregorian)
 import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), midnight)
+import GHC.Stack (withFrozenCallStack)
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasYear (..), checkOrdered)
 import Hegel.Gen.Date (checkYearRange)
 import Hegel.Gen.Internal (Gen (..))
@@ -63,7 +64,7 @@ onDay :: Day -> DateTimeBuilder -> DateTimeBuilder
 onDay d b = b {bMin = Just (LocalTime d midnight), bMax = Just (LocalTime d (TimeOfDay 23 59 59.999999))}
 
 instance Build DateTimeBuilder LocalTime where
-  build b = Draw \tc -> do
+  build b = withFrozenCallStack $ Draw \tc -> do
     checkYearRange "Hegel.Gen.DateTime" lo.localDay
     checkYearRange "Hegel.Gen.DateTime" hi.localDay
     checkFields "Hegel.Gen.DateTime" lo.localTimeOfDay

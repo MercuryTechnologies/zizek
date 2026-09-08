@@ -16,7 +16,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Foreign (Ptr)
 import Hegel.Assertion (originOf)
-import Hegel.Internal.Control (AssumeRejected, isControlSignal)
+import Hegel.Internal.Control (AssumeRejected, isAborting, isControlSignal)
 import Hegel.Internal.Foreign.Raw
 import Hegel.Internal.Replay (ReplayToken)
 import Hegel.Internal.Replay qualified as Replay
@@ -48,13 +48,18 @@ reconstructFailures ctx prop settings depth version = go
       later <- case rest of
         [] -> pure []
         next : remaining
-          | null result.outcome.cleanupDiagnostics -> do
+          | null result.outcome.cleanupDiagnostics,
+            not (reconstructionAborted result.outcome) -> do
               first :| others <- go (next :| remaining)
               pure (first : others)
-          | otherwise -> pure (map skip rest)
+          | otherwise -> pure (map (skip (if null result.outcome.cleanupDiagnostics then SkippedAfterReconstructionAbort else SkippedAfterCleanupFailure)) rest)
       pure (result.outcome :| later)
     tokenFor failure = Replay.makeReplayToken version failure.origin <$> failure.reproductionBlob
-    skip failure = FailureOutcome failure.origin (tokenFor failure) (Skipped SkippedAfterCleanupFailure) []
+    skip reason failure = FailureOutcome failure.origin (tokenFor failure) (Skipped reason) []
+    reconstructionAborted :: FailureOutcome -> Bool
+    reconstructionAborted outcome = case outcome.failureEvidence of
+      Diverged (ReplayDivergence (ReconstructionAborted _)) -> True
+      _ -> False
 
 notRun :: Text -> Maybe ReplayToken -> ReplayReason -> ReplayResult
 notRun origin token reason =
@@ -86,6 +91,7 @@ replayOne ctx settings depth version token prop
       Left exception
         | Just (_ :: AssumeRejected) <- fromException exception -> diverged UnexpectedDiscard (ReplayStats 1 0 1 0 0)
         | isControlSignal exception -> diverged ExhaustedChoices (ReplayStats 1 0 0 1 0)
+        | isAborting exception -> diverged (ReconstructionAborted (T.pack (displayException exception))) (ReplayStats 1 0 0 0 0)
         | otherwise ->
             let actual = originOf exception
                 (message, loc, diff) = failureDetails exception

@@ -20,6 +20,8 @@ where
 import Control.Exception (throwIO)
 import Data.Text (Text)
 import Data.Text qualified as T
+import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
+import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), ValidationError (..))
 import Hegel.Gen.Internal (Gen (..), draw)
 import Hegel.Gen.Internal.String (stringGen)
@@ -39,7 +41,7 @@ maxLength :: Int -> DomainBuilder -> DomainBuilder
 maxLength n b = b {bMaxLength = n}
 
 instance Build DomainBuilder Text where
-  build b = Draw \tc -> do
+  build b = withFrozenCallStack $ Draw \tc -> do
     checkMaxLength b.bMaxLength
     draw tc domainGen
     where
@@ -47,12 +49,9 @@ instance Build DomainBuilder Text where
       -- so 'stringGen' builds its handle once and shares it across every
       -- draw of this 'Gen' value.
       domainGen = stringGen (buildDomainGen (fromIntegral b.bMaxLength))
-      checkMaxLength :: Int -> IO ()
+      checkMaxLength :: (HasCallStack) => Int -> IO ()
       checkMaxLength n
         | n < 4 || n > 255 =
             throwIO
-              ValidationError
-                { context = "Hegel.Gen.Domain",
-                  detail = "maxLength (" <> T.pack (show n) <> ") outside [4, 255]"
-                }
+              (ValidationError Diagnostic {context = "Hegel.Gen.Domain", detail = "maxLength must be in [4, 255]", values = [("maxLength", T.pack (show n))], callStack = callStack})
         | otherwise = pure ()

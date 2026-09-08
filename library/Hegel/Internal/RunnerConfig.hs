@@ -2,17 +2,20 @@
 module Hegel.Internal.RunnerConfig where
 
 import Control.Applicative ((<|>))
+import Control.Exception (displayException)
 import Data.Char (isDigit)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Word (Word64)
+import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Database (Database (..))
 import Hegel.Property.Internal (Property)
 import Hegel.Replay (ReplayToken, decodeReplayToken)
 import Hegel.Report (Report)
 import Hegel.Runner qualified as Runner
 import Hegel.Settings (Settings (..))
+import Hegel.Settings qualified as Settings
 import System.Environment (lookupEnv)
 import Text.Read (readMaybe)
 
@@ -37,8 +40,8 @@ settingNames = ["test-cases", "stateful-steps", "seed", "database", "replay", "r
 -- | Parse one source, requiring replay identity and token together.
 parseOverrides :: (String -> Maybe String) -> Either String Overrides
 parseOverrides get = do
-  cases <- optional "test-cases" (natural "test-cases" 0)
-  steps <- optional "stateful-steps" (natural "stateful-steps" 1)
+  cases <- optional "test-cases" (settingInteger "test-cases" (\n -> Settings.defaultSettings {Settings.testCases = n}))
+  steps <- optional "stateful-steps" (settingInteger "stateful-steps" (\n -> Settings.defaultSettings {statefulStepCount = n}))
   seed <- optional "seed" (natural "seed" 0)
   database <- optional "database" parseDatabase
   replay <- case (get "replay", get "replay-key") of
@@ -52,6 +55,19 @@ parseOverrides get = do
   where
     optional :: String -> (String -> Either String a) -> Either String (Maybe a)
     optional name parser = traverse parser (get name)
+
+-- | Parse an Int setting and apply its shared numeric contract.
+settingInteger :: String -> (Int -> Settings) -> String -> Either String Int
+settingInteger name configure input = case readMaybe input :: Maybe Integer of
+  Just value
+    | let digits = case input of '-' : rest -> rest; _ -> input,
+      not (null digits),
+      all (\c -> isDigit c && c <= '9') digits,
+      value >= toInteger (minBound :: Int),
+      value <= toInteger (maxBound :: Int) ->
+        let n = fromInteger value
+         in either (Left . (("hegel-" <> name <> ": ") <>) . displayException) (const (Right n)) (Settings.validate (configure n))
+  _ -> Left ("hegel-" <> name <> ": expected a decimal Int")
 
 -- | Parse decimal digits within the supplied lower bound and target type maximum.
 natural :: forall a. (Integral a, Bounded a) => String -> Integer -> String -> Either String a
@@ -94,7 +110,7 @@ overlay low high =
     (high.replay <|> low.replay)
 
 -- | Resolve settings and reject persistence without an identity.
-resolve :: Settings -> Overrides -> Either String Settings
+resolve :: (HasCallStack) => Settings -> Overrides -> Either String Settings
 resolve settings overrides =
   let resolved =
         settings
@@ -103,7 +119,7 @@ resolve settings overrides =
             seed = overrides.seed <|> settings.seed,
             database = fromMaybe settings.database overrides.database
           }
-   in case resolved.database of
+   in either (Left . displayException) Right (withFrozenCallStack (Settings.validate resolved)) >> case resolved.database of
         DatabaseDisabled -> Right resolved
         _
           | Just key <- resolved.databaseKey, not (T.null key) -> Right resolved

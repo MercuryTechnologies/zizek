@@ -259,7 +259,8 @@ where
 
 #include <hegel.h>
 
-import Control.Exception (Exception (..), bracket, throwIO)
+import Control.Exception (bracket, throwIO)
+import Hegel.Exception (HegelError (..))
 import Control.Monad (void)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
@@ -435,23 +436,6 @@ instance Storable HegelDatetime where
 -- 'HegelError' covers failures that occur before any test case is produced —
 -- constructing a run ('hegel_run_start') or a replay test case
 -- ('hegel_test_case_from_blob') — as well as per-call errors.
-
--- | Exception thrown when a @libhegel@ call returns a non-zero error code.
-data HegelError = HegelError
-  { -- | The raw @HEGEL_E_*@ error code.
-    code :: !CInt,
-    -- | Diagnostic from 'hegel_context_last_error', if any.
-    message :: !(Maybe Text)
-  }
-  deriving stock (Show)
-
-instance Exception HegelError where
-#if __GLASGOW_HASKELL__ >= 912
-  -- The control-flow codes arrive here first, so this is thrown on every
-  -- stop and discard. The diagnostic that gets rendered is the engine's
-  -- message, so a backtrace would never be seen.
-  backtraceDesired _ = False
-#endif
 
 -- $errorcodes
 --

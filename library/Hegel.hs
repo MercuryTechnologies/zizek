@@ -49,6 +49,7 @@ module Hegel
 
     -- * Settings and reports
     module Hegel.Settings,
+    module Hegel.Exception,
     module Hegel.Backend,
     module Hegel.Verbosity,
     module Hegel.Database,
@@ -72,9 +73,11 @@ module Hegel
 where
 
 import Data.Default.Class (def)
+import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Assertion
 import Hegel.Backend
 import Hegel.Database
+import Hegel.Exception
 import Hegel.Gen.Internal (Gen)
 import Hegel.HealthCheck
 import Hegel.Phase
@@ -110,5 +113,5 @@ import Hegel.Verbosity
 -- | 'check_' with 'defaultSettings' and 'forEach': the shortest spelling for
 -- use inside a test framework's @it@\/@testCase@, where the framework owns the
 -- label and reports the thrown failure.
-prop :: (Show a) => Gen a -> (a -> IO ()) -> IO ()
-prop gen body = check_ def (forEach gen body)
+prop :: (HasCallStack, Show a) => Gen a -> (a -> IO ()) -> IO ()
+prop gen body = withFrozenCallStack $ check_ def (forEach gen body)

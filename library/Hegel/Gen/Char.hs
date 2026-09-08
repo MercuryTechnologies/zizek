@@ -40,7 +40,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Word (Word32, Word64)
 import Foreign.ForeignPtr (ForeignPtr)
-import Hegel.Gen.Builder (Build (..), checkNonNegative, checkOrderedMaybe)
+import GHC.Stack (HasCallStack, withFrozenCallStack)
+import Hegel.Gen.Builder (Build (..), checkNonNegativeNamed, checkOrderedMaybe)
 import Hegel.Gen.Internal.String (stringDraw)
 import Hegel.Internal.DataSource (HegelStringGenerator, InvariantViolation (..), TextSpec (..), buildTextGen)
 import Hegel.Internal.TestCase (TestCase)
@@ -164,11 +165,11 @@ categoryCode NotAssigned = "Cn"
 --
 -- Validates 'bMinCodepoint'\/'bMaxCodepoint' here, the single point every
 -- caller routes through, before marshalling.
-buildCharTextGen :: Word64 -> Word64 -> CharBuilder -> IO (ForeignPtr HegelStringGenerator)
-buildCharTextGen minSz maxSz b = do
+buildCharTextGen :: (HasCallStack) => Word64 -> Word64 -> CharBuilder -> IO (ForeignPtr HegelStringGenerator)
+buildCharTextGen minSz maxSz b = withFrozenCallStack $ do
   checkOrderedMaybe "Hegel.Gen.Char" b.bMinCodepoint b.bMaxCodepoint
-  traverse_ (checkNonNegative "Hegel.Gen.Char") b.bMinCodepoint
-  traverse_ (checkNonNegative "Hegel.Gen.Char") b.bMaxCodepoint
+  traverse_ (checkNonNegativeNamed "Hegel.Gen.Char" "minCodepoint") b.bMinCodepoint
+  traverse_ (checkNonNegativeNamed "Hegel.Gen.Char" "maxCodepoint") b.bMaxCodepoint
   buildTextGen
     TextSpec
       { minSize = minSz,
@@ -190,7 +191,7 @@ buildCharTextGen minSz maxSz b = do
       | otherwise = Just (fmap categoryCode (nub (Surrogate : fromMaybe [] b.bExcludeCategories)))
 
 instance Build CharBuilder Char where
-  build b = stringDraw (buildCharTextGen 1 1 b) postProcess
+  build b = withFrozenCallStack $ stringDraw (buildCharTextGen 1 1 b) postProcess
     where
       postProcess :: TestCase -> Text -> IO Char
       postProcess _tc t = case T.uncons t of

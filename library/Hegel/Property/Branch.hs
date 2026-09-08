@@ -36,6 +36,10 @@ import Control.Exception qualified as E
 import Control.Monad (void)
 import Control.Monad.IO.Class (liftIO)
 import Data.Either (partitionEithers)
+import Data.List (find)
+import Data.Text qualified as T
+import GHC.Stack (HasCallStack, withFrozenCallStack)
+import Hegel.Internal.Control (isAborting, malformedTest)
 import Hegel.Internal.TestCase (withClonePair, withClones)
 import Hegel.Property.Internal
   ( Env (testCase),
@@ -57,57 +61,64 @@ import UnliftIO.Async qualified as Async
 --   (do h <- forAll (Pool.reuse handles); liftIO (readHandle h))
 --   (do h <- forAll (Pool.reuse handles); liftIO (writeHandle h "x"))
 -- @
-concurrently :: (MonadUnliftIO m) => PropertyT m a -> PropertyT m b -> PropertyT m (a, b)
-concurrently pa pb = do
+concurrently :: (HasCallStack, MonadUnliftIO m) => PropertyT m a -> PropertyT m b -> PropertyT m (a, b)
+concurrently pa pb = withFrozenCallStack $ do
   env <- askEnv
   liftIO (checkCloneDepth env)
   withBaseRunInIO \runBase ->
     withClonePair env.testCase \ta tb -> do
       (ra, rb) <- Async.concurrently (runBranch runBase env ta pa) (runBranch runBase env tb pb)
       foldBranchNotes env [snd ra, snd rb]
+      case find isAborting [e | Left e <- [void (fst ra), void (fst rb)]] of
+        Just e -> E.throwIO e
+        Nothing -> pure ()
       case (fst ra, fst rb) of
         (Left e, _) -> E.throwIO e
         (Right _, Left e) -> E.throwIO e
         (Right a, Right b) -> pure (a, b)
 
 -- | 'concurrently', discarding both results.
-concurrently_ :: (MonadUnliftIO m) => PropertyT m a -> PropertyT m b -> PropertyT m ()
-concurrently_ pa pb = void (concurrently pa pb)
+concurrently_ :: (HasCallStack, MonadUnliftIO m) => PropertyT m a -> PropertyT m b -> PropertyT m ()
+concurrently_ pa pb = withFrozenCallStack $ void (concurrently pa pb)
 
 -- | Apply a property-valued function to every element of a list concurrently,
 -- each against its own cloned choice stream, preserving input order in the
 -- result.
-mapConcurrently :: (MonadUnliftIO m) => (a -> PropertyT m b) -> [a] -> PropertyT m [b]
-mapConcurrently f xs = runBranches Async.mapConcurrently (map f xs)
+mapConcurrently :: (HasCallStack, MonadUnliftIO m) => (a -> PropertyT m b) -> [a] -> PropertyT m [b]
+mapConcurrently f xs = withFrozenCallStack $ runBranches Async.mapConcurrently (map f xs)
 
 -- | 'mapConcurrently', discarding the results.
-mapConcurrently_ :: (MonadUnliftIO m) => (a -> PropertyT m b) -> [a] -> PropertyT m ()
-mapConcurrently_ f = void . mapConcurrently f
+mapConcurrently_ :: (HasCallStack, MonadUnliftIO m) => (a -> PropertyT m b) -> [a] -> PropertyT m ()
+mapConcurrently_ f = withFrozenCallStack $ void . mapConcurrently f
 
 -- | 'mapConcurrently' with its arguments flipped.
-forConcurrently :: (MonadUnliftIO m) => [a] -> (a -> PropertyT m b) -> PropertyT m [b]
-forConcurrently = flip mapConcurrently
+forConcurrently :: (HasCallStack, MonadUnliftIO m) => [a] -> (a -> PropertyT m b) -> PropertyT m [b]
+forConcurrently = withFrozenCallStack $ flip mapConcurrently
 
 -- | 'mapConcurrently_' with its arguments flipped.
-forConcurrently_ :: (MonadUnliftIO m) => [a] -> (a -> PropertyT m b) -> PropertyT m ()
-forConcurrently_ = flip mapConcurrently_
+forConcurrently_ :: (HasCallStack, MonadUnliftIO m) => [a] -> (a -> PropertyT m b) -> PropertyT m ()
+forConcurrently_ = withFrozenCallStack $ flip mapConcurrently_
 
 -- | Run @n@ copies of a property body concurrently, each against its own
 -- cloned choice stream. This is the N-client shape most concurrent-SUT
 -- properties want: @replicateConcurrently 5 clientSession@ runs five
 -- independent sessions against one shared server.
-replicateConcurrently :: (MonadUnliftIO m) => Int -> PropertyT m a -> PropertyT m [a]
-replicateConcurrently n act = runBranches Async.mapConcurrently (replicate n act)
+replicateConcurrently :: (HasCallStack, MonadUnliftIO m) => Int -> PropertyT m a -> PropertyT m [a]
+replicateConcurrently n act = withFrozenCallStack $ runBranches Async.mapConcurrently (replicate n act)
 
 -- | 'replicateConcurrently', discarding the results.
-replicateConcurrently_ :: (MonadUnliftIO m) => Int -> PropertyT m a -> PropertyT m ()
-replicateConcurrently_ n = void . replicateConcurrently n
+replicateConcurrently_ :: (HasCallStack, MonadUnliftIO m) => Int -> PropertyT m a -> PropertyT m ()
+replicateConcurrently_ n = withFrozenCallStack $ void . replicateConcurrently n
 
 -- | 'replicateConcurrently', capping how many branches drive at once rather
 -- than acquiring all @n@ clones and threads live simultaneously. @cap@ must
 -- be at least 1.
-replicateConcurrentlyBounded :: (MonadUnliftIO m) => Int -> Int -> PropertyT m a -> PropertyT m [a]
-replicateConcurrentlyBounded cap n act = runBranches (Async.pooledMapConcurrentlyN cap) (replicate n act)
+replicateConcurrentlyBounded :: (HasCallStack, MonadUnliftIO m) => Int -> Int -> PropertyT m a -> PropertyT m [a]
+replicateConcurrentlyBounded cap n act =
+  withFrozenCallStack $
+    if cap < 1
+      then liftIO (E.throwIO (malformedTest "Hegel.Property.Branch.replicateConcurrentlyBounded" "cap must be at least 1" [("cap", T.pack (show cap))]))
+      else runBranches (Async.pooledMapConcurrentlyN cap) (replicate n act)
 
 -- * Mechanics
 
@@ -116,11 +127,12 @@ replicateConcurrentlyBounded cap n act = runBranches (Async.pooledMapConcurrentl
 -- variant for bounded), then fold notes and report the lowest-indexed failure
 -- deterministically, mirroring 'concurrently'.
 runBranches ::
-  (MonadUnliftIO m) =>
+  (HasCallStack, MonadUnliftIO m) =>
   (forall x y. (x -> IO y) -> [x] -> IO [y]) ->
   [PropertyT m a] ->
   PropertyT m [a]
-runBranches runMany actions = do
+runBranches _ [] = pure []
+runBranches runMany actions = withFrozenCallStack $ do
   env <- askEnv
   liftIO (checkCloneDepth env)
   withBaseRunInIO \runBase ->
@@ -128,5 +140,5 @@ runBranches runMany actions = do
       outcomes <- runMany (\(tc, act) -> runBranch runBase env tc act) (zip clones actions)
       foldBranchNotes env (map snd outcomes)
       case partitionEithers (map fst outcomes) of
-        (e : _, _) -> E.throwIO e
+        (e : es, _) -> E.throwIO (maybe e id (find isAborting (e : es)))
         ([], results) -> pure results

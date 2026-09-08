@@ -1,6 +1,7 @@
 module StandardGenerators (spec) where
 
 import Data.ByteString qualified as BS
+import Data.Foldable (traverse_)
 import Data.Function ((&))
 import Data.Text qualified as T
 import Data.Time.Calendar (fromGregorian)
@@ -109,7 +110,7 @@ spec = do
         `shouldBe` "aabbcc"
       map (`Internal.prefixSelect` [(2, 'a'), (1, 'b')]) [0, 1, 2] `shouldBe` "aab"
     it "accepts totals larger than a machine word" $ do
-      mapM_
+      traverse_
         ( \n -> check_ (defaultSettings {testCases = 20}) $
             forEach (Gen.frequency [(maxBound, pure i) | i <- [1 .. n :: Int]]) $
               \i -> i `shouldSatisfy` (\x -> x >= 1 && x <= n)

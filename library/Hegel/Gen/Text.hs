@@ -15,6 +15,7 @@ module Hegel.Gen.Text
 where
 
 import Data.Text (Text)
+import GHC.Stack (withFrozenCallStack)
 import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Char (CharBuilder, HasAlphabet (..), buildCharTextGen)
 import Hegel.Gen.Internal (Gen (..), draw)
@@ -41,7 +42,7 @@ instance HasAlphabet TextBuilder where
   alphabet cb b = b {bAlphabet = Just cb}
 
 instance Build TextBuilder Text where
-  build b = Draw \tc -> do
+  build b = withFrozenCallStack $ Draw \tc -> do
     checkSizeBounds "Hegel.Gen.Text" b.bMinSize b.bMaxSize
     draw tc textGen
     where
@@ -51,7 +52,7 @@ instance Build TextBuilder Text where
       textGen = stringGen gen
       wireLo = fromIntegral b.bMinSize
       wireHi = maybe maxBound fromIntegral b.bMaxSize
-      gen = case b.bAlphabet of
+      gen = withFrozenCallStack $ case b.bAlphabet of
         -- No codec\/codepoint\/category restriction beyond excluding
         -- surrogates, which 'Data.Text.Text' cannot represent.
         Nothing ->

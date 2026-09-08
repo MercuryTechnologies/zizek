@@ -40,6 +40,7 @@ import Control.Monad (unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Text (Text)
 import Data.Text qualified as T
+import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Internal.Control (isFailure)
 import Hegel.Internal.TestCase qualified as TestCase
 import Hegel.Property.Internal
@@ -99,8 +100,8 @@ data Fork a = Fork
 -- 'Fork' is handed back, including an asynchronous exception landing here
 -- while it waits, since an unregistered, uncancelled fork would never be
 -- settled and would wedge the run the way a leaked clone does.
-spawn :: (MonadUnliftIO m) => PropertyT m a -> PropertyT m (Fork a)
-spawn body = do
+spawn :: (HasCallStack, MonadUnliftIO m) => PropertyT m a -> PropertyT m (Fork a)
+spawn body = withFrozenCallStack $ do
   env <- askEnv
   liftIO (checkCloneDepth env)
   withBaseRunInIO \runBase -> do
@@ -118,7 +119,7 @@ spawn body = do
         Async.waitCatch handle >>= \case
           Left e -> E.throwIO e
           Right _ -> pure ()
-      key <- registerFork env.openForks ForkEntry {state = stateRef, settle = settleFork stateRef handle}
+      key <- registerFork env.openForks ForkEntry {spawnStack = callStack, state = stateRef, settle = settleFork stateRef handle}
       pure Fork {handle, state = stateRef, key, registry = env.openForks}
 
 -- | Wait for a fork's result, rethrowing a branch failure bare so it shrinks
@@ -181,8 +182,8 @@ poll fork = liftIO do
 --
 -- Join the handle inside @use@ to wait for a result. A handle retained past
 -- @use@ is already cancelled, so it yields the cancelled outcome.
-scoped :: (MonadUnliftIO m) => PropertyT m a -> (Fork a -> PropertyT m b) -> PropertyT m b
-scoped body use = bracket (spawn body) cancel use
+scoped :: (HasCallStack, MonadUnliftIO m) => PropertyT m a -> (Fork a -> PropertyT m b) -> PropertyT m b
+scoped body use = withFrozenCallStack $ bracket (spawn body) cancel use
 
 -- | Await-or-cancel a fork's thread so its clone is freed, and describe its
 -- outcome for a leak message when it had already failed.

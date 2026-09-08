@@ -21,16 +21,17 @@ module Hegel.Internal.StatefulRound
   )
 where
 
-import Control.Exception (SomeException, fromException, mask, onException, throwIO, toException)
+import Control.Exception (SomeException, fromException, mask, onException, throw, throwIO, toException)
 import Data.Foldable (traverse_)
 import Data.List (sortOn)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Traversable (for)
 import Foreign (Ptr)
-import Hegel.Internal.Control (AssumeRejected (..), ControlSignal (Assume, Stop), TestStopped (..), catchControl)
+import Hegel.Exception (InvariantViolation (..))
+import Hegel.Internal.Control (AssumeRejected (..), ControlSignal (Assume, Stop), TestStopped (..), catchControl, isAborting)
 import Hegel.Internal.DataSource (Label (LabelStatefulRule), startSpan, stateMachineNextRule, stateMachineRuleRejected, stopSpan)
-import Hegel.Internal.Foreign.Raw (HegelError, HegelStateMachine)
+import Hegel.Internal.Foreign.Raw (HegelStateMachine)
 import Hegel.Internal.TestCase (TestCase)
 import UnliftIO.Async (Async)
 import UnliftIO.Async qualified as Async
@@ -97,7 +98,7 @@ classifyWorkerOutcome :: SomeException -> WorkerOutcome
 classifyWorkerOutcome e
   | Just AssumeRejected <- fromException e = RoundInvalid
   | Just TestStopped <- fromException e = RoundOverrun
-  | Just he <- fromException @HegelError e = RoundControlError (toException he)
+  | isAborting e = RoundControlError e
   | otherwise = RoundPanicked e
 
 -- | The conclusion of a given round.
@@ -153,21 +154,21 @@ waitWorkerOutcome h =
 
 -- * Reporting
 
--- | Resolve the engine's rule index against a list of pre-registered rules.
---
--- __NOTE__: Throws an 'error' if @libhegel@ returns an invalid index; this
--- should be impossible and must be reported upstream.
+-- | Resolve a registered rule, throwing 'InvariantViolation' for an unknown index.
 lookupRule :: String -> Int -> [(Int, a)] -> a
 lookupRule caller ruleIndex indexedRules = case lookup ruleIndex indexedRules of
   Just r -> r
   Nothing ->
-    error $
-      caller
-        <> ": libhegel returned rule index "
-        <> show ruleIndex
-        <> " for a machine with "
-        <> show (length indexedRules)
-        <> " rules. This should be impossible; please report it as a libhegel bug."
+    throw
+      InvariantViolation
+        { detail =
+            T.pack caller
+              <> ": unknown rule index "
+              <> T.pack (show ruleIndex)
+              <> " for "
+              <> T.pack (show (length indexedRules))
+              <> " registered rules"
+        }
 
 -- | The display string for a stateful step's header:
 --

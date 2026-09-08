@@ -38,7 +38,8 @@ import Control.Exception (Handler (..), bracket, catches)
 import Control.Monad (when)
 import Data.Word (Word64)
 import Foreign (Ptr)
-import Hegel.Gen.Builder (Build (..), checkNonNegative)
+import GHC.Stack (withFrozenCallStack)
+import Hegel.Gen.Builder (Build (..), checkNonNegativeNamed)
 import Hegel.Gen.Internal (Gen (..), draw)
 import Hegel.Internal.Control (AttemptMispriced (..), LeafBudgetExceeded (..))
 import Hegel.Internal.DataSource
@@ -95,9 +96,9 @@ maxLeaves :: Int -> RecursiveBuilder a -> RecursiveBuilder a
 maxLeaves n b = b {rMaxLeaves = n}
 
 instance Build (RecursiveBuilder a) a where
-  build b = Draw \tc -> do
-    checkNonNegative "Hegel.Gen.Recursive" b.rMaxDepth
-    checkNonNegative "Hegel.Gen.Recursive" b.rMaxLeaves
+  build b = withFrozenCallStack $ Draw \tc -> do
+    checkNonNegativeNamed "Hegel.Gen.Recursive" "maxDepth" b.rMaxDepth
+    checkNonNegativeNamed "Hegel.Gen.Recursive" "maxLeaves" b.rMaxLeaves
     bracket
       (newRecursion tc (fromIntegral b.rMaxDepth) (fromIntegral b.rMaxLeaves))
       (freeRecursion tc)

@@ -40,7 +40,8 @@ import Data.Map.Strict qualified as Map
 import Data.Sequence ((|>))
 import Data.Text (Text)
 import Data.Text qualified as T
-import Hegel.Internal.Control (MalformedTest (..))
+import GHC.Stack (HasCallStack, withFrozenCallStack)
+import Hegel.Internal.Control (malformedTest)
 import Hegel.Internal.DataSource (freeStateMachine, newConcurrentStateMachine, stateMachineNextGroup)
 import Hegel.Internal.Event (Event (..))
 import Hegel.Internal.StatefulRound (RoundSpan (..), RoundVerdict (..), Worker (..), lookupRule, runRound, stepText)
@@ -217,12 +218,12 @@ roundBoundaryText roundIdx = "round " <> T.pack (show roundIdx) <> " invariant c
 -- * Execution
 
 -- | Run a concurrent stateful test.
-run :: forall s m. (MonadUnliftIO m) => Concurrency -> Machine s m -> PropertyT m ()
-run bounds machine = do
+run :: forall s m. (HasCallStack, MonadUnliftIO m) => Concurrency -> Machine s m -> PropertyT m ()
+run bounds machine = withFrozenCallStack $ do
   when (null machine.rules) $
-    throwIO (MalformedTest "Hegel.Stateful.Concurrent.run: a Machine must have at least one rule")
+    throwIO (malformedTest "Hegel.Stateful.Concurrent.run" "a Machine must have at least one rule" [("rules", "0")])
   when (bounds.minWorkers < 1 || bounds.maxWorkers < bounds.minWorkers) $
-    throwIO (MalformedTest "Hegel.Stateful.Concurrent.run: concurrency bounds must satisfy 1 <= min <= max")
+    throwIO (malformedTest "Hegel.Stateful.Concurrent.run" "concurrency bounds must satisfy 1 <= min <= max" [("min", T.pack (show bounds.minWorkers)), ("max", T.pack (show bounds.maxWorkers))])
 
   env <- askEnv
   liftIO (checkCloneDepth env)

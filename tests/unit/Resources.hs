@@ -8,6 +8,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Default.Class (def)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Hegel.Exception (Diagnostic (..))
 import Hegel.Internal.Control (MalformedTest (..))
 import Hegel.Property
   ( assert,
@@ -55,7 +56,7 @@ isOk = \case
 isResourceGuardAbort :: Result -> Bool
 isResourceGuardAbort = \case
   Aborted (Errored e) -> case fromException e of
-    Just (MalformedTest msg) -> "resource:" `T.isInfixOf` msg
+    Just (MalformedTest msg) -> "resource:" `T.isInfixOf` (msg.context <> ": " <> msg.detail)
     Nothing -> False
   _ -> False
 

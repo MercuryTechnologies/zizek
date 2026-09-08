@@ -2,22 +2,27 @@
 module Hegel.Settings
   ( Settings (..),
     defaultSettings,
+    validate,
+    SettingsError (..),
     withDatabaseKey,
   )
 where
 
 import Data.Default.Class (Default (..))
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Word (Word64)
+import GHC.Stack (HasCallStack, callStack)
 import Hegel.Backend (Backend (..))
 import Hegel.Database (Database (..))
+import Hegel.Exception (Diagnostic (..), SettingsError (..))
 import Hegel.HealthCheck (HealthCheck)
 import Hegel.Phase (Phase (..))
 import Hegel.Verbosity (Verbosity (..))
 
 -- | Configuration for a single property run.
 data Settings = Settings
-  { -- | Number of test cases to attempt.
+  { -- | Nonnegative number of test cases to attempt.
     testCases :: !Int,
     -- | Target number of steps each stateful test case runs. Every case
     -- runs at least one step and at most this many. The engine chooses
@@ -50,8 +55,7 @@ data Settings = Settings
     suppressHealthCheck :: ![HealthCheck],
     -- | Ceiling on how deeply 'Hegel.Property.Fork.spawn' and the
     -- @Branch.concurrently@ family may nest clone streams within one test
-    -- case. Exceeding it aborts the run immediately rather than invalidating
-    -- the engine's whole clone family.
+    -- case. This must be nonnegative; zero permits properties that create no clones.
     maxCloneDepth :: !Int
   }
   deriving stock (Show)
@@ -87,3 +91,23 @@ instance Default Settings where
 -- is chosen by 'database'.
 withDatabaseKey :: Text -> Settings -> Settings
 withDatabaseKey key s = s {databaseKey = Just key}
+
+-- | Require nonnegative case and clone counts and at least one stateful step.
+validate :: (HasCallStack) => Settings -> Either SettingsError ()
+validate s
+  | s.testCases < 0 = invalid "testCases" s.testCases "must be nonnegative"
+  | s.statefulStepCount < 1 = invalid "statefulStepCount" s.statefulStepCount "must be at least 1"
+  | s.maxCloneDepth < 0 = invalid "maxCloneDepth" s.maxCloneDepth "must be nonnegative"
+  | otherwise = Right ()
+  where
+    invalid :: Text -> Int -> Text -> Either SettingsError ()
+    invalid name value detail =
+      Left
+        ( SettingsError
+            Diagnostic
+              { context = "Hegel.Settings." <> name,
+                detail,
+                values = [(name, T.pack (show value))],
+                callStack = callStack
+              }
+        )

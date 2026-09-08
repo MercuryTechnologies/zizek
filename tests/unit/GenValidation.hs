@@ -6,17 +6,30 @@
 -- 'HegelError'.
 module GenValidation (spec) where
 
-import Control.Exception (evaluate)
+import Control.Exception (evaluate, fromException, throwIO)
+import Control.Monad (void)
+import Control.Monad.IO.Class (liftIO)
+import Data.Foldable (for_, traverse_)
 import Data.Function ((&))
+import Data.IORef
 import Data.Text qualified as T
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), midnight)
+import GHC.Stack (SrcLoc (..), getCallStack)
 import Hegel (prop)
+import Hegel.Exception (Diagnostic (..), HegelError (..), MalformedTest (..), SettingsError (..))
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Builder (ValidationError (..), checkNonNegative, checkOrdered, checkOrderedMaybe, checkSizeBounds)
-import Hegel.Report (PropertyFailed (..), Report (..))
+import Hegel.Property qualified as Property
+import Hegel.Property.Branch qualified as Branch
+import Hegel.Property.Fork qualified as Fork
+import Hegel.Report (Abort (..), FailureEvidence (..), FailureOutcome (..), PropertyFailed (..), Report (..), Result (..))
+import Hegel.Runner qualified as Runner
+import Hegel.Settings (Settings (..), defaultSettings)
+import Hegel.Settings qualified as Settings
+import Hegel.Stateful.Concurrent qualified as Concurrent
 import Test.Hspec
-import TestSupport (failureMessages)
+import TestSupport (allFailureOutcomes, expectReconstructed, expectToken, failureMessages, forRenderers)
 
 -- | Does this 'PropertyFailed's message contain @needle@?
 --
@@ -27,14 +40,163 @@ messageContains needle PropertyFailed {report = Report {result}} = any (T.isInfi
 
 spec :: Spec
 spec = do
+  describe "validation classification" do
+    for_
+      [ ("char", void (Gen.char & Gen.minCodepoint (-1) & Gen.build)),
+        ("text alphabet", void (Gen.text & Gen.alphabet (Gen.char & Gen.minCodepoint (-1)) & Gen.build)),
+        ("regex alphabet", void (Gen.regex "." & Gen.alphabet (Gen.char & Gen.minCodepoint (-1)) & Gen.build))
+      ]
+      \(name, gen) ->
+        it ("preserves the build call site for an invalid " <> name) do
+          Runner.sample defaultSettings gen `shouldThrow` \(ValidationError d) ->
+            d.values == [("minCodepoint", "-1")]
+              && case getCallStack d.callStack of
+                (operation, loc) : _ -> operation == "build" && loc.srcLocFile == "tests/unit/GenValidation.hs"
+                _ -> False
+
+    for_
+      [ ("maxCodepoint", void (Gen.char & Gen.maxCodepoint (-1) & Gen.build)),
+        ("minSize", void (Gen.text & Gen.minSize (-1) & Gen.build)),
+        ("maxSize", void (Gen.binary & Gen.maxSize (-1) & Gen.build)),
+        ("maxDepth", void (Gen.recursive (pure ()) (\_ _ -> pure ()) & Gen.maxDepth (-1) & Gen.build)),
+        ("maxLeaves", void (Gen.recursive (pure ()) (\_ _ -> pure ()) & Gen.maxLeaves (-1) & Gen.build))
+      ]
+      \(field, gen) ->
+        it ("names the invalid " <> T.unpack field <> " field") do
+          Runner.sample defaultSettings gen `shouldThrow` \(ValidationError d) ->
+            d.values == [(field, "-1")] && d.detail == field <> " must be nonnegative"
+
+    it "shrinks generated invalid bounds and replays the smallest failing input" do
+      let body :: Property.Property ()
+          body = do
+            n <- Property.forAll (Gen.int & Gen.min 0 & Gen.max 50 & Gen.build)
+            void (Property.forAll (Gen.int & Gen.min n & Gen.max 0 & Gen.build))
+      report <- Property.check defaultSettings {seed = Just 42} body
+      evidence <- expectReconstructed report.result
+      evidence.message `shouldSatisfy` T.isInfixOf "min = 1"
+      fmap (.srcLocFile) evidence.loc `shouldBe` Just "tests/unit/GenValidation.hs"
+      case allFailureOutcomes report.result of
+        [outcome] -> do
+          outcome.failureOrigin `shouldSatisfy` T.isInfixOf "ValidationError Hegel.Gen.Integer"
+          token <- expectToken outcome
+          replayed <- Runner.replay defaultSettings token body
+          actual <- expectReconstructed replayed.result
+          actual.message `shouldBe` evidence.message
+        other -> expectationFailure (show other)
+      forRenderers report \rendered -> do
+        rendered `shouldSatisfy` T.isInfixOf "ValidationError"
+        rendered `shouldSatisfy` T.isInfixOf "GenValidation.hs"
+
+    for_ [("oneOf", Gen.oneOf @Int []), ("element", Gen.element @Int []), ("frequency", Gen.frequency @Int [])] \(name, gen) ->
+      it ("reports typed empty " <> name <> " diagnostics in sampling") do
+        Runner.sample defaultSettings gen `shouldThrow` \(ValidationError d) ->
+          d.context == "Gen." <> T.pack name
+            && d.values == [("choices", "0")]
+            && case getCallStack d.callStack of
+              (_, loc) : _ -> loc.srcLocFile == "tests/unit/GenValidation.hs"
+              _ -> False
+
+    it "captures the build call site through a deferred sampling draw" do
+      let gen = Gen.int & Gen.min 2 & Gen.max 1 & Gen.build
+      Runner.sample defaultSettings gen `shouldThrow` \(ValidationError d) ->
+        case getCallStack d.callStack of
+          (name, loc) : _ -> name == "build" && loc.srcLocFile == "tests/unit/GenValidation.hs"
+          _ -> False
+
+    it "renders live concurrent validation failures with their user location" do
+      let machine =
+            Concurrent.Machine
+              { initial = pure (),
+                rules = [Concurrent.rule "invalid draw" (\() -> void (Property.forAll (Gen.int & Gen.min 2 & Gen.max 1 & Gen.build)))],
+                invariants = []
+              }
+      report <- Property.check defaultSettings (Concurrent.run (Concurrent.fixed 2) machine)
+      forRenderers report \rendered -> do
+        rendered `shouldSatisfy` T.isInfixOf "ValidationError"
+        rendered `shouldSatisfy` T.isInfixOf "Hegel.Gen.Integer"
+        rendered `shouldSatisfy` T.isInfixOf "GenValidation.hs"
+
+    for_ [("direct", id), ("branch", \body -> Branch.concurrently_ (Property.failure "sibling") body), ("fork", \body -> Fork.spawn body >>= Fork.join)] \(name, wrap) ->
+      it ("aborts a body-level engine error through " <> name <> " and drains cleanup") do
+        cleaned <- newIORef False
+        report <- Property.check defaultSettings $ wrap do
+          Property.registerFinalizer (writeIORef cleaned True)
+          liftIO (throwIO HegelError {code = 1, message = Just "body engine error"})
+        case report.result of
+          Aborted (Errored e) -> case fromException e of
+            Just (he :: HegelError) -> he.message `shouldBe` Just "body engine error"
+            Nothing -> expectationFailure (show e)
+          other -> expectationFailure (show other)
+        readIORef cleaned `shouldReturn` True
+
+    it "throws the original settings error from check_" do
+      Property.check_ defaultSettings {maxCloneDepth = -1} (pure ()) `shouldThrow` \SettingsError {} -> True
+
+    it "rejects a nonpositive branch cap as a malformed operation" do
+      Property.check_ defaultSettings (void (Branch.replicateConcurrentlyBounded 0 1 (pure ()))) `shouldThrow` \(MalformedTest d) -> d.values == [("cap", "0")]
+
+    it "permits zero clone depth for ordinary properties and rejects a fork at its call site" do
+      report <- Property.check defaultSettings {maxCloneDepth = 0} (pure ())
+      show report.result `shouldBe` "Ok"
+      empty <- Property.check defaultSettings {maxCloneDepth = 0} (void (Branch.mapConcurrently pure ([] :: [Int])))
+      show empty.result `shouldBe` "Ok"
+      forked <- Property.check defaultSettings {maxCloneDepth = 0} (void (Fork.spawn (pure ())))
+      case forked.result of
+        Aborted (Errored e) -> case fromException e of
+          Just (MalformedTest d) -> case getCallStack d.callStack of
+            (name, loc) : _ -> do
+              name `shouldBe` "spawn"
+              loc.srcLocFile `shouldBe` "tests/unit/GenValidation.hs"
+            _ -> expectationFailure "missing clone operation location"
+          Nothing -> expectationFailure (show e)
+        other -> expectationFailure (show other)
+
+    it "validates every numeric settings field before checking, progress, replay, or sampling" do
+      baseline <- Property.check defaultSettings (Property.failure "baseline")
+      token <- case allFailureOutcomes baseline.result of
+        [outcome] -> expectToken outcome
+        other -> fail (show other)
+      for_ [defaultSettings {testCases = -1}, defaultSettings {statefulStepCount = 0}, defaultSettings {maxCloneDepth = -1}] \settings -> do
+        ran <- newIORef False
+        let body = liftIO (writeIORef ran True)
+        for_ [Property.check settings body, Runner.checkWithProgress (\_ -> writeIORef ran True) settings body, Runner.replay settings token body] \run -> do
+          report <- run
+          case report.result of
+            Aborted (Errored e) -> (case fromException e of Just SettingsError {} -> True; _ -> False) `shouldBe` True
+            other -> expectationFailure (show other)
+        Runner.sample settings (pure ()) `shouldThrow` \SettingsError {} -> True
+        readIORef ran `shouldReturn` False
+
+    it "allows zero test cases and reports no valid examples" do
+      report <- Property.check defaultSettings {testCases = 0} (Property.failure "must not run")
+      case report.result of
+        GaveUp _ -> pure ()
+        other -> expectationFailure (show other)
+
+    it "rejects settings before executing the property" do
+      ran <- newIORef False
+      report <- Property.check defaultSettings {testCases = -1} (liftIO (writeIORef ran True))
+      case report.result of
+        Aborted (Errored e) -> case fromException e of
+          Just (SettingsError d) -> d.values `shouldBe` [("testCases", "-1")]
+          Nothing -> expectationFailure (show e)
+        other -> expectationFailure (show other)
+      readIORef ran `shouldReturn` False
+    it "accepts the numeric limits without starting an engine" do
+      Settings.validate defaultSettings {testCases = 0, statefulStepCount = 1, maxCloneDepth = 0} `shouldSatisfy` either (const False) (const True)
+      Settings.validate defaultSettings {testCases = maxBound, statefulStepCount = maxBound, maxCloneDepth = maxBound} `shouldSatisfy` either (const False) (const True)
+    it "validates the effective sample count" do
+      Runner.samples defaultSettings {testCases = -1} 0 (pure True) `shouldReturn` []
+      Runner.samples defaultSettings (-1) (pure True) `shouldThrow` \SettingsError {} -> True
+
   describe "Gen.frequency validation" $ do
     it "rejects empty choices at the call site" $ do
-      evaluate (Gen.frequency @Int []) `shouldThrow` errorCall "Gen.frequency: used with empty list"
+      evaluate (Gen.frequency @Int []) `shouldThrow` \(ValidationError d) -> d.context == "Gen.frequency"
     it "rejects zero and negative weights at the call site" $ do
-      mapM_
+      traverse_
         ( \w ->
             evaluate (Gen.frequency [(1, pure True), (w, pure False)])
-              `shouldThrow` errorCall "Gen.frequency: all weights must be positive"
+              `shouldThrow` \(ValidationError d) -> d.context == "Gen.frequency"
         )
         [0, -1, minBound]
 
@@ -48,7 +210,7 @@ spec = do
 
       it "throws ValidationError when lo > hi" $ do
         checkOrdered "Test.context" (2 :: Int) 1
-          `shouldThrow` \ValidationError {context = ctx} -> ctx == "Test.context"
+          `shouldThrow` \(ValidationError d) -> d.context == "Test.context"
 
     describe "checkOrderedMaybe" $ do
       it "passes when either bound is absent" $ do
@@ -66,7 +228,7 @@ spec = do
 
       it "throws ValidationError on a negative value" $ do
         checkNonNegative "Test.context" (-1 :: Int)
-          `shouldThrow` \ValidationError {context = ctx} -> ctx == "Test.context"
+          `shouldThrow` \(ValidationError d) -> d.context == "Test.context"
 
     describe "checkSizeBounds" $ do
       it "passes a valid minSize/maxSize pair" $ do

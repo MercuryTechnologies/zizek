@@ -12,6 +12,7 @@ where
 
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import GHC.Stack (withFrozenCallStack)
 import Hegel.Collection qualified as Collection
 import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw)
@@ -34,7 +35,7 @@ instance HasSize (MapBuilder k v) where
   maxSize n b = b {mMaxSize = Just n}
 
 instance (Ord k) => Build (MapBuilder k v) (Map k v) where
-  build b = Draw $ \tc -> do
+  build b = withFrozenCallStack $ Draw $ \tc -> do
     checkSizeBounds "Hegel.Gen.Map" b.mMinSize b.mMaxSize
     startSpan tc LabelMap
     -- See Note [Variable-size mode required for reject] in Hegel.Collection.

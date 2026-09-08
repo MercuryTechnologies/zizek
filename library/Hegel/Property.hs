@@ -71,6 +71,7 @@ where
 
 import Control.Monad.IO.Class (liftIO)
 import Data.Text (Text)
+import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Assertion (assert, failure, (/==), (===))
 import Hegel.Gen.Internal (Gen)
 import Hegel.Property.Fork (Fork)
@@ -97,8 +98,8 @@ import Hegel.Settings (Settings)
 
 -- | Run a property and throw on anything other than success
 -- (via 'throwOnFailure').
-check_ :: Settings -> Property () -> IO ()
-check_ settings prop = throwOnFailure =<< check settings prop
+check_ :: (HasCallStack) => Settings -> Property () -> IO ()
+check_ settings prop = withFrozenCallStack $ throwOnFailure =<< check settings prop
 
 -- | Draw a value and run a test body against it, rendering drawn values via
 -- their 'Show' instance.

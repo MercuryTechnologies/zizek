@@ -29,6 +29,7 @@ import GHC.Stack
   )
 import GHC.Stack qualified as Stack
 import Hegel.Diff (Diff, diffLines, diffShown, renderDiff)
+import Hegel.Exception (Diagnostic (..), ValidationError (..))
 import Hegel.Report (renderValue)
 import UnliftIO.Exception (throwIO)
 
@@ -129,7 +130,9 @@ callSite cs = case getCallStack cs of
 originOf :: SomeException -> Text
 originOf exc = case fromException exc of
   Just AssertionFailure {callStack = cs} -> formatWithStack (typeName exc) cs
-  Nothing -> typeName exc <> " at <unknown>:0"
+  Nothing -> case fromException exc of
+    Just (ValidationError d) -> formatWithStack (typeName exc <> " " <> d.context) d.callStack
+    Nothing -> typeName exc <> " at <unknown>:0"
   where
     typeName :: SomeException -> Text
     typeName (SomeException e) = T.pack (show (typeOf e))

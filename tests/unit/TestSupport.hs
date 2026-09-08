@@ -18,7 +18,7 @@ module TestSupport
   )
 where
 
-import Data.Foldable (toList)
+import Data.Foldable (toList, traverse_)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
@@ -83,7 +83,7 @@ forRenderers :: Report.Report -> (Text -> Expectation) -> Expectation
 forRenderers report assertion = do
   rich <- Report.renderReportRich report
   richAnsi <- Report.renderReportRichAnsi report
-  mapM_ assertion [Report.renderReport report, Report.renderReportAnsi report, rich, richAnsi]
+  traverse_ assertion [Report.renderReport report, Report.renderReportAnsi report, rich, richAnsi]
 
 failureMessages :: Result -> [Text]
 failureMessages = mapMaybe (fmap (.message) . failureRecordOf) . allFailureOutcomes

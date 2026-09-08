@@ -27,13 +27,14 @@ module Hegel.Internal.TestCase
   )
 where
 
-import Control.Exception (bracket)
+import Control.Exception (bracket, throwIO)
 import Control.Monad (void)
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
 import Data.Word (Word32)
 import Foreign (Ptr, alloca, nullPtr, peek)
+import Hegel.Internal.Control (AssumeRejected (..), TestStopped (..))
 import Hegel.Internal.Event (Event, Var)
 import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
@@ -77,7 +78,10 @@ withClone src action =
     acquire :: Ptr HegelContext -> IO TestCase
     acquire ctx = do
       ptr <- alloca \out -> do
-        throwOnError src.handle.ctx =<< hegel_test_case_clone src.handle.ctx src.handle.ptr out
+        hegel_test_case_clone src.handle.ctx src.handle.ptr out >>= \case
+          HEGEL_E_STOP_TEST -> throwIO TestStopped
+          HEGEL_E_ASSUME -> throwIO AssumeRejected
+          rc -> throwOnError src.handle.ctx rc
         peek out
       recording <- case src.recording of
         Tick.Silent -> pure Tick.Silent
