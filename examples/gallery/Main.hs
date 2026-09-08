@@ -104,13 +104,14 @@ import Hegel.Property
   )
 import Hegel.Property.Branch qualified as Branch
 import Hegel.Property.Fork qualified as Fork
-import Hegel.Report (Report (..), renderReportRichAnsi, renderReportRichAnsiWith, renderValue)
+import Hegel.Report (Report (..), renderReportAuto, renderReportRichAnsiWith, renderValue)
 import Hegel.Report.Style (defaultStyle)
 import Hegel.Report.Style qualified as Style
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..))
 import Hegel.Stateful qualified as Stateful
 import Hegel.Stateful.Concurrent qualified as Concurrent
+import System.IO (stdout)
 import UnliftIO.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 
 main :: IO ()
@@ -138,8 +139,9 @@ runScenarioWith settings title prop = showReport title =<< check settings prop
 -- | Print one report through the wired rich ANSI renderer.
 showReport :: Text -> Report -> IO ()
 showReport title report = do
-  T.putStrLn ("\n━━━━━ scenario " <> title <> " ━━━━━")
-  T.putStrLn =<< renderReportRichAnsi report
+  pref <- Style.preference stdout
+  T.putStrLn (Style.cleanFor pref ("\n━━━━━ scenario " <> title <> " ━━━━━"))
+  T.putStrLn =<< renderReportAuto True pref report
 
 -- | The trace scenarios through the /wired/ path — 'renderReportRichAnsi'
 -- composes the event log and the failing step's splice itself — plus the
@@ -152,7 +154,7 @@ runTraceScenario withAscii title prop = do
   showReport title report
   if withAscii
     then do
-      T.putStrLn "── ascii ──"
+      T.putStrLn "-- ascii --"
       T.putStrLn . Style.sevenBitClean
         =<< renderReportRichAnsiWith (defaultStyle Style.ascii) report
     else pure ()
