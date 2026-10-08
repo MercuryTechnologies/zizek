@@ -18,7 +18,7 @@
 --     'assert' (reverse (reverse xs) == xs) "reverse is involutive"
 -- @
 --
--- Each reconstructed failure retains its 'forAll' values and 'annotate'
+-- Each captured failure retains its 'forAll' values and 'annotate'
 -- entries as 'Hegel.Report.Note' values in the report.
 module Hegel.Property
   ( -- * Properties

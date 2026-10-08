@@ -21,7 +21,7 @@ import Hegel.Runner (check)
 import Hegel.Settings (Settings (..))
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
-import TestSupport (expectReconstructed, singleReconstructedEvidence)
+import TestSupport (expectCaptured, singleCapturedEvidence)
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -170,7 +170,7 @@ statefulSpec = describe "Machine" do
               invariants = [neverAboveFive]
             }
     report <- check def (Stateful.run machine)
-    evidence <- expectReconstructed report.result
+    evidence <- expectCaptured report.result
     evidence.message `shouldBe` "counter does not exceed 5"
 
   it "machinery annotations carry no source location" do
@@ -186,7 +186,7 @@ statefulSpec = describe "Machine" do
               invariants = [neverAboveFive]
             }
     report <- check def (Stateful.run machine)
-    case singleReconstructedEvidence report.result of
+    case singleCapturedEvidence report.result of
       Just FailureEvidence {notes} -> do
         let machinery = [n | n <- notes, isMachinery n.kind]
             isMachinery = \case
@@ -209,7 +209,7 @@ statefulSpec = describe "Machine" do
               invariants = [neverAboveFive]
             }
     report <- check def (Stateful.run machine)
-    case singleReconstructedEvidence report.result of
+    case singleCapturedEvidence report.result of
       Just FailureEvidence {notes} ->
         case filter isFailureNote notes of
           [f] -> do
@@ -237,7 +237,7 @@ statefulSpec = describe "Machine" do
     ("┏━━ tests/unit/Stateful.hs" `T.isInfixOf` rich) `shouldBe` True
 
   it "value-drawing counterexample reproduces on replay" do
-    -- Multiple drawing rules require choice alignment during reconstruction.
+    -- Multiple drawing rules require choice alignment during replay.
     let machine =
           Stateful.Machine
             { initial = pure (Stack []),
@@ -246,7 +246,7 @@ statefulSpec = describe "Machine" do
               invariants = []
             }
     report <- check def (Stateful.run machine)
-    evidence <- expectReconstructed report.result
+    evidence <- expectCaptured report.result
     evidence.notes `shouldNotSatisfy` null
 
   it "machine with no rules is aborted, not reported as a counterexample" do

@@ -52,6 +52,7 @@ module Hegel
     module Hegel.Exception,
     module Hegel.Backend,
     module Hegel.Verbosity,
+    module Hegel.Nondeterminism,
     module Hegel.Database,
     module Hegel.HealthCheck,
     module Hegel.Report,
@@ -80,6 +81,7 @@ import Hegel.Database
 import Hegel.Exception
 import Hegel.Gen.Internal (Gen)
 import Hegel.HealthCheck
+import Hegel.Nondeterminism
 import Hegel.Phase
 import Hegel.Pool
 import Hegel.Property

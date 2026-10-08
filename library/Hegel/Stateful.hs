@@ -33,8 +33,8 @@
 --
 -- = Notes
 --
--- * The entire 'Machine' body re-runs on every shrink attempt and once more
---   to reconstruct the failure report. Effects against a real system under
+-- * The entire 'Machine' body re-runs on every shrink attempt and on each
+--   replay the engine makes to confirm and report a failure. Effects against a real system under
 --   test must tolerate repetition; reset\/setup belongs in 'initial'.
 --
 -- * Preconditions are expressed with 'assume'\/'discard' at the head of a

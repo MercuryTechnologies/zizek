@@ -60,7 +60,6 @@ module Hegel.Property.Internal
     -- * Runner hooks
     runPropertyT,
     propertyAction,
-    observeProperty,
     tryProperty,
     failureDetails,
 
@@ -165,9 +164,9 @@ data Env = Env
 -- front, a 'PropertyT' may draw, perform effects, and make assertions in any
 -- order.
 --
--- __NOTE__: The entire body of a 'Property' is re-run on every shrink attempt,
--- and once more to reconstruct the failure report; effects must tolerate
--- repetition.
+-- __NOTE__: The entire body of a 'Property' is re-run on every shrink attempt
+-- and on each replay the engine makes to confirm and report a failure, so its
+-- effects must tolerate repetition.
 newtype PropertyT m a = PropertyT (ReaderT Env m a)
   deriving newtype (Functor, Applicative, Monad, MonadIO, MonadFail, MonadUnliftIO)
 
@@ -376,8 +375,8 @@ childFinalizers (Finalizers _ failures) = (\ref -> Finalizers ref failures) <$> 
 --
 -- * __Runs on exit for every test case__
 --
--- * __Runs on every replay__: each shrink attempt and the reconstruction
---   replay is a fresh case with its own registrations and its own drain, so
+-- * __Runs on every replay__: each shrink attempt and each replay of a
+--   failure is a fresh case with its own registrations and its own drain, so
 --   nothing accumulates across replays.
 --
 -- * __LIFO__: last registered, first run, so nested resources release in
@@ -395,10 +394,8 @@ childFinalizers (Finalizers _ failures) = (\ref -> Finalizers ref failures) <$> 
 --   'Control.Exception.uninterruptibleMask_', so one that blocks indefinitely
 --   hangs the run un-interruptibly.
 --
--- * __A finalizer that throws during a live case aborts the run__ as
---   'Hegel.Report.Errored'. During failure reconstruction, cleanup diagnostics
---   accompany the current outcome and later failures are reported as skipped.
---   Every registered finalizer drains on either path.
+-- * __A finalizer that throws aborts the run__ as 'Hegel.Report.Errored',
+--   after every other registered finalizer for the case has drained.
 registerFinalizer :: (MonadIO m) => IO () -> PropertyT m ()
 registerFinalizer act = do
   env <- askEnv
@@ -628,29 +625,6 @@ drainFinalizers (Finalizers ref failures) = E.uninterruptibleMask_ do
       E.try f >>= \case
         Right () -> go acc rest
         Left (e :: SomeException) -> go (e : acc) rest
-
--- | Run a property against a test case with a recording journal, returning
--- the outcome, notes, pool events, and all finalizer failures.
-observeProperty :: Int -> TestCase -> Property () -> IO (Either SomeException (), [Note], [Event.Event], [SomeException])
-observeProperty cloneDepthLimit testCase prop = E.mask \restore -> do
-  (journal, drainNotes) <- newRecordingJournal
-  finalizers <- newFinalizers
-  openForks <- newOpenForks
-  eRes <-
-    tryProperty
-      ( restore $
-          runPropertyT
-            Env {testCase, journal, noteDepth = 0, finalizers, openForks, cloneDepth = 0, cloneDepthLimit, scope = Unrestricted}
-            prop
-      )
-      `E.onException` void (collectLeaks openForks)
-      `E.finally` void (drainFinalizers finalizers)
-  mLeak <- collectLeaks openForks
-  -- The caller stops later reconstructions if cleanup failed.
-  failures <- cleanupFailures finalizers
-  notes <- drainNotes
-  events <- Tick.drain testCase.events
-  pure (maybe eRes (Left . E.toException) mLeak, notes, events, failures)
 
 -- NOTE: This function _needs_ to use 'Control.Exception.throwIO' so that
 -- all non-Hegel async exceptions are rethrown _as_ async exceptions.

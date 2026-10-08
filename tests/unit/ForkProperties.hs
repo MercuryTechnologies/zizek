@@ -26,7 +26,7 @@ import Hegel.Property.Fork qualified as Fork
 import Hegel.Report (Abort (..), FailureEvidence (..), Note (..), Report (..), Result (..), isBranchHeader, renderReportRich)
 import Hegel.Settings (Settings (..), defaultSettings)
 import Test.Hspec
-import TestSupport (singleReconstructedEvidence)
+import TestSupport (singleCapturedEvidence)
 import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 
 intR :: (Int, Int) -> Gen Int
@@ -80,7 +80,7 @@ spec = describe "Hegel.Property.Fork" do
       report <- check def do
         f <- Fork.spawn (assert False "fork failed")
         Fork.join f
-      case singleReconstructedEvidence report.result of
+      case singleCapturedEvidence report.result of
         Just FailureEvidence {message} -> message `shouldBe` "fork failed"
         other -> expectationFailure ("expected failure, got: " <> show other)
 
@@ -102,7 +102,7 @@ spec = describe "Hegel.Property.Fork" do
                   _ <- Fork.join f1
                   _ <- Fork.join f2
                   pure ()
-            pure case singleReconstructedEvidence report.result of
+            pure case singleCapturedEvidence report.result of
               Just FailureEvidence {message} -> Just message
               _ -> Nothing
       results <- replicateM 20 oneRun
@@ -113,7 +113,7 @@ spec = describe "Hegel.Property.Fork" do
         f <- Fork.spawn (annotateShow (1 :: Int))
         _ <- Fork.join f
         assert False "force a counterexample so the journal renders"
-      case singleReconstructedEvidence report.result of
+      case singleCapturedEvidence report.result of
         Just FailureEvidence {notes} -> do
           let headers = [n.text | n <- notes, isBranchHeader n]
           headers `shouldBe` ["Fork 1"]
@@ -253,7 +253,7 @@ spec = describe "Hegel.Property.Fork" do
     it "propagates a body failure when joined inside use" do
       report <- check def do
         Fork.scoped (assert False "scoped body failed") Fork.join
-      case singleReconstructedEvidence report.result of
+      case singleCapturedEvidence report.result of
         Just FailureEvidence {message} -> message `shouldBe` "scoped body failed"
         other -> expectationFailure ("expected failure, got: " <> show other)
 

@@ -159,11 +159,7 @@ takeDraws tc = case tc.recording of
 -- a normal "continue" signal at any point during the run (not only after
 -- INTERESTING).
 --
--- Only called from the live run path ('Hegel.Runner.runTestCase').
---
--- The replay path ('Hegel.Runner.reconstructProperty') only draws and journals;
--- it never marks completion, so from-blob handles are safe to pass through
--- 'mkTestCase'.
+-- Only called from the run loop ('Hegel.Runner.runTestCase').
 markComplete :: TestCase -> Status -> IO ()
 markComplete tc status = do
   -- The status code is the 'Status' discriminant ('Witch.into'); only an

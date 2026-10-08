@@ -20,7 +20,7 @@ import Hegel.Report.Trace qualified as Trace
 import Hegel.Runner (check)
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
-import TestSupport (singleReconstructedEvidence)
+import TestSupport (singleCapturedEvidence)
 import TraceFixtures (eventAt, eventfulMachine, h1, header, noteAt)
 
 -- ---------------------------------------------------------------------------
@@ -228,7 +228,7 @@ spec = do
   describe "end to end (engine)" do
     it "a real pool machine builds a trace with a failure and identities" do
       report <- check def (Stateful.run eventfulMachine)
-      case singleReconstructedEvidence report.result of
+      case singleCapturedEvidence report.result of
         Just FailureEvidence {notes, events} -> do
           let t = Trace.build notes events
           t.failure `shouldSatisfy` isJust
@@ -237,7 +237,7 @@ spec = do
 
     it "respond reaches Step.response through a real run" do
       report <- check def (Stateful.run eventfulMachine)
-      case singleReconstructedEvidence report.result of
+      case singleCapturedEvidence report.result of
         Just FailureEvidence {notes, events} -> do
           let t = Trace.build notes events
           -- Every fired consume step declared its response.

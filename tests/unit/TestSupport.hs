@@ -2,8 +2,7 @@ module TestSupport
   ( allFailureOutcomes,
     failureEvidenceStatuses,
     failureRecordOf,
-    singleReconstructedEvidence,
-    singleObservedEvidence,
+    singleCapturedEvidence,
     failureMessages,
     failureNotes,
     failureEvents,
@@ -11,8 +10,7 @@ module TestSupport
     noteKind,
     failureResult,
     hasFailures,
-    expectReconstructed,
-    expectObserved,
+    expectCaptured,
     expectToken,
     forRenderers,
   )
@@ -39,39 +37,30 @@ hasFailures (Failures _) = True
 hasFailures _ = False
 
 failureResult :: FailureEvidence -> Result
-failureResult evidence = Failures (fixtureOutcome (Reconstructed evidence) :| [])
+failureResult evidence = Failures (fixtureOutcome (Captured evidence) :| [])
 
 fixtureOutcome :: FailureEvidenceStatus -> FailureOutcome
 fixtureOutcome evidence =
   FailureOutcome
     { failureOrigin = "test fixture",
       failureReplayToken = Nothing,
-      failureEvidence = evidence,
-      cleanupDiagnostics = []
+      failureCaveat = Nothing,
+      failureEvidence = evidence
     }
 
 failureRecordOf :: FailureOutcome -> Maybe FailureEvidence
 failureRecordOf outcome = case outcome.failureEvidence of
-  Reconstructed evidence -> Just evidence
-  Observed evidence -> Just evidence
+  Captured evidence -> Just evidence
+  Uncaptured -> Nothing
   Diverged _ -> Nothing
-  Skipped _ -> Nothing
 
-singleReconstructedEvidence :: Result -> Maybe FailureEvidence
-singleReconstructedEvidence result = case failureEvidenceStatuses result of
-  [Reconstructed evidence] -> Just evidence
+singleCapturedEvidence :: Result -> Maybe FailureEvidence
+singleCapturedEvidence result = case failureEvidenceStatuses result of
+  [Captured evidence] -> Just evidence
   _ -> Nothing
 
-singleObservedEvidence :: Result -> Maybe FailureEvidence
-singleObservedEvidence result = case failureEvidenceStatuses result of
-  [Observed evidence] -> Just evidence
-  _ -> Nothing
-
-expectReconstructed :: Result -> IO FailureEvidence
-expectReconstructed result = require "exactly one reconstructed failure" result (singleReconstructedEvidence result)
-
-expectObserved :: Result -> IO FailureEvidence
-expectObserved result = require "exactly one observed failure" result (singleObservedEvidence result)
+expectCaptured :: Result -> IO FailureEvidence
+expectCaptured result = require "exactly one captured failure" result (singleCapturedEvidence result)
 
 expectToken :: FailureOutcome -> IO ReplayToken
 expectToken outcome = require "a replay token" outcome outcome.failureReplayToken

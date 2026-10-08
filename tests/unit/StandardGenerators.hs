@@ -355,7 +355,7 @@ spec = do
 
     it "respects both minYear and maxYear" $ do
       let lo = LocalTime (fromGregorian 2000 1 1) midnight
-          hi = LocalTime (fromGregorian 2000 12 31) (TimeOfDay 23 59 59.999999)
+          hi = LocalTime (fromGregorian 2000 12 31) (TimeOfDay 23 59 59.999999999)
       prop (Gen.datetime & Gen.minYear 2000 & Gen.maxYear 2000 & Gen.build) $ \dt -> do
         dt `shouldSatisfy` (>= lo)
         dt `shouldSatisfy` (<= hi)

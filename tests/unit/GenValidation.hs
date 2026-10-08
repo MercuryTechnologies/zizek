@@ -29,7 +29,7 @@ import Hegel.Settings (Settings (..), defaultSettings)
 import Hegel.Settings qualified as Settings
 import Hegel.Stateful.Concurrent qualified as Concurrent
 import Test.Hspec
-import TestSupport (allFailureOutcomes, expectReconstructed, expectToken, failureMessages, forRenderers)
+import TestSupport (allFailureOutcomes, expectCaptured, expectToken, failureMessages, forRenderers)
 
 -- | Does this 'PropertyFailed's message contain @needle@?
 --
@@ -72,7 +72,7 @@ spec = do
             n <- Property.forAll (Gen.int & Gen.min 0 & Gen.max 50 & Gen.build)
             void (Property.forAll (Gen.int & Gen.min n & Gen.max 0 & Gen.build))
       report <- Property.check defaultSettings {seed = Just 42} body
-      evidence <- expectReconstructed report.result
+      evidence <- expectCaptured report.result
       evidence.message `shouldSatisfy` T.isInfixOf "min = 1"
       fmap (.srcLocFile) evidence.loc `shouldBe` Just "tests/unit/GenValidation.hs"
       case allFailureOutcomes report.result of
@@ -80,7 +80,7 @@ spec = do
           outcome.failureOrigin `shouldSatisfy` T.isInfixOf "ValidationError Hegel.Gen.Integer"
           token <- expectToken outcome
           replayed <- Runner.replay defaultSettings token body
-          actual <- expectReconstructed replayed.result
+          actual <- expectCaptured replayed.result
           actual.message `shouldBe` evidence.message
         other -> expectationFailure (show other)
       forRenderers report \rendered -> do

@@ -6,7 +6,6 @@ import Control.Monad (when)
 import Data.Default.Class (def)
 import Data.Foldable (for_)
 import Data.Function ((&))
-import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (isJust, listToMaybe)
 import Data.Text qualified as T
 import GHC.Stack (SrcLoc (..))
@@ -15,7 +14,6 @@ import Hegel.Gen qualified as Gen
 import Hegel.Hspec (propWith)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (Property, assert, check_, footnote, forAll, forEach, (===))
-import Hegel.Property.Internal (Env (..), Journal (..), askEnv)
 import Hegel.Replay (decodeReplayToken, encodeReplayToken)
 import Hegel.Report
 import Hegel.Runner (check, replay)
@@ -27,7 +25,7 @@ import Test.Hspec.Core.Spec qualified as HspecCore
 import Test.Tasty (TestTree)
 import Test.Tasty.Providers qualified as Tasty
 import Test.Tasty.Runners qualified as TastyTree
-import TestSupport (allFailureOutcomes, expectReconstructed, expectToken, failureRecordOf)
+import TestSupport (allFailureOutcomes, expectToken, failureRecordOf)
 import TraceFixtures (eventfulMachine)
 
 spec :: Spec
@@ -61,7 +59,7 @@ spec = do
   it "preserves pool events and a replayable token in check_ exceptions" $
     checkExceptionReplay (check_ def (Stateful.run eventfulMachine)) (Stateful.run eventfulMachine) True
 
-  it "renders every failure through Hspec and uses the first reconstructed location" $ do
+  it "renders every failure through Hspec and uses the first captured location" $ do
     expected <- check multipleSettings multipleProperty >>= expectMultiple
     HspecCore.Result _ status <- runHspec (propWith multipleSettings "multiple" multipleProperty)
     case status of
@@ -73,26 +71,6 @@ spec = do
             HspecCore.locationLine actual `shouldBe` srcLocStartLine wanted
           _ -> expectationFailure "missing first failure location"
       other -> expectationFailure ("expected hspec failure: " <> show other)
-
-  it "Hspec navigates to a later location after an initial divergence" do
-    baseline <- check multipleSettings (navigationProperty Nothing)
-    case allFailureOutcomes baseline.result of
-      [first, second] -> do
-        firstEvidence <- expectReconstructed (Failures (first :| []))
-        secondEvidence <- expectReconstructed (Failures (second :| []))
-        let property = navigationProperty (Just firstEvidence.message)
-        HspecCore.Result _ status <- runHspec (propWith multipleSettings "later location" property)
-        case status of
-          HspecCore.Failure (Just actual) (HspecCore.Reason text) -> do
-            case secondEvidence.loc of
-              Just expected -> do
-                HspecCore.locationFile actual `shouldBe` srcLocFile expected
-                HspecCore.locationLine actual `shouldBe` srcLocStartLine expected
-              Nothing -> expectationFailure "missing baseline location"
-            text `shouldContain` "failure 1 (replay diverged)"
-            text `shouldContain` T.unpack secondEvidence.message
-          other -> expectationFailure (show other)
-      other -> expectationFailure (show other)
 
   it "renders every failure through Tasty in engine order" $ do
     expected <- check multipleSettings multipleProperty >>= expectMultiple
@@ -135,8 +113,8 @@ secondDiff value = value === 9
 
 expectMultiple :: Report -> IO [FailureOutcome]
 expectMultiple Report {result} = case allFailureOutcomes result of
-  [ FailureOutcome {failureEvidence = Reconstructed a},
-    FailureOutcome {failureEvidence = Reconstructed b}
+  [ FailureOutcome {failureEvidence = Captured a},
+    FailureOutcome {failureEvidence = Captured b}
     ] -> do
       for_ [a, b] \record -> do
         record.events `shouldNotSatisfy` null
@@ -144,7 +122,7 @@ expectMultiple Report {result} = case allFailureOutcomes result of
         record.loc `shouldSatisfy` isJust
         record.diff `shouldSatisfy` isJust
       pure (allFailureOutcomes result)
-  _ -> expectationFailure "expected two reconstructed failures" >> pure []
+  _ -> expectationFailure "expected two captured failures" >> pure []
 
 checkMultipleText :: [FailureOutcome] -> String -> Expectation
 checkMultipleText records rendered = do
@@ -188,7 +166,7 @@ checkExceptionReplay action property expectEvents = do
   case caught of
     Right () -> expectationFailure "expected PropertyFailed"
     Left exception -> case allFailureOutcomes exception.report.result of
-      [outcome@FailureOutcome {failureEvidence = Reconstructed FailureEvidence {message, events}}] -> do
+      [outcome@FailureOutcome {failureEvidence = Captured FailureEvidence {message, events}}] -> do
         token <- expectToken outcome
         when expectEvents (events `shouldNotSatisfy` null)
         let displayed = T.pack (displayException exception)
@@ -201,24 +179,12 @@ checkExceptionReplay action property expectEvents = do
         decoded `shouldBe` token
         replayed <- replay def decoded property
         case allFailureOutcomes replayed.result of
-          [FailureOutcome {failureReplayToken = actualToken, failureEvidence = Reconstructed FailureEvidence {message = actual, events = actualEvents}}] -> do
+          [FailureOutcome {failureReplayToken = actualToken, failureEvidence = Captured FailureEvidence {message = actual, events = actualEvents}}] -> do
             actual `shouldBe` message
             actualToken `shouldBe` Just token
             when expectEvents (actualEvents `shouldNotSatisfy` null)
-          other -> expectationFailure ("expected reconstructed replay: " <> show other)
+          other -> expectationFailure ("expected captured replay: " <> show other)
       other -> expectationFailure ("expected singleton report with token: " <> show other)
 
 singletonBody :: () -> IO ()
 singletonBody _ = assert False "singleton exception"
-
-navigationProperty :: Maybe T.Text -> Property ()
-navigationProperty changed = do
-  n <- forAll (Gen.int & Gen.min 0 & Gen.max 1 & Gen.build)
-  let message = if n == 0 then "navigation zero" else "navigation one"
-  env <- askEnv
-  case env.journal of
-    Recording _ | changed == Just message -> pure ()
-    _ ->
-      if n == 0
-        then assert False "navigation zero"
-        else assert False "navigation one"

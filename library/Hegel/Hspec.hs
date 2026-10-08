@@ -272,10 +272,9 @@ toHspecResult useColor pref report = case report.result of
       listToMaybe
         . mapMaybe
           ( \outcome -> case outcome.failureEvidence of
-              Reconstructed evidence -> evidence.loc
-              Observed evidence -> evidence.loc
+              Captured evidence -> evidence.loc
+              Uncaptured -> Nothing
               Diverged _ -> Nothing
-              Skipped _ -> Nothing
           )
         . toList
     failed loc reason = Hspec.Result "" (Hspec.Failure loc reason)

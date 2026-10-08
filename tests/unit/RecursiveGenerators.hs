@@ -17,7 +17,7 @@ import Hegel.Property (check, check_, forEach)
 import Hegel.Report (Report (..))
 import Hegel.Settings (Settings (..))
 import Test.Hspec
-import TestSupport (expectReconstructed)
+import TestSupport (expectCaptured)
 import UnliftIO.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 
 -- | A tree whose branches hold a variable number of children, built through
@@ -121,7 +121,7 @@ spec = describe "Gen.recursive" $ do
     report <- check def $ forEach (trees & Gen.build) $ \t -> do
       writeIORef capture t
       expectationFailure "always fails, to drive shrinking to the global minimum"
-    void (expectReconstructed report.result)
+    void (expectCaptured report.result)
     readIORef capture `shouldReturn` Leaf 0
 
   it "shrinks a branch predicate to the smallest branch" $ do
@@ -129,7 +129,7 @@ spec = describe "Gen.recursive" $ do
     report <- check def $ forEach (trees & Gen.build) $ \t -> do
       writeIORef capture t
       isTreeBranch t `shouldBe` False
-    void (expectReconstructed report.result)
+    void (expectCaptured report.result)
     readIORef capture `shouldReturn` Branch []
 
   it "hoists a deep witness toward the root instead of only shrinking leaves in place" $ do
@@ -137,7 +137,7 @@ spec = describe "Gen.recursive" $ do
     report <- check def $ forEach (intTrees & Gen.maxDepth 3 & Gen.build) $ \t -> do
       writeIORef capture t
       hasOddLeafPair t `shouldBe` False
-    void (expectReconstructed report.result)
+    void (expectCaptured report.result)
     readIORef capture `shouldReturn` IBranch (ILeaf 1) (ILeaf 1)
 
   -- Binary branches always draw exactly two children, so almost every
@@ -151,7 +151,7 @@ spec = describe "Gen.recursive" $ do
     report <- check def $ forEach (binTrees & Gen.maxLeaves 3 & Gen.build) $ \t -> do
       writeIORef capture t
       binLeafCount t `shouldSatisfy` (< 2)
-    void (expectReconstructed report.result)
+    void (expectCaptured report.result)
     readIORef capture `shouldReturn` BBranch BLeaf BLeaf
 
   -- 'retryLoopWith' drives the asymmetry directly, with no engine needed:

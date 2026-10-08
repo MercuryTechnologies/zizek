@@ -17,6 +17,7 @@ import Hegel.Backend (Backend (..))
 import Hegel.Database (Database (..))
 import Hegel.Exception (Diagnostic (..), SettingsError (..))
 import Hegel.HealthCheck (HealthCheck)
+import Hegel.Nondeterminism (Nondeterminism (..))
 import Hegel.Phase (Phase (..))
 import Hegel.Verbosity (Verbosity (..))
 
@@ -47,6 +48,9 @@ data Settings = Settings
     reportMultipleFailures :: !Bool,
     -- | Health checks to skip.
     suppressHealthCheck :: ![HealthCheck],
+    -- | How the run reacts to a test that behaves differently when the same
+    -- choices are replayed.
+    nondeterminism :: !Nondeterminism,
     -- | Ceiling on how deeply 'Hegel.Property.Fork.spawn' and the
     -- @Branch.concurrently@ family may nest clone streams within one test
     -- case. This must be nonnegative; zero permits properties that create no clones.
@@ -55,8 +59,8 @@ data Settings = Settings
   deriving stock (Show)
 
 -- | Defaults for a property run: 100 test cases, a fresh seed each run, all
--- phases enabled, the seeded default backend, quiet output, and persistence
--- disabled.
+-- phases enabled, the seeded default backend, quiet output, tolerated
+-- nondeterminism, and persistence disabled.
 defaultSettings :: Settings
 defaultSettings =
   Settings
@@ -70,6 +74,7 @@ defaultSettings =
       verbosity = Quiet,
       reportMultipleFailures = False,
       suppressHealthCheck = [],
+      nondeterminism = Tolerate,
       maxCloneDepth = 32
     }
 

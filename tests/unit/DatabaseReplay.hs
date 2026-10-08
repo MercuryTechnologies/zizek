@@ -7,27 +7,27 @@ import Data.Foldable (for_)
 import Data.Function ((&))
 import Data.List (sort)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Hegel (Gen)
 import Hegel.Database (Database (..))
 import Hegel.Gen qualified as Gen
-import Hegel.Internal.Control (malformedTest)
 import Hegel.Internal.Foreign.Raw
-import Hegel.Internal.Reconstruction qualified as Reconstruction
 import Hegel.Internal.Replay qualified as InternalReplay
+import Hegel.Nondeterminism (Nondeterminism (..))
 import Hegel.Phase (Phase (..))
-import Hegel.Property (Property, assert, assume, forAll, registerFinalizer)
+import Hegel.Property (Property, assert, assume, forAll)
 import Hegel.Property.Internal (Env (..), Journal (..), askEnv)
 import Hegel.Replay (ReplayError (..), ReplayToken, decodeReplayToken, encodeReplayToken, replayTokenOrigin, replayTokenVersion)
-import Hegel.Report (CleanupDiagnostic (..), FailureEvidence (..), FailureEvidenceStatus (..), FailureOutcome (..), ReplayDivergence (..), ReplayReason (..), ReplayStats (..), Report (..), Reproduction (..), Result (..), SkipReason (..), Stats (..))
+import Hegel.Report (Abort (..), FailureEvidence (..), FailureEvidenceStatus (..), FailureOutcome (..), ReplayDivergence (..), ReplayReason (..), Report (..), Reproduction (..), Result (..), Stats (..))
 import Hegel.Runner (check, replay)
 import Hegel.Settings (Settings (..), defaultSettings)
 import System.FilePath ((</>))
 import Test.Hspec
-import TestSupport (allFailureOutcomes, expectReconstructed, expectToken, failureEvidenceStatuses, forRenderers)
+import TestSupport (allFailureOutcomes, expectCaptured, expectToken, failureEvidenceStatuses, forRenderers)
 import UnliftIO.Directory (doesDirectoryExist, listDirectory)
 import UnliftIO.Exception (throwIO)
-import UnliftIO.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
 intR :: (Int, Int) -> Gen Int
@@ -41,42 +41,6 @@ oneFailure = assert False "one failure"
 
 spec :: Spec
 spec = do
-  for_ [False, True] \cleanupFails ->
-    it ("retains failures and skips later reconstructions after an abort, cleanup failure=" <> show cleanupFails) do
-      token <- singletonToken =<< check defaultSettings zeroFailure
-      ran <- newIORef (0 :: Int)
-      cleaned <- newIORef False
-      let body = do
-            modifyIORef' ran (+ 1)
-            registerFinalizer do
-              writeIORef cleaned True
-              when cleanupFails (throwIO (userError "cleanup diagnostic"))
-            throwIO (malformedTest "test" "test replay: malformed structure" [])
-          first = Reconstruction.Failure (replayTokenOrigin token) (Just (InternalReplay.tokenBlobOf token))
-          second = Reconstruction.Failure "second origin" (Just (InternalReplay.tokenBlobOf token))
-      withContext \ctx -> withSettings ctx \settings -> do
-        outcomes <- Reconstruction.reconstructFailures ctx body settings 10 (replayTokenVersion token) (first :| [second])
-        case outcomes of
-          a :| [b] -> do
-            a.failureReplayToken `shouldBe` Just token
-            a.failureOrigin `shouldBe` replayTokenOrigin token
-            b.failureOrigin `shouldBe` "second origin"
-            void (expectToken b)
-            case a.failureEvidence of
-              Diverged (ReplayDivergence (ReconstructionAborted detail)) -> detail `shouldSatisfy` T.isInfixOf "MalformedTest"
-              other -> expectationFailure (show other)
-            case b.failureEvidence of
-              Skipped why -> why `shouldBe` if cleanupFails then SkippedAfterCleanupFailure else SkippedAfterReconstructionAbort
-              other -> expectationFailure (show other)
-            if cleanupFails
-              then map (.cleanupMessage) a.cleanupDiagnostics `shouldSatisfy` any (T.isInfixOf "cleanup diagnostic")
-              else a.cleanupDiagnostics `shouldBe` []
-            forRenderers (Report (Failures outcomes) (Stats 1 0 Nothing) Unstored) \rendered ->
-              rendered `shouldSatisfy` T.isInfixOf "reconstruction aborted"
-          other -> expectationFailure (show other)
-      readIORef ran `shouldReturn` 1
-      readIORef cleaned `shouldReturn` True
-
   it "reports and replays multiple distinct deterministic failures" $ do
     let settings = defaultSettings {reportMultipleFailures = True, testCases = 200}
         failing :: Property ()
@@ -93,13 +57,12 @@ spec = do
         replayTokenOrigin firstToken `shouldNotBe` replayTokenOrigin secondToken
         for_ [first, second] \outcome -> do
           token <- expectToken outcome
-          evidence <- expectReconstructed (Failures (outcome :| []))
+          evidence <- expectCaptured (Failures (outcome :| []))
           decodeReplayToken (encodeReplayToken token) `shouldBe` Right token
           replayed <- replay settings token failing
-          actual <- expectReconstructed replayed.result
+          actual <- expectCaptured replayed.result
           actual.message `shouldBe` evidence.message
           map (.failureReplayToken) (allFailureOutcomes replayed.result) `shouldBe` [Just token]
-          replayed.stats.replayStats `shouldBe` Just (ReplayStats 1 0 0 0 1)
       other -> expectationFailure (show other)
 
   it "reports distinct token envelope errors" do
@@ -115,16 +78,16 @@ spec = do
         decodeReplayToken encoded `shouldBe` Left expected
 
   for_
-    [ ("passing", pure (), UnexpectedSuccess, ReplayStats 1 1 0 0 0),
-      ("discarded", assume False, UnexpectedDiscard, ReplayStats 1 0 1 0 0),
-      ("exhausted", void (forAll (intR (0, 100))), ExhaustedChoices, ReplayStats 1 0 0 1 0)
+    [ ("passing", pure ()),
+      ("discarding", assume False),
+      ("overdrawing", void (forAll (intR (0, 100))))
     ]
-    \(name, body, reason, accounting) ->
-      it ("accounts for a " <> name <> " replay body") do
+    \(name, body) ->
+      it ("reports a stale token replayed against a body that is " <> name <> " as not reproducing") do
         token <- singletonToken =<< check defaultSettings zeroFailure
         replayed <- replay defaultSettings token body
-        assertDivergence reason replayed
-        assertAccounting accounting replayed
+        assertDivergence DidNotReproduce replayed
+        map (.failureReplayToken) (allFailureOutcomes replayed.result) `shouldBe` [Just token]
 
   it "rejects invalid blobs without executing the body" do
     token <- singletonToken =<< check defaultSettings zeroFailure
@@ -134,40 +97,35 @@ spec = do
     case failureEvidenceStatuses replayed.result of
       [Diverged (ReplayDivergence (InvalidReplayBlob _))] -> pure ()
       other -> expectationFailure (show other)
-    assertAccounting (ReplayStats 0 0 0 0 0) replayed
+    assertNothingRan replayed
     readIORef ran `shouldReturn` False
 
-  it "retains expected and changed origins during public replay" do
+  it "reports a changed-origin replay as a divergence followed by the actual failure" do
     token <- singletonToken =<< check defaultSettings zeroFailure
-    expectedActual <- singletonToken =<< check defaultSettings oneFailure
+    actualOrigin <- replayTokenOrigin <$> (singletonToken =<< check defaultSettings oneFailure)
     replayed <- replay defaultSettings token oneFailure
-    assertDivergence (ChangedOrigin (replayTokenOrigin expectedActual)) replayed
-    map (.failureOrigin) (allFailureOutcomes replayed.result) `shouldBe` [replayTokenOrigin token]
-    assertAccounting (ReplayStats 1 0 0 0 0) replayed
+    case allFailureOutcomes replayed.result of
+      [divergent, actual] -> do
+        divergent.failureOrigin `shouldBe` replayTokenOrigin token
+        divergent.failureReplayToken `shouldBe` Just token
+        case divergent.failureEvidence of
+          Diverged d -> d.replayReason `shouldBe` ChangedOrigin actualOrigin
+          other -> expectationFailure (show other)
+        actual.failureOrigin `shouldBe` actualOrigin
+        actual.failureReplayToken `shouldBe` Nothing
+        evidence <- expectCaptured (Failures (actual :| []))
+        evidence.message `shouldBe` "one failure"
+      other -> expectationFailure (show other)
+    forRenderers replayed \rendered -> do
+      rendered `shouldSatisfy` T.isInfixOf "failure 1 (replay diverged)"
+      rendered `shouldSatisfy` T.isInfixOf "one failure"
 
-  it "leaves a copied failure without replay data tokenless and unexecuted" do
-    ran <- newIORef False
-    withContext \ctx -> withSettings ctx \settings -> do
-      outcomes <-
-        Reconstruction.reconstructFailures
-          ctx
-          (writeIORef ran True)
-          settings
-          10
-          "test-version"
-          (Reconstruction.Failure "missing-origin" Nothing :| [])
-      let report = Report (Failures outcomes) (Stats 4 2 Nothing) Unstored
-      assertDivergence MissingReplayData report
-      map (.failureReplayToken) (allFailureOutcomes report.result) `shouldBe` [Nothing]
-      readIORef ran `shouldReturn` False
-
-  it "counts an execution-time engine exception as an aborted reconstruction" do
+  it "aborts a replay whose body raises an engine exception" do
     token <- singletonToken =<< check defaultSettings zeroFailure
     replayed <- replay defaultSettings token (throwIO HegelError {code = HEGEL_E_INVALID_ARG, message = Just "body engine error"})
-    case failureEvidenceStatuses replayed.result of
-      [Diverged (ReplayDivergence (ReconstructionAborted _))] -> pure ()
+    case replayed.result of
+      Aborted (Errored _) -> pure ()
       other -> expectationFailure (show other)
-    assertAccounting (ReplayStats 1 0 0 0 0) replayed
 
   it "replays stored failures via the Reuse phase" $
     withSystemTempDirectory "zizek-replay" \dbDir -> do
@@ -181,13 +139,13 @@ spec = do
             x <- forAll (intR (0, 1000))
             assert (x < 100) "stays small"
       r1 <- check settings failing
-      void (expectReconstructed r1.result)
+      void (expectCaptured r1.result)
       -- With generation disabled, only the stored example can fail it again.
       r2 <- check settings {phases = [Explicit, Reuse, Shrink]} failing
-      void (expectReconstructed r2.result)
+      void (expectCaptured r2.result)
 
-  it "reports a fail-once flake as an unreproducible failure" $ do
-    -- Fails exactly once. The engine's own replay of the failure passes, so
+  it "reports a fail-once flake with a caveat and no reproducer" $ do
+    -- Fails exactly once. The engine's own replays of the failure pass, so
     -- it reports the failure unconfirmed, with no reproducer to replay.
     flag <- newIORef False
     let nondeterministic :: Property ()
@@ -200,10 +158,45 @@ spec = do
               writeIORef flag True
               assert False "fails exactly once (nondeterministic)"
     r <- check defaultSettings {phases = [Generate]} nondeterministic
-    case failureEvidenceStatuses r.result of
-      [Observed _] -> pure ()
-      other -> expectationFailure ("expected an observed failure, got: " <> show other)
+    evidence <- expectCaptured r.result
+    evidence.message `shouldBe` "fails exactly once (nondeterministic)"
+    case allFailureOutcomes r.result of
+      [outcome] -> do
+        outcome.failureCaveat `shouldSatisfy` isJust
+        outcome.failureReplayToken `shouldBe` Nothing
+      other -> expectationFailure (show other)
     r.reproduction `shouldBe` Unreproducible
+    forRenderers r \rendered -> rendered `shouldSatisfy` T.isInfixOf "note: "
+
+  it "forbidden nondeterminism aborts the run" $ do
+    flag <- newIORef False
+    let nondeterministic :: Property ()
+        nondeterministic = do
+          _ <- forAll (intR (0, 10))
+          fired <- readIORef flag
+          if fired
+            then pure ()
+            else do
+              writeIORef flag True
+              assert False "fails exactly once (nondeterministic)"
+    r <- check defaultSettings {phases = [Generate], nondeterminism = Forbid} nondeterministic
+    case r.result of
+      Aborted (UnhealthyInput _) -> pure ()
+      other -> expectationFailure (show other)
+
+  it "reports a stamped capture over unstamped cases with the same origin" $ do
+    let failing :: Property ()
+        failing = do
+          x <- forAll (intR (0, 1000))
+          env <- askEnv
+          let recorded = case env.journal of
+                Recording _ -> "recorded"
+                Silent -> "silent"
+          assert (x < 100) recorded
+    report <- check defaultSettings failing
+    evidence <- expectCaptured report.result
+    evidence.message `shouldBe` "recorded"
+    evidence.notes `shouldNotSatisfy` null
 
   it "a passing run reports Unstored even with persistence configured" $
     withSystemTempDirectory "zizek-replay-passing" \dbDir -> do
@@ -235,30 +228,13 @@ spec = do
     ra.stats.valid `shouldBe` rb.stats.valid
     ra.stats.invalid `shouldBe` rb.stats.invalid
 
-  it "keeps successful, divergent, and successful reconstructions in engine order" $ do
-    let settings = defaultSettings {reportMultipleFailures = True, testCases = 300, derandomize = True, databaseKey = Just "ordered-replay"}
-    baseline <- check settings (orderedProperty Nothing)
-    case failureEvidenceStatuses baseline.result of
-      [Reconstructed first, Reconstructed second, Reconstructed third] -> do
-        report <- check settings (orderedProperty (Just second.message))
-        case failureEvidenceStatuses report.result of
-          [Reconstructed actualFirst, Diverged divergence, Reconstructed actualThird] -> do
-            actualFirst.message `shouldBe` first.message
-            actualThird.message `shouldBe` third.message
-            map (.failureReplayToken) (allFailureOutcomes report.result) `shouldBe` map (.failureReplayToken) (allFailureOutcomes baseline.result)
-            report.stats.valid `shouldBe` baseline.stats.valid
-            report.stats.invalid `shouldBe` baseline.stats.invalid
-            divergence.replayReason `shouldSatisfy` \case ChangedOrigin _ -> True; _ -> False
-          other -> expectationFailure ("expected success/divergence/success: " <> show other)
-      other -> expectationFailure ("expected three baseline failures: " <> show other)
-
   it "rejects incompatible versions with zero execution and both versions" do
     ran <- newIORef False
     token <- singletonToken =<< check defaultSettings zeroFailure
     let mismatched = InternalReplay.makeReplayToken "different-engine" (replayTokenOrigin token) (InternalReplay.tokenBlobOf token)
     replayed <- replay defaultSettings mismatched (writeIORef ran True)
     assertDivergence (IncompatibleVersions "different-engine" (replayTokenVersion token)) replayed
-    assertAccounting (ReplayStats 0 0 0 0 0) replayed
+    assertNothingRan replayed
     readIORef ran `shouldReturn` False
 
   it "explicit replay ignores populated and unusable database paths" $
@@ -271,7 +247,7 @@ spec = do
       for_ [dir, dir </> "blocked"] \path -> do
         when (path /= dir) (writeFile path "a file cannot contain a database")
         report <- replay settings {database = DatabaseDirectory path} token oneFailure
-        evidence <- expectReconstructed report.result
+        evidence <- expectCaptured report.result
         evidence.message `shouldBe` "one failure"
         report.reproduction `shouldBe` Unstored
       contentsAfter <- databaseContents dir
@@ -279,7 +255,7 @@ spec = do
 
 singletonToken :: Report -> IO ReplayToken
 singletonToken report = do
-  void (expectReconstructed report.result)
+  void (expectCaptured report.result)
   case allFailureOutcomes report.result of
     [outcome] -> expectToken outcome
     _ -> fail "expected one outcome"
@@ -289,11 +265,10 @@ assertDivergence reason report = case failureEvidenceStatuses report.result of
   [Diverged divergence] -> divergence.replayReason `shouldBe` reason
   other -> expectationFailure (show other)
 
-assertAccounting :: ReplayStats -> Report -> Expectation
-assertAccounting expected report = do
-  report.stats.replayStats `shouldBe` Just expected
-  report.stats.valid `shouldBe` expected.replayValid
-  report.stats.invalid `shouldBe` expected.replayInvalid
+assertNothingRan :: Report -> Expectation
+assertNothingRan report = do
+  report.stats.valid `shouldBe` 0
+  report.stats.invalid `shouldBe` 0
 
 databaseContents :: FilePath -> IO [(FilePath, BS.ByteString)]
 databaseContents root = go ""
@@ -312,16 +287,3 @@ databaseContents root = go ""
                   pure [(path, bytes)]
           )
           entries
-
-orderedProperty :: Maybe T.Text -> Property ()
-orderedProperty changed = do
-  x <- forAll (intR (0, 2))
-  let label = case x of 0 -> "ordered A"; 1 -> "ordered B"; _ -> "ordered C"
-  env <- askEnv
-  case env.journal of
-    Recording _ -> when (changed == Just label) (assert False "changed assertion")
-    Silent -> pure ()
-  case x of
-    0 -> assert False "ordered A"
-    1 -> assert False "ordered B"
-    _ -> assert False "ordered C"

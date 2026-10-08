@@ -13,9 +13,13 @@ import Control.Exception (SomeException, bracket, finally, mask, toException, tr
 import Control.Exception qualified as E
 import Control.Monad (unless, void)
 import Data.Bits ((.|.))
-import Data.Foldable (for_)
+import Data.ByteString (ByteString)
+import Data.Foldable (for_, traverse_)
 import Data.Functor (($>))
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NE
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -30,7 +34,7 @@ import Hegel.HealthCheck (HealthCheck)
 import Hegel.Internal.Control (ControlSignal (..), FinalizerFailed (..), NoBacktrace (..), catchControl, isAborting)
 import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
-import Hegel.Internal.Reconstruction (Failure (..), ReplayResult (..), reconstructFailures, replayOne)
+import Hegel.Internal.Replay qualified as Replay
 import Hegel.Internal.TestCase (Handle (..), Status (..), TestCase (..), markComplete, mkTestCase)
 import Hegel.Internal.Tick qualified as Tick
 import Hegel.Phase (Phase (Generate))
@@ -43,12 +47,28 @@ import Hegel.Property.Internal
     closeOpenForks,
     collectLeaks,
     drainFinalizers,
+    failureDetails,
     newFinalizers,
     newOpenForks,
+    newRecordingJournal,
     propertyAction,
   )
 import Hegel.Replay (ReplayToken)
-import Hegel.Report (Abort (..), FailureEvidence (..), FailureEvidenceStatus (..), FailureOutcome (..), ReplayStats (..), Report (..), Reproduction (..), Result (..), aborted, pattern ReplayedStats, pattern RunStats)
+import Hegel.Report
+  ( Abort (..),
+    Event,
+    FailureEvidence (..),
+    FailureEvidenceStatus (..),
+    FailureOutcome (..),
+    Note,
+    ReplayDivergence (..),
+    ReplayReason (..),
+    Report (..),
+    Reproduction (..),
+    Result (..),
+    Stats (..),
+    aborted,
+  )
 import Hegel.Settings (Settings (..))
 import Hegel.Settings qualified as Settings
 import UnliftIO.Exception (catchAny, throwIO)
@@ -60,50 +80,59 @@ check :: (HasCallStack) => Settings -> Property () -> IO Report
 check = withFrozenCallStack $ checkWithProgress (\_ -> pure ())
 
 -- | Run a property and report cumulative completed engine cases after cleanup.
--- Shrink probes count as cases; reconstruction replays do not.
+-- Every case the engine runs counts, including shrink probes and the engine's
+-- final replay of each failure.
 checkWithProgress :: (HasCallStack) => (Int -> IO ()) -> Settings -> Property () -> IO Report
 checkWithProgress progress settings prop =
   abortFramework (withAsyncBound go wait)
   where
     go = either throwIO pure (withFrozenCallStack (Settings.validate settings)) *> execute
     execute
-      | settings.testCases == 0, DatabaseDisabled <- settings.database = pure (Report (GaveUp "no valid examples found") (RunStats 0 0) Unstored)
+      | settings.testCases == 0, DatabaseDisabled <- settings.database = pure (Report (GaveUp "no valid examples found") (Stats 0 0) Unstored)
       | otherwise = withContext \ctx ->
           withSettings ctx \s -> do
             applySettings ctx settings s
+            captures <- newIORef Map.empty
             -- Read and copy everything out of the run handle before withRun frees
             -- it on bracket exit (see 'readRunOutcome').
-            (nValid, nInvalid, outcome) <- withRun ctx s \run -> do
-              (nv, ni) <- driveLoop ctx (\journal -> propertyAction journal settings.maxCloneDepth prop) run progress
-              o <- readRunOutcome ctx run
-              pure (nv, ni, o)
+            (nValid, nInvalid, outcome) <- withRun ctx s (driveRun ctx settings prop captures progress)
             result <- case outcome.status of
               RunPassed
                 | nValid == 0 -> pure (GaveUp "no valid examples found")
                 | otherwise -> pure Ok
               RunFailed -> case outcome.failures of
-                [] -> pure (Aborted (Errored (toException (userError "run reported a failure but exposed no counterexample"))))
-                failure : _
-                  | Nothing <- failure.reproductionBlob -> pure (unreproducibleCounterexample failure.origin)
+                [] -> pure noCounterexample
                 failure : failures -> do
                   version <- engineVersion ctx
-                  reconstructed <- reconstructFailures ctx prop s settings.maxCloneDepth version (failure :| failures)
-                  pure (Failures reconstructed)
-              -- The run itself failed (a health check, an engine panic) and
-              -- produced no verdict on the property.
-              RunErrored
-                | Just msg <- outcome.runError,
-                  isUnsatisfiable msg ->
-                    pure (GaveUp msg)
-                | otherwise -> pure (Aborted (UnhealthyInput (fromMaybe "the run failed" outcome.runError)))
+                  captured <- readIORef captures
+                  pure (Failures (fmap (capturedOutcome version captured) (failure :| failures)))
+              RunErrored -> pure (runErrored outcome)
             pure
               Report
                 { result,
-                  stats = RunStats nValid nInvalid,
+                  stats = Stats nValid nInvalid,
                   reproduction = case result of
                     Failures {} -> failureReproduction outcome.failures settings
                     _ -> Unstored
                 }
+
+-- | Pump every case out of a started run, then copy its outcome.
+driveRun :: Ptr HegelContext -> Settings -> Property () -> IORef (Map Text Capture) -> (Int -> IO ()) -> Ptr HegelRun -> IO (Int, Int, RunOutcome)
+driveRun ctx settings prop captures progress run = do
+  (nValid, nInvalid) <- driveLoop ctx (\journal -> propertyAction journal settings.maxCloneDepth prop) captures run progress
+  outcome <- readRunOutcome ctx run
+  pure (nValid, nInvalid, outcome)
+
+-- | The result for a run the engine marked failed without exposing a failure.
+noCounterexample :: Result
+noCounterexample = Aborted (Errored (toException (userError "run reported a failure but exposed no counterexample")))
+
+-- | The result for a run that itself failed, such as on a health check or an
+-- engine panic, and produced no verdict on the property.
+runErrored :: RunOutcome -> Result
+runErrored outcome
+  | Just msg <- outcome.runError, isUnsatisfiable msg = GaveUp msg
+  | otherwise = Aborted (UnhealthyInput (fromMaybe "the run failed" outcome.runError))
 
 -- | Whether a run error is the engine's verdict that no case satisfied the
 -- property's assumptions, which this library reports as giving up.
@@ -112,6 +141,16 @@ checkWithProgress progress settings prop =
 -- require to contain @Unsatisfiable@.
 isUnsatisfiable :: Text -> Bool
 isUnsatisfiable = T.isInfixOf "Unsatisfiable"
+
+-- | Pair an engine failure with the capture recorded for its origin.
+capturedOutcome :: Text -> Map Text Capture -> Failure -> FailureOutcome
+capturedOutcome version captured failure =
+  FailureOutcome
+    { failureOrigin = failure.origin,
+      failureReplayToken = Replay.makeReplayToken version failure.origin <$> failure.reproductionBlob,
+      failureCaveat = failure.caveat,
+      failureEvidence = maybe Uncaptured (Captured . captureEvidence) (Map.lookup failure.origin captured)
+    }
 
 -- | Where a failing run's counterexample can be found again. A primary
 -- failure without a reproduce blob has nothing to replay.
@@ -122,31 +161,59 @@ failureReproduction failures settings = case (failures, settings.database, setti
   (_, _, Just key) -> Stored key
   _ -> Unstored
 
--- | Replay one failure token against a property without using the example database.
+-- | Replay one failure token against a property without using the example
+-- database.
+--
+-- The engine replays the token's blob until a replay fails, within a bounded
+-- budget, so a nondeterministic failure gets several chances to recur.
 replay :: (HasCallStack) => Settings -> ReplayToken -> Property () -> IO Report
 replay settings token prop =
   abortFramework (withAsyncBound go wait)
   where
+    expected = Replay.tokenOriginOf token
     go =
       either throwIO pure (withFrozenCallStack (Settings.validate settings)) *> withContext \ctx ->
         withSettings ctx \s -> do
           applySettings ctx settings {database = DatabaseDisabled, databaseKey = Nothing} s
           version <- engineVersion ctx
-          result <- replayOne ctx s settings.maxCloneDepth version token prop
-          pure
-            Report
-              { result = Failures (result.outcome :| []),
-                stats = ReplayedStats result.accounting.replayValid result.accounting.replayInvalid result.accounting,
-                reproduction = Unstored
-              }
+          if version /= Replay.tokenVersionOf token
+            then pure (diverged (Stats 0 0) (IncompatibleVersions (Replay.tokenVersionOf token) version))
+            else do
+              captures <- newIORef Map.empty
+              withBlobRun ctx s (Replay.tokenBlobOf token) (driveRun ctx settings prop captures (\_ -> pure ())) >>= \case
+                Left e
+                  | e.code == HEGEL_E_INVALID_ARG ->
+                      pure (diverged (Stats 0 0) (InvalidReplayBlob (fromMaybe "invalid replay blob" e.message)))
+                  | otherwise -> throwIO e
+                Right (nValid, nInvalid, outcome) -> do
+                  let stats = Stats nValid nInvalid
+                  captured <- readIORef captures
+                  pure case outcome.status of
+                    RunPassed -> diverged stats DidNotReproduce
+                    RunFailed -> case outcome.failures of
+                      [] -> Report noCounterexample stats Unstored
+                      failure : failures -> Report (Failures (replayedOutcomes captured (failure :| failures))) stats Unstored
+                    RunErrored -> Report (runErrored outcome) stats Unstored
 
--- | Describe a failure that carries no reproduce blob, which leaves only its
--- origin to report.
-unreproducibleCounterexample :: Text -> Result
-unreproducibleCounterexample origin =
-  Failures (FailureOutcome origin Nothing (Observed evidence) [] :| [])
-  where
-    evidence = FailureEvidence {message = origin, notes = [], events = [], loc = Nothing, diff = Nothing}
+    diverged stats reason =
+      Report (Failures (FailureOutcome expected (Just token) Nothing (Diverged (ReplayDivergence reason)) :| [])) stats Unstored
+
+    -- The engine attaches no blob to a replay's failure, since the token
+    -- already holds it. When no failure has the token's origin, a divergence
+    -- leads the report and every actual failure follows with its own evidence.
+    replayedOutcomes captured failures
+      | any ((== expected) . (.origin)) failures = fmap (actualOutcome captured) failures
+      | failure :| _ <- failures =
+          FailureOutcome expected (Just token) Nothing (Diverged (ReplayDivergence (ChangedOrigin failure.origin)))
+            NE.<| fmap (actualOutcome captured) failures
+
+    actualOutcome captured failure =
+      FailureOutcome
+        { failureOrigin = failure.origin,
+          failureReplayToken = if failure.origin == expected then Just token else Nothing,
+          failureCaveat = failure.caveat,
+          failureEvidence = maybe Uncaptured (Captured . captureEvidence) (Map.lookup failure.origin captured)
+        }
 
 -- * Sampling
 
@@ -165,10 +232,10 @@ unreproducibleCounterexample origin =
 -- It starts its own engine run, so the value it draws never enters the
 -- enclosing run's choice sequence.
 --
--- A shrink probe or the final reconstruction replay then draws a
--- different value than the live case did; the enclosing run detects this as
--- nondeterminism, but only once it replays that case's prefix, so the
--- failure may not appear on the first affected case.
+-- A shrink probe or the engine's final replay of a failure then draws a
+-- different value than the live case did. The enclosing run treats this as
+-- nondeterminism, as its 'Hegel.Settings.nondeterminism' setting directs,
+-- once it replays that case's prefix.
 sample :: (HasCallStack) => Settings -> Gen a -> IO a
 sample settings gen =
   withAsyncBound go wait
@@ -272,6 +339,7 @@ applySettings ctx s ptr = do
   chk $ hegel_settings_set_report_multiple_failures ctx ptr (fromBool s.reportMultipleFailures)
   chk $ hegel_settings_set_phases ctx ptr (phasesBitmask s.phases)
   chk $ hegel_settings_set_suppress_health_check ctx ptr (hcBitmask s.suppressHealthCheck)
+  chk $ hegel_settings_set_nondeterminism_strictness ctx ptr (Witch.into @Word32 s.nondeterminism)
 
   -- "" disables the store; skipping the call leaves the engine default
   -- (.hegel/ under the cwd).
@@ -315,6 +383,13 @@ instance Witch.TryFrom CInt RunStatus where
     HEGEL_RUN_STATUS_FAILED -> Just RunFailed
     HEGEL_RUN_STATUS_ERROR -> Just RunErrored
     _ -> Nothing
+
+-- | An engine failure copied before its handle is freed.
+data Failure = Failure
+  { origin :: !Text,
+    reproductionBlob :: !(Maybe ByteString),
+    caveat :: !(Maybe Text)
+  }
 
 -- | The aggregated verdict of a finished run.
 data RunOutcome = RunOutcome
@@ -360,13 +435,14 @@ readFailure ctx res index = bracket
   (void . hegel_failure_free ctx)
   \f -> do
     if f == nullPtr
-      then pure Failure {origin = "<missing failure>", reproductionBlob = Nothing}
+      then pure Failure {origin = "<missing failure>", reproductionBlob = Nothing, caveat = Nothing}
       else do
         org <- alloca \out -> do
           throwOnError ctx =<< hegel_failure_origin ctx f out
           peekUtf8 =<< peek out
         blob <- failureReproductionBlob ctx f
-        pure Failure {origin = org, reproductionBlob = blob}
+        caveat <- failureCaveat ctx f
+        pure Failure {origin = org, reproductionBlob = blob, caveat}
 
 -- | Read and copy the run-level error message, if the run carries one.
 readRunError :: Ptr HegelContext -> Ptr HegelRunResult -> IO (Maybe Text)
@@ -385,15 +461,45 @@ engineVersion ctx = alloca \out -> do
   throwOnError ctx =<< hegel_version ctx out
   peekUtf8 =<< peek out
 
+-- * Captures
+
+-- | What a failing case left behind for its origin's report.
+data Capture = Capture
+  { -- | Whether the engine stamped the case for capture, which makes its
+    -- journal and pool events part of the evidence.
+    stamped :: !Bool,
+    failure :: !SomeException,
+    notes :: ![Note],
+    events :: ![Event]
+  }
+
+-- | Record a failing case's capture under its origin.
+--
+-- A stamped capture always replaces an unstamped one. Between two captures of
+-- the same kind the newer wins, so the engine's final replay of a failure,
+-- which runs after every other case with its origin, supplies the report.
+recordCapture :: IORef (Map Text Capture) -> Text -> Capture -> IO ()
+recordCapture captures origin capture = modifyIORef' captures (Map.alter keep origin)
+  where
+    keep = \case
+      Just prior | prior.stamped, not capture.stamped -> Just prior
+      _ -> Just capture
+
+captureEvidence :: Capture -> FailureEvidence
+captureEvidence capture =
+  let (message, loc, diff) = failureDetails capture.failure
+   in FailureEvidence {message, notes = capture.notes, events = capture.events, loc, diff}
+
 -- * Per-case loop
 
 driveLoop ::
   Ptr HegelContext ->
   (Journal -> Finalizers -> OpenForks -> TestCase -> IO ()) ->
+  IORef (Map Text Capture) ->
   Ptr HegelRun ->
   (Int -> IO ()) ->
   IO (Int, Int)
-driveLoop ctx action run progress = loop 0 0 0
+driveLoop ctx action captures run progress = loop 0 0 0
   where
     loop !nValid !nInvalid !completed = do
       tcPtr <- alloca \out -> do
@@ -402,7 +508,7 @@ driveLoop ctx action run progress = loop 0 0 0
       if tcPtr == nullPtr
         then pure (nValid, nInvalid)
         else do
-          status <- runTestCase ctx action tcPtr `finally` void (hegel_test_case_free ctx tcPtr)
+          status <- runTestCase ctx action captures tcPtr `finally` void (hegel_test_case_free ctx tcPtr)
           progress (completed + 1)
           case status of
             Valid -> loop (nValid + 1) nInvalid (completed + 1)
@@ -410,13 +516,28 @@ driveLoop ctx action run progress = loop 0 0 0
             Interesting _ -> loop nValid nInvalid (completed + 1)
             Overrun -> loop nValid nInvalid (completed + 1)
 
--- | Run one engine-produced test case.
+-- | Run one engine-produced test case, recording a capture when it fails.
+--
+-- A case the engine stamped for capture runs with a recording journal and
+-- pool-event stream; every other case runs silently.
 runTestCase ::
   Ptr HegelContext ->
   (Journal -> Finalizers -> OpenForks -> TestCase -> IO ()) ->
+  IORef (Map Text Capture) ->
   Ptr HegelTestCase ->
   IO Status
-runTestCase ctx action tcPtr = do
+runTestCase ctx action captures tcPtr = do
+  stamped <- alloca \out -> do
+    throwOnError ctx =<< hegel_test_case_should_capture ctx tcPtr out
+    (/= CBool 0) <$> peek out
+  (recording, journal, drainNotes) <-
+    if stamped
+      then do
+        (journal, drainNotes) <- newRecordingJournal
+        recording <- Tick.newRecording
+        pure (recording, journal, drainNotes)
+      else pure (Tick.Silent, Silent, pure [])
+  tc <- mkTestCase recording Handle {ctx, ptr = tcPtr}
   finalizers <- newFinalizers
   forks <- newOpenForks
   -- The body exception is retained separately from the engine's deduplication
@@ -425,7 +546,7 @@ runTestCase ctx action tcPtr = do
   -- Every exit drains cleanup, retaining a runner error alongside any
   -- cleanup diagnostics.
   mask \restore -> do
-    result <- try $ restore $ run finalizers forks caseFailure
+    result <- try $ restore $ run tc journal finalizers forks caseFailure
     _ <- drainFinalizers finalizers
     -- Defense in depth: 'run' already settles every fork itself, before
     -- 'markComplete'. This only does anything if 'run' escaped via a
@@ -443,20 +564,27 @@ runTestCase ctx action tcPtr = do
         -- could no longer catch it as what it is.
         | otherwise -> E.throwIO $ NoBacktrace e
       Right status -> case failures of
-        [] -> pure status
+        [] -> do
+          case status of
+            Interesting origin ->
+              readIORef caseFailure >>= traverse_ \failure -> do
+                notes <- drainNotes
+                events <- Tick.drain tc.events
+                recordCapture captures origin Capture {stamped, failure, notes, events}
+            _ -> pure ()
+          pure status
         -- A captured finalizer failure aborts the run; 'drainFinalizers'
         -- captures every finalizer exception, so nothing escapes uncaught.
         es -> do
           bodyFailure <- readIORef caseFailure
           throwIO $ FinalizerFailed bodyFailure es
   where
-    run finalizers forks caseFailure = do
-      tc <- mkTestCase Tick.Silent Handle {ctx, ptr = tcPtr}
+    run tc journal finalizers forks caseFailure = do
       status <-
         -- 'catchControl' catches only Hegel's async control signals via base
         -- 'E.catches'; 'catchAny' (unliftio) then catches all remaining
         -- synchronous user exceptions; framework errors abort exploration.
-        (action Silent finalizers forks tc $> Valid)
+        (action journal finalizers forks tc $> Valid)
           `catchControl` \case
             Assume -> pure Invalid
             -- @libhegel@ owns the choice budget but does not observe that we

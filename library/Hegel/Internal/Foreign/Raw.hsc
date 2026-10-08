@@ -1,4 +1,7 @@
 {-# LANGUAGE CPP #-}
+-- hsc2hs renders a negative @#const@ such as @INT64_MIN@ as one literal,
+-- which is only in range for its type when it parses as a negative literal.
+{-# LANGUAGE NegativeLiterals #-}
 
 -- | Low-level FFI bindings to @libhegel@ (@hegeltest-c@).
 --
@@ -99,6 +102,12 @@ module Hegel.Internal.Foreign.Raw
     pattern HEGEL_VERBOSITY_VERBOSE,
     pattern HEGEL_VERBOSITY_DEBUG,
 
+    -- * Nondeterminism strictness pattern synonyms
+    -- $strictness
+    pattern HEGEL_NONDETERMINISM_QUIET,
+    pattern HEGEL_NONDETERMINISM_WARN,
+    pattern HEGEL_NONDETERMINISM_ERROR,
+
     -- * Status pattern synonyms
     -- $status
     pattern HEGEL_STATUS_VALID,
@@ -132,11 +141,13 @@ module Hegel.Internal.Foreign.Raw
     hegel_settings_set_database_key,
     hegel_settings_set_phases,
     hegel_settings_set_suppress_health_check,
+    hegel_settings_set_nondeterminism_strictness,
 
     -- * Run lifecycle
     -- $run
     OutputSink,
     hegel_run_start,
+    hegel_run_start_blob,
     hegel_next_test_case,
     hegel_run_result,
     hegel_run_result_free,
@@ -208,6 +219,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_failure_free,
     hegel_failure_origin,
     hegel_failure_reproduction_blob,
+    hegel_failure_caveat,
 
     -- * Globals
     -- $globals
@@ -220,19 +232,19 @@ module Hegel.Internal.Foreign.Raw
     withContext,
     withSettings,
     withRun,
+    withBlobRun,
     Slot,
     newSlot,
     withSlotOf,
     withSlotBytes,
     failureReproductionBlob,
-    withTestCaseFromBlob,
-    testCaseFromBlob,
+    failureCaveat,
   )
 where
 
 #include <hegel.h>
 
-import Control.Exception (bracket, throwIO)
+import Control.Exception (bracket, finally, mask, throwIO, try)
 import Hegel.Exception (HegelError (..))
 import Control.Monad (void)
 import Data.ByteString (ByteString)
@@ -532,6 +544,20 @@ pattern HEGEL_BACKEND_DEFAULT = (#const HEGEL_BACKEND_DEFAULT)
 pattern HEGEL_BACKEND_URANDOM :: Word32
 pattern HEGEL_BACKEND_URANDOM = (#const HEGEL_BACKEND_URANDOM)
 
+-- $strictness
+--
+-- @uint32_t@ values passed to 'hegel_settings_set_nondeterminism_strictness',
+-- which choose how a run reacts to nondeterministic test behavior.
+
+pattern HEGEL_NONDETERMINISM_QUIET :: Word32
+pattern HEGEL_NONDETERMINISM_QUIET = (#const HEGEL_NONDETERMINISM_QUIET)
+
+pattern HEGEL_NONDETERMINISM_WARN :: Word32
+pattern HEGEL_NONDETERMINISM_WARN = (#const HEGEL_NONDETERMINISM_WARN)
+
+pattern HEGEL_NONDETERMINISM_ERROR :: Word32
+pattern HEGEL_NONDETERMINISM_ERROR = (#const HEGEL_NONDETERMINISM_ERROR)
+
 -- $verbosity
 --
 -- @uint32_t@ levels passed to 'hegel_settings_set_verbosity', which control how
@@ -673,6 +699,11 @@ foreign import ccall unsafe "hegel_settings_set_phases"
 foreign import ccall unsafe "hegel_settings_set_suppress_health_check"
   hegel_settings_set_suppress_health_check :: Ptr HegelContext -> Ptr HegelSettings -> Word32 -> IO CInt
 
+-- | Choose how a run reacts to nondeterministic test behavior (one of the
+-- @HEGEL_NONDETERMINISM_*@ values).
+foreign import ccall unsafe "hegel_settings_set_nondeterminism_strictness"
+  hegel_settings_set_nondeterminism_strictness :: Ptr HegelContext -> Ptr HegelSettings -> Word32 -> IO CInt
+
 -- $run
 --
 -- Start an engine run from a settings handle, pump test cases out of it,
@@ -702,6 +733,23 @@ foreign import ccall unsafe "hegel_run_start"
   hegel_run_start
     :: Ptr HegelContext
     -> Ptr HegelSettings
+    -> FunPtr OutputSink
+    -> Ptr ()
+    -> Ptr (Ptr HegelRun)
+    -> IO CInt
+
+-- | Like 'hegel_run_start', but the run replays @blob@ until a replay fails,
+-- under a bounded budget, instead of exploring.
+--
+-- A reproducing replay is the run's failure and carries no reproduce blob of
+-- its own, while a run with no failures means the blob is stale. Returns
+-- 'HEGEL_E_INVALID_ARG' and starts no run for a corrupt, non-UTF-8, or
+-- incompatible blob.
+foreign import ccall unsafe "hegel_run_start_blob"
+  hegel_run_start_blob
+    :: Ptr HegelContext
+    -> Ptr HegelSettings
+    -> CString -- ^ @blob@: base64 failure blob from 'hegel_failure_reproduction_blob'
     -> FunPtr OutputSink
     -> Ptr ()
     -> Ptr (Ptr HegelRun)
@@ -1443,7 +1491,8 @@ foreign import ccall unsafe "hegel_test_case_should_capture"
 -- 'hegel_test_case_free', whether it came from 'hegel_next_test_case',
 -- 'hegel_test_case_from_blob', or 'hegel_test_case_clone'.
 --
--- Prefer 'withTestCaseFromBlob' over these functions wherever possible.
+-- A standalone replay makes a single attempt; 'withBlobRun' replays a blob
+-- until it fails and is the preferred way to reproduce a failure.
 
 -- | Build a standalone test case that replays the counterexample encoded in
 -- @blob@, writing the caller-owned handle into @*out_test_case@.
@@ -1513,16 +1562,22 @@ foreign import ccall unsafe "hegel_failure_origin"
   hegel_failure_origin :: Ptr HegelContext -> Ptr HegelFailure -> Ptr CString -> IO CInt
 
 -- | Write a base64-encoded string with a failing test's choice sequence
--- (a minimal counterexample) into @*out_blob@; this can be used to
--- deterministically replay the failure via 'hegel_test_case_from_blob'.
+-- (a minimal counterexample), or a nondeterministic failure's replay state,
+-- into @*out_blob@; 'hegel_run_start_blob' replays either kind.
 --
--- Writes @NULL@ when the engine produced no blob for this failure (e.g. a
--- health-check failure).
+-- Writes @NULL@ when the engine produced no blob for this failure, such as an
+-- unconfirmed nondeterministic failure or one found by replaying a blob.
 --
 -- The written pointer is borrowed (see the section notes above);
 -- 'failureReproductionBlob' copies it out.
 foreign import ccall unsafe "hegel_failure_reproduction_blob"
   hegel_failure_reproduction_blob :: Ptr HegelContext -> Ptr HegelFailure -> Ptr CString -> IO CInt
+
+-- | Write the failure's confirmation caveat into @*out_caveat@, describing how
+-- reliably a nondeterministic failure reproduced, or @NULL@ for a
+-- deterministic failure.
+foreign import ccall unsafe "hegel_failure_caveat"
+  hegel_failure_caveat :: Ptr HegelContext -> Ptr HegelFailure -> Ptr CString -> IO CInt
 
 -- $globals
 --
@@ -1590,14 +1645,32 @@ withSettings ctx = bracket acquire release
 --
 -- Throws 'HegelError' if the engine fails to start.
 withRun :: Ptr HegelContext -> Ptr HegelSettings -> (Ptr HegelRun -> IO a) -> IO a
-withRun ctx s = bracket acquire release
-  where
-    acquire = alloca $ \out -> do
-      rc <- hegel_run_start ctx s nullFunPtr nullPtr out
-      if rc == HEGEL_OK
-        then peek out
-        else lastErrorMessage ctx >>= \msg -> throwIO HegelError {code = rc, message = msg}
-    release run = void (hegel_run_free ctx run)
+withRun ctx s =
+  bracket
+    (startRun ctx \out -> hegel_run_start ctx s nullFunPtr nullPtr out)
+    (void . hegel_run_free ctx)
+
+-- | Start a run that replays @blob@ until it fails, run the action, then free
+-- the run handle.
+--
+-- Returns the engine's 'HegelError' without running the action when the run
+-- fails to start, as it does with 'HEGEL_E_INVALID_ARG' for a blob the engine
+-- cannot decode. An error the action itself raises propagates as usual.
+withBlobRun :: Ptr HegelContext -> Ptr HegelSettings -> ByteString -> (Ptr HegelRun -> IO a) -> IO (Either HegelError a)
+withBlobRun ctx s blob action = mask $ \restore -> do
+  started <- try (BS.useAsCString blob \blobPtr -> startRun ctx \out -> hegel_run_start_blob ctx s blobPtr nullFunPtr nullPtr out)
+  case started of
+    Left e -> pure (Left e)
+    Right run -> Right <$> (restore (action run) `finally` void (hegel_run_free ctx run))
+
+-- | Run a @hegel_run_start@-shaped call and read the handle it writes,
+-- throwing 'HegelError' when it fails.
+startRun :: Ptr HegelContext -> (Ptr (Ptr HegelRun) -> IO CInt) -> IO (Ptr HegelRun)
+startRun ctx start = alloca $ \out -> do
+  rc <- start out
+  if rc == HEGEL_OK
+    then peek out
+    else lastErrorMessage ctx >>= \msg -> throwIO HegelError {code = rc, message = msg}
 
 -- | Copy the reproduction blob for @f@ into a fresh 'ByteString', or return
 -- 'Nothing' when the failure carries no blob (e.g. a health-check failure).
@@ -1606,7 +1679,7 @@ withRun ctx s = bracket acquire release
 -- until 'hegel_failure_free'; this function copies it immediately so the
 -- 'ByteString' is safe to use after the snapshot is freed.
 --
--- The blob is ASCII base64 and can be passed directly to 'withTestCaseFromBlob'.
+-- The blob is ASCII base64 and can be passed directly to 'withBlobRun'.
 failureReproductionBlob :: Ptr HegelContext -> Ptr HegelFailure -> IO (Maybe ByteString)
 failureReproductionBlob ctx f =
   alloca $ \out -> do
@@ -1616,32 +1689,16 @@ failureReproductionBlob ctx f =
       then pure Nothing
       else Just <$> BS.packCString ptr
 
--- | Acquire a caller-owned test case that replays the counterexample encoded
--- in @blob@, pass it to @action@, and free it on exit.
---
--- @blob@ must be a base64 string obtained from 'failureReproductionBlob' (or
--- the underlying 'hegel_failure_reproduction_blob').
---
--- Throws 'HegelError' when @libhegel@ cannot decode the blob.
---
--- The bracket frees the handle; do not call 'hegel_test_case_free' on it
--- yourself.
-withTestCaseFromBlob
-  :: Ptr HegelContext
-  -> Ptr HegelSettings
-  -> ByteString
-  -- ^ Base64 failure blob (e.g. from 'failureReproductionBlob').
-  -> (Ptr HegelTestCase -> IO a)
-  -> IO a
-withTestCaseFromBlob ctx s blob action =
-  bracket (testCaseFromBlob ctx s blob) (void . hegel_test_case_free ctx) action
-
--- | Acquire a replay handle that the caller must free with 'hegel_test_case_free'.
-testCaseFromBlob :: Ptr HegelContext -> Ptr HegelSettings -> ByteString -> IO (Ptr HegelTestCase)
-testCaseFromBlob ctx s blob =
-  BS.useAsCString blob $ \blobPtr -> alloca $ \out -> do
-    throwOnError ctx =<< hegel_test_case_from_blob ctx s blobPtr nullFunPtr nullPtr out
-    peek out
+-- | Copy the failure's confirmation caveat, or return 'Nothing' for a
+-- deterministic failure.
+failureCaveat :: Ptr HegelContext -> Ptr HegelFailure -> IO (Maybe Text)
+failureCaveat ctx f =
+  alloca $ \out -> do
+    throwOnError ctx =<< hegel_failure_caveat ctx f out
+    ptr <- peek out
+    if ptr == nullPtr
+      then pure Nothing
+      else Just <$> peekUtf8 ptr
 
 -- | Reusable pinned block that a test case's per-call out-parameters write
 -- through, in place of a fresh 'alloca' every call. Covers single-word

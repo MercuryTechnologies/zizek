@@ -1,7 +1,6 @@
 -- | Unit tests for 'Hegel.Stateful.Concurrent'.
 module ConcurrentStateful (spec) where
 
-import Control.Applicative ((<|>))
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket_, fromException)
 import Control.Monad (when)
@@ -10,6 +9,7 @@ import Data.Default.Class (def)
 import Data.Foldable (for_)
 import Data.Function ((&))
 import Data.List qualified as List
+import Data.Maybe (isJust)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Hegel (Gen)
@@ -19,7 +19,7 @@ import Hegel.Gen qualified as Gen
 import Hegel.Internal.Control (MalformedTest (..))
 import Hegel.Property (assert, assume, forAll, resource, (===))
 import Hegel.Property.Fork qualified as Fork
-import Hegel.Report (Abort (..), FailureEvidence (..), Note (..), NoteKind (Annotation, StepHeader, StepOrigin), Report (..), Reproduction (..), Result (..), Stats (..), renderReport, renderReportRich)
+import Hegel.Report (Abort (..), FailureEvidence (..), FailureOutcome (..), Note (..), NoteKind (Annotation, StepHeader, StepOrigin), Report (..), Reproduction (..), Result (..), Stats (..), renderReport, renderReportRich)
 import Hegel.Report.Trace (Step (..), Trace (..))
 import Hegel.Report.Trace qualified as Trace
 import Hegel.Runner (check)
@@ -27,7 +27,7 @@ import Hegel.Settings (Settings (..))
 import Hegel.Stateful.Concurrent qualified as Concurrent
 import System.Timeout (timeout)
 import Test.Hspec
-import TestSupport (expectReconstructed, singleObservedEvidence, singleReconstructedEvidence)
+import TestSupport (allFailureOutcomes, expectCaptured, singleCapturedEvidence)
 import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
@@ -132,7 +132,7 @@ behaviorSpec = describe "run (behavior)" do
             assert (n /= 42) "n is not 42"
         machine = Concurrent.Machine {initial = pure (Counter 0), rules = [failing], invariants = [], stepCount = Concurrent.defaultStepCount}
     report <- check def {testCases = 200} (Concurrent.run (Concurrent.fixed 1) machine)
-    evidence <- expectReconstructed report.result
+    evidence <- expectCaptured report.result
     evidence.message `shouldBe` "n is not 42"
     report.stats.invalid `shouldBe` 0
 
@@ -152,7 +152,7 @@ behaviorSpec = describe "run (behavior)" do
               invariants = [neverAboveThree]
             }
     report <- check def (Concurrent.run (Concurrent.fixed 1) machine)
-    evidence <- expectReconstructed report.result
+    evidence <- expectCaptured report.result
     evidence.message `shouldBe` "counter stays small"
 
   it "attaches a join-point invariant failure to the round, not to the last worker step" do
@@ -171,7 +171,7 @@ behaviorSpec = describe "run (behavior)" do
               invariants = [neverAboveThree]
             }
     report <- check def (Concurrent.run (Concurrent.fixed 1) machine)
-    case singleReconstructedEvidence report.result of
+    case singleCapturedEvidence report.result of
       Just FailureEvidence {notes, events} ->
         let trace = Trace.build notes events
          in case trace.failure >>= Trace.step trace . (.step) of
@@ -205,7 +205,7 @@ behaviorSpec = describe "run (behavior)" do
             assert (n < 2) "fails on the second attempt"
         machine = Concurrent.Machine {initial = liftIO (newIORef 0), rules = [flaky], invariants = [], stepCount = 5}
     report <- check def {testCases = 1} (Concurrent.run (Concurrent.fixed 1) machine)
-    case singleReconstructedEvidence report.result of
+    case singleCapturedEvidence report.result of
       Just FailureEvidence {notes} -> do
         let rejectionNotes =
               [n | n <- notes, n.kind == Annotation, "Rule stopped early due to violated assumption." `T.isInfixOf` n.text]
@@ -295,12 +295,17 @@ behaviorSpec = describe "run (behavior)" do
               invariants = [noLostUpdates]
             }
     report <- check def {testCases = 20} (Concurrent.run (Concurrent.fixed 4) machine)
-    -- A race can fail deterministically, and be reconstructed, or flakily,
-    -- and be observed without a reproducer.
-    evidence <- maybe (expectationFailure (show report.result) >> fail "no evidence") pure (singleEvidence report.result)
+    -- Whether the race fails deterministically or flakily, the engine's
+    -- stamped replays capture the failing case with its step trace.
+    evidence <- expectCaptured report.result
     evidence.diff `shouldSatisfy` (/= Nothing)
+    evidence.notes `shouldSatisfy` any (\n -> case n.kind of StepHeader {} -> True; _ -> False)
+    -- A failure the engine could not reproduce deterministically carries a
+    -- caveat, and every other failure carries a reproduce blob.
+    for_ (allFailureOutcomes report.result) \outcome ->
+      (isJust outcome.failureCaveat || isJust outcome.failureReplayToken) `shouldBe` True
 
-  it "a deterministic failure is stored and reconstructed with its own assertion message" $
+  it "a deterministic failure is stored and captured with its own assertion message" $
     withSystemTempDirectory "zizek-concurrent-stateful" \dbDir -> do
       let failing :: Concurrent.Rule Counter IO
           failing = Concurrent.rule "boom" \_ -> assert False "always fails"
@@ -313,7 +318,7 @@ behaviorSpec = describe "run (behavior)" do
               }
       report <- check settings (Concurrent.run (Concurrent.upTo 2) machine)
       report.reproduction `shouldBe` Stored "concurrent-stateful-origin-spec"
-      evidence <- expectReconstructed report.result
+      evidence <- expectCaptured report.result
       evidence.message `shouldBe` "always fails"
       let rendered = renderReport report
       ("stored under" `T.isInfixOf` rendered) `shouldBe` True
@@ -325,7 +330,7 @@ behaviorSpec = describe "run (behavior)" do
         failing = Concurrent.rule "boom" \_ -> assert False "always fails"
         machine = Concurrent.Machine {initial = pure (Counter 0), rules = [failing], invariants = [], stepCount = Concurrent.defaultStepCount}
     report <- check def {testCases = 5} (Concurrent.run (Concurrent.fixed 2) machine)
-    case singleReconstructedEvidence report.result of
+    case singleCapturedEvidence report.result of
       Just FailureEvidence {notes} -> do
         let isBoomStep :: Note -> Bool
             isBoomStep n = case n.kind of
@@ -365,8 +370,3 @@ spec = do
   internGroupsSpec
   validationSpec
   behaviorSpec
-
--- | The one failure's evidence, whether reconstructed from a reproducer or
--- observed without one.
-singleEvidence :: Result -> Maybe FailureEvidence
-singleEvidence result = singleReconstructedEvidence result <|> singleObservedEvidence result

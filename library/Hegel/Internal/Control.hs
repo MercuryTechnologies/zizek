@@ -260,7 +260,7 @@ malformedTest context detail values =
         callStack = callStack
       }
 
--- | Framework errors that invalidate further exploration or reconstruction.
+-- | Framework errors that invalidate further exploration.
 isAborting :: SomeException -> Bool
 isAborting e =
   isJust (fromException @MalformedTest e)

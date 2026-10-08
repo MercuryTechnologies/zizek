@@ -41,7 +41,7 @@ import Hegel.Stateful qualified as Stateful
 import System.Environment (setEnv, unsetEnv)
 import System.IO (stdout)
 import Test.Hspec
-import TestSupport (allFailureOutcomes, failureResult, forRenderers, singleReconstructedEvidence)
+import TestSupport (allFailureOutcomes, failureResult, forRenderers, singleCapturedEvidence)
 import TraceFixtures (eventAt, eventfulMachine, flatFixture, h1, handoffFixture, handoffTrace, header, ledgerFixture, ledgerTrace, noPoolTrace, noteAt)
 
 -- ---------------------------------------------------------------------------
@@ -299,7 +299,7 @@ spec = do
         check def do
           n <- forAllWithLabel "qty" (Gen.int & Gen.min 5 & Gen.max 5 & Gen.build)
           assert (n /= (5 :: Int)) "boom"
-      case singleReconstructedEvidence report.result of
+      case singleCapturedEvidence report.result of
         Just FailureEvidence {notes} -> fmap (.text) notes `shouldSatisfy` elem "qty=5"
         _ -> expectationFailure "expected a counterexample"
 
@@ -307,7 +307,7 @@ spec = do
     it "retains actual pool evidence and replay tokens across report renderers" do
       report <- check def (Stateful.run eventfulMachine)
       case allFailureOutcomes report.result of
-        [outcome@FailureOutcome {failureEvidence = Reconstructed FailureEvidence {events}}] -> do
+        [outcome@FailureOutcome {failureEvidence = Captured FailureEvidence {events}}] -> do
           events `shouldNotSatisfy` null
           outcome.failureReplayToken `shouldNotBe` Nothing
           let multiple = report {result = Failures (outcome :| [outcome])}
@@ -321,7 +321,7 @@ spec = do
 
     it "a real pool machine renders an event log with a failing row" do
       report <- check def (Stateful.run eventfulMachine)
-      case singleReconstructedEvidence report.result of
+      case singleCapturedEvidence report.result of
         Just FailureEvidence {notes, events} -> do
           let trace = Trace.build notes events
               out = docToText (Layout.logDoc (defaultStyle Style.unicode) trace)
@@ -350,7 +350,7 @@ reportOf events notes =
               loc = Nothing,
               diff = Nothing
             },
-      stats = Stats 1 0 Nothing,
+      stats = Stats 1 0,
       reproduction = Unstored
     }
 

@@ -1,6 +1,6 @@
 /*
  * Closed-world guard for the libhegel C enums that zizek mirrors as Haskell
- * ADTs (Hegel.Backend, Hegel.Verbosity, Hegel.Phase, Hegel.HealthCheck,
+ * ADTs (Hegel.Backend, Hegel.Verbosity, Hegel.Nondeterminism, Hegel.Phase, Hegel.HealthCheck,
  * Hegel.Internal.TestCase's Status, Hegel.Runner's RunStatus, and
  * hegel_result_t's error-code pattern synonyms in Hegel.Internal.Foreign.Raw).
  *
@@ -12,7 +12,7 @@
  * under `-Wswitch`, not `-Wswitch-enum`.
  *
  * Parameters take the wire width our `Witch.into` produces (Word32 for
- * Backend/Verbosity/Phase/HealthCheck/Status; RunStatus and hegel_result_t
+ * Backend/Verbosity/Nondeterminism/Phase/HealthCheck/Status; RunStatus and hegel_result_t
  * are read from the engine as a plain `int` and untested here) and cast to
  * the enum, so the FFI imports in tests/ffi/WireEnumCoverage.hs line up and
  * the switch still checks the enum's members.
@@ -36,6 +36,16 @@ int hegel_guard_verbosity(uint32_t x) {
     case HEGEL_VERBOSITY_NORMAL:
     case HEGEL_VERBOSITY_VERBOSE:
     case HEGEL_VERBOSITY_DEBUG:
+      return 0;
+  }
+  return -1;
+}
+
+int hegel_guard_nondeterminism(uint32_t x) {
+  switch ((hegel_nondeterminism_strictness_t)x) {
+    case HEGEL_NONDETERMINISM_QUIET:
+    case HEGEL_NONDETERMINISM_WARN:
+    case HEGEL_NONDETERMINISM_ERROR:
       return 0;
   }
   return -1;

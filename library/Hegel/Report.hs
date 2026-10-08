@@ -6,16 +6,11 @@ module Hegel.Report
     FailureOutcome (..),
     FailureEvidence (..),
     FailureEvidenceStatus (..),
-    CleanupDiagnostic (..),
     ReplayReason (..),
-    SkipReason (..),
     Abort (..),
     ReplayDivergence (..),
     replayDivergenceReason,
     Stats (..),
-    pattern RunStats,
-    pattern ReplayedStats,
-    ReplayStats (..),
     Reproduction (..),
     aborted,
     throwOnFailure,
@@ -99,27 +94,9 @@ data Stats = Stats
     -- | How many cases were rejected as invalid (via 'Hegel.Gen.assume',
     -- 'Hegel.Gen.filtered', 'Hegel.Gen.discard', or 'Hegel.Gen.mapMaybe'
     -- exhaustion).
-    invalid :: !Int,
-    -- | Accounting for an explicit replay, when this report describes one.
-    replayStats :: !(Maybe ReplayStats)
+    invalid :: !Int
   }
   deriving stock (Show)
-
-pattern RunStats :: Int -> Int -> Stats
-pattern RunStats valid invalid = Stats valid invalid Nothing
-
-pattern ReplayedStats :: Int -> Int -> ReplayStats -> Stats
-pattern ReplayedStats valid invalid replay = Stats valid invalid (Just replay)
-
--- | Execution counts for an explicit replay, independent of cleanup success.
-data ReplayStats = ReplayStats
-  { attempted :: !Int,
-    replayValid :: !Int,
-    replayInvalid :: !Int,
-    exhausted :: !Int,
-    reproduced :: !Int
-  }
-  deriving stock (Show, Eq)
 
 -- | What happened when a property was run, plus run statistics.
 data Report = Report
@@ -139,7 +116,8 @@ data Reproduction
     Stored !Text
   | -- | Nothing was filed.
     Unstored
-  | -- | The run was identified as unreproducible by @libhegel@.
+  | -- | The engine produced no reproduce blob for the first failure, as for
+    -- a nondeterministic failure it could not confirm.
     Unreproducible
   deriving stock (Show, Eq)
 
@@ -147,8 +125,7 @@ data Reproduction
 data Result
   = -- | Every attempted test case passed.
     Ok
-  | -- | The ordered failures found by a run, retaining reconstruction status
-    -- for every engine failure.
+  | -- | Every distinct failure the engine reported, in engine order.
     Failures !(NonEmpty FailureOutcome)
   | -- | No valid examples were generated.
     GaveUp Text
@@ -156,59 +133,25 @@ data Result
     Aborted Abort
   deriving stock (Show)
 
--- | A failure whose engine example could not be reconstructed.
+-- | An explicit replay that did not reproduce its token's failure.
 newtype ReplayDivergence = ReplayDivergence
   { replayReason :: ReplayReason
   }
   deriving stock (Show, Eq)
 
--- | Why an attempted replay did not produce its expected failure.
+-- | Why an explicit replay did not reproduce its token's failure.
 data ReplayReason
-  = UnexpectedSuccess
-  | UnexpectedDiscard
-  | ExhaustedChoices
-  | ChangedOrigin !Text
-  | InvalidReplayBlob !Text
-  | ReconstructionAborted !Text
-  | MissingReplayData
-  | IncompatibleVersions {tokenVersion :: !Text, engineVersion :: !Text}
+  = -- | Every replay the engine attempted within its budget passed.
+    DidNotReproduce
+  | -- | The replay failed, but at this origin rather than the token's.
+    ChangedOrigin !Text
+  | -- | The engine rejected the token's blob without running it.
+    InvalidReplayBlob !Text
+  | -- | The token came from a different @libhegel@ version than this run's.
+    IncompatibleVersions {tokenVersion :: !Text, engineVersion :: !Text}
   deriving stock (Show, Eq)
 
--- | Why reconstruction did not run for an engine failure.
-data SkipReason = SkippedAfterCleanupFailure | SkippedAfterReconstructionAbort
-  deriving stock (Show, Eq)
-
--- | The result of reconstructing one engine failure.
-data FailureEvidenceStatus
-  = -- | The failure replayed with its original origin.
-    Reconstructed !FailureEvidence
-  | -- | The replay was attempted but did not reproduce the expected failure.
-    Diverged !ReplayDivergence
-  | -- | Reconstruction was not attempted because an earlier replay made further execution unsafe.
-    Skipped !SkipReason
-  | -- | The failing case was observed live on a nondeterministic run.
-    Observed !FailureEvidence
-  deriving stock (Show)
-
--- | One exception raised while draining a case's cleanup actions.
-newtype CleanupDiagnostic = CleanupDiagnostic
-  { cleanupMessage :: Text
-  }
-  deriving stock (Show, Eq)
-
--- | An engine failure's identity and reconstruction diagnostic.
-data FailureOutcome = FailureOutcome
-  { failureOrigin :: !Text,
-    failureReplayToken :: !(Maybe ReplayToken),
-    failureEvidence :: !FailureEvidenceStatus,
-    cleanupDiagnostics :: ![CleanupDiagnostic]
-  }
-  deriving stock (Show)
-
-replayDivergenceReason :: ReplayDivergence -> Text
-replayDivergenceReason = renderReplayReason . (.replayReason)
-
--- | The diagnostic payload captured from a failed property body.
+-- | What is known about one reported failure.
 data FailureEvidence = FailureEvidence
   { message :: !Text,
     notes :: ![Note],
@@ -218,15 +161,37 @@ data FailureEvidence = FailureEvidence
   }
   deriving stock (Show)
 
+-- | The evidence a report carries for one engine failure.
+data FailureEvidenceStatus
+  = -- | The diagnostic captured from a failing case with this failure's origin.
+    Captured !FailureEvidence
+  | -- | No failing case with this origin was seen, so only the origin is known.
+    Uncaptured
+  | -- | An explicit replay did not reproduce the token's failure.
+    Diverged !ReplayDivergence
+  deriving stock (Show)
+
+-- | One engine failure: its identity, its evidence, and how to replay it.
+data FailureOutcome = FailureOutcome
+  { failureOrigin :: !Text,
+    -- | A token for 'Hegel.Runner.replay', present whenever the engine
+    -- produced a reproduce blob.
+    failureReplayToken :: !(Maybe ReplayToken),
+    -- | How reliably a failure found under nondeterministic handling
+    -- reproduced, quoting the engine's replay evidence.
+    failureCaveat :: !(Maybe Text),
+    failureEvidence :: !FailureEvidenceStatus
+  }
+  deriving stock (Show)
+
+replayDivergenceReason :: ReplayDivergence -> Text
+replayDivergenceReason = renderReplayReason . (.replayReason)
+
 renderReplayReason :: ReplayReason -> Text
 renderReplayReason = \case
-  UnexpectedSuccess -> "the replay passed instead of failing"
-  UnexpectedDiscard -> "the replay discarded instead of failing"
-  ExhaustedChoices -> "the replay exhausted its choices"
+  DidNotReproduce -> "every replay passed, so the failure may have been fixed or may not have recurred"
   ChangedOrigin origin -> "replay failed at a different origin: " <> origin
-  ReconstructionAborted detail -> "reconstruction aborted: " <> detail
   InvalidReplayBlob detail -> "the replay token was rejected by the engine: " <> detail
-  MissingReplayData -> "the engine exposed no replay data for this failure"
   IncompatibleVersions {tokenVersion, engineVersion} ->
     "token was produced by libhegel " <> tokenVersion <> ", but this run uses " <> engineVersion
 
@@ -240,7 +205,7 @@ data Abort
 
 -- | A report for a run that stopped before any test case could run.
 aborted :: Abort -> Report
-aborted a = Report {result = Aborted a, stats = Stats {valid = 0, invalid = 0, replayStats = Nothing}, reproduction = Unstored}
+aborted a = Report {result = Aborted a, stats = Stats {valid = 0, invalid = 0}, reproduction = Unstored}
 
 -- | Throw on anything other than 'Ok': 'PropertyFailed' on a counterexample,
 -- the original exception on 'Errored', and 'fail' otherwise.
@@ -441,22 +406,27 @@ reportDoc report = case report.result of
 
 failureSummary :: Report -> Doc Ann
 failureSummary report = case report.result of
-  Failures (outcome :| [])
-    | Just accounting <- report.stats.replayStats ->
-        PP.vsep [replaySummary outcome.failureEvidence, replayStatsDoc accounting]
-    | otherwise -> singletonSummary outcome.failureEvidence <+> "after" <+> statsDoc report.stats
+  Failures (outcome :| []) -> singletonSummary outcome.failureEvidence <+> "after" <+> statsDoc report.stats
   Failures outcomes ->
-    "failed with" <+> PP.hsep (PP.punctuate "," (categories outcomes)) <+> "after" <+> statsDoc report.stats
+    "failed with"
+      <+> PP.pretty (length outcomes)
+      <+> "distinct failures"
+      <> qualifiers outcomes
+      <+> "after"
+      <+> statsDoc report.stats
   _ -> "failed after" <+> statsDoc report.stats
   where
-    categories :: NonEmpty FailureOutcome -> [Doc Ann]
-    categories outcomes =
+    -- Only failures without captured evidence are called out.
+    qualifiers :: NonEmpty FailureOutcome -> Doc Ann
+    qualifiers outcomes = case unusual outcomes of
+      [] -> mempty
+      xs -> PP.space <> PP.parens (PP.hsep (PP.punctuate "," xs))
+    unusual :: NonEmpty FailureOutcome -> [Doc Ann]
+    unusual outcomes =
       [ PP.pretty n <+> label
       | (n, label) <-
-          [ (length [() | Reconstructed _ <- statuses outcomes], "reconstructed"),
-            (length [() | Observed _ <- statuses outcomes], "observed"),
-            (length [() | Diverged _ <- statuses outcomes], "divergent"),
-            (length [() | Skipped _ <- statuses outcomes], "skipped")
+          [ (length [() | Uncaptured <- statuses outcomes], "uncaptured"),
+            (length [() | Diverged _ <- statuses outcomes], "replay diverged")
           ],
         n > 0
       ]
@@ -465,21 +435,8 @@ failureSummary report = case report.result of
 
 singletonSummary :: FailureEvidenceStatus -> Doc Ann
 singletonSummary = \case
-  Diverged _ -> "failure reconstruction diverged"
-  Skipped _ -> "failure reconstruction skipped"
+  Diverged _ -> "replay diverged"
   _ -> "failed"
-
-replaySummary :: FailureEvidenceStatus -> Doc Ann
-replaySummary = \case
-  Reconstructed _ -> "replay reproduced the failure"
-  Observed _ -> "replay observed a failure"
-  Skipped _ -> "replay was skipped"
-  Diverged (ReplayDivergence reason) -> case reason of
-    UnexpectedSuccess -> "replay passed instead of failing"
-    UnexpectedDiscard -> "replay discarded instead of failing"
-    ExhaustedChoices -> "replay exhausted its choices"
-    ChangedOrigin _ -> "replay failed at a different origin"
-    _ -> "replay was not executed"
 
 -- | The headline @message@ line of a failure report.
 headlineDoc :: Text -> Doc Ann
@@ -506,40 +463,44 @@ renderFailureEvidence evidence =
 
 renderOutcome :: Int -> Int -> FailureOutcome -> Doc Ann
 renderOutcome total i outcome =
-  outcomeFrame total i outcome (renderEvidence outcome.failureEvidence)
+  outcomeFrame total i outcome (renderEvidence outcome)
 
+-- | Surround an outcome's body with its heading, when the report has several
+-- failures, and its caveat and replay token.
 outcomeFrame :: Int -> Int -> FailureOutcome -> Doc Ann -> Doc Ann
 outcomeFrame total i outcome body =
-  withCleanupDiagnostics
-    outcome.cleanupDiagnostics
-    ( if total == 1
-        then PP.vsep [body, maybe mempty replayTokenDoc outcome.failureReplayToken]
-        else PP.vsep [outcomeHeading total i outcome, body, maybe mempty replayTokenDoc outcome.failureReplayToken]
-    )
+  PP.vsep $
+    [outcomeHeading i outcome | total > 1]
+      <> [body]
+      <> [caveatDoc caveat | Just caveat <- [outcome.failureCaveat]]
+      <> [replayTokenDoc token | Just token <- [outcome.failureReplayToken]]
 
-outcomeHeading :: Int -> Int -> FailureOutcome -> Doc Ann
-outcomeHeading total index outcome
-  | total == 1 = mempty
-  | otherwise = PP.annotate MessageAnn (PP.pretty ("failure " <> T.pack (show index) <> status))
+outcomeHeading :: Int -> FailureOutcome -> Doc Ann
+outcomeHeading index outcome =
+  PP.annotate MessageAnn (PP.pretty ("failure " <> T.pack (show index) <> status))
   where
     status = case outcome.failureEvidence of
-      Reconstructed _ -> ""
-      Observed _ -> " (observed)"
+      Captured _ -> ""
+      Uncaptured -> " (uncaptured)"
       Diverged _ -> " (replay diverged)"
-      Skipped _ -> " (replay skipped)"
 
-renderEvidence :: FailureEvidenceStatus -> Doc Ann
-renderEvidence = \case
-  Reconstructed evidence -> renderFailureEvidence evidence
-  Observed evidence -> renderFailureEvidence evidence
+-- | The plain rendering of an outcome's evidence.
+renderEvidence :: FailureOutcome -> Doc Ann
+renderEvidence outcome = case outcome.failureEvidence of
+  Captured evidence -> renderFailureEvidence evidence
+  Uncaptured -> uncapturedDoc outcome.failureOrigin
   Diverged divergence -> PP.pretty (replayDivergenceReason divergence)
-  Skipped SkippedAfterReconstructionAbort -> "reconstruction skipped after an earlier reconstruction aborted"
-  Skipped SkippedAfterCleanupFailure -> "reconstruction skipped after replay cleanup failed"
 
-withCleanupDiagnostics :: [CleanupDiagnostic] -> Doc Ann -> Doc Ann
-withCleanupDiagnostics diagnostics body = case diagnostics of
-  [] -> body
-  xs -> PP.vsep [body, PP.vsep [PP.annotate NoteAnn (PP.pretty ("cleanup: " <> d.cleanupMessage)) | d <- xs]]
+-- | A failure known only by its origin.
+uncapturedDoc :: Text -> Doc Ann
+uncapturedDoc origin =
+  PP.vsep
+    [ headlineDoc origin,
+      PP.annotate NoteAnn "no failing case with this origin was captured"
+    ]
+
+caveatDoc :: Text -> Doc Ann
+caveatDoc caveat = PP.annotate NoteAnn (PP.pretty ("note: " <> caveat))
 
 replayTokenDoc :: ReplayToken -> Doc Ann
 replayTokenDoc token =
@@ -566,27 +527,15 @@ failureRichDoc style evidence = do
 failureRichOutcomeDoc :: Style -> Int -> Int -> FailureOutcome -> IO (Doc Ann)
 failureRichOutcomeDoc style total index outcome = do
   body <- case outcome.failureEvidence of
-    Reconstructed evidence -> failureRichDoc style evidence
-    Observed evidence -> failureRichDoc style evidence
-    status -> pure (renderEvidence status)
+    Captured evidence -> failureRichDoc style evidence
+    _ -> pure (renderEvidence outcome)
   pure (outcomeFrame total index outcome body)
 
 statsDoc :: Stats -> Doc Ann
 statsDoc stats
-  | Just replay <- stats.replayStats = replayStatsDoc replay
   | stats.invalid == 0 = PP.pretty stats.valid <+> "tests"
   | otherwise =
       PP.pretty stats.valid <+> "tests" <+> PP.parens (PP.pretty stats.invalid <+> "discarded")
-
-replayStatsDoc :: ReplayStats -> Doc Ann
-replayStatsDoc replay =
-  PP.hsep (PP.punctuate "," ([PP.pretty replay.attempted <+> "attempted"] <> details))
-  where
-    details =
-      [ PP.pretty n <+> label
-      | (n, label) <- [(replay.replayValid, "passed"), (replay.replayInvalid, "discarded"), (replay.exhausted, "exhausted"), (replay.reproduced, "reproduced")],
-        n > 0
-      ]
 
 -- * Exceptions
 

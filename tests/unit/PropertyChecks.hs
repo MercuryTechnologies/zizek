@@ -28,7 +28,7 @@ import Hegel.Property
 import Hegel.Report (FailureEvidence (..), Note (..), NoteKind (..), Report (..), Result (..), Stats (..), isDrawn, renderReport)
 import Hegel.Runner (check)
 import Test.Hspec
-import TestSupport (singleReconstructedEvidence)
+import TestSupport (singleCapturedEvidence)
 import UnliftIO.Exception (throwIO, tryAny)
 import UnliftIO.IORef (newIORef, readIORef, writeIORef)
 
@@ -56,7 +56,7 @@ spec = do
       annotate "drew the first addend"
       y <- forAll (intR (0, 100))
       assert (x + y < 150) "sum stays small"
-    case singleReconstructedEvidence report.result of
+    case singleCapturedEvidence report.result of
       Just FailureEvidence {message, notes, loc} -> do
         message `shouldBe` "sum stays small"
         length [n | n <- notes, isDrawn n.kind] `shouldBe` 2
@@ -89,21 +89,21 @@ spec = do
     report <- check def do
       x <- forAll (intR (0, 100))
       if x >= 0 then throwIO (userError "boom") else pure ()
-    case singleReconstructedEvidence report.result of
+    case singleCapturedEvidence report.result of
       Just FailureEvidence {message} -> message `shouldSatisfy` T.isInfixOf "boom"
       other -> expectationFailure ("expected a counterexample, got: " <> show other)
 
   it "shrinks dependent draws to a minimal counterexample" $ do
     -- The second range depends on the first draw; minimal failing case is
-    -- x = y = 50. The capture is written by the reconstruction replay, so
-    -- it doubles as a check that reconstruction re-executes the body.
+    -- x = y = 50. The engine runs the shrunk case last, as its final replay,
+    -- so the capture also checks that the final replay re-executes the body.
     capture <- newIORef (0, 0)
     report <- check def do
       x <- forAll (intR (0, 1000))
       y <- forAll (intR (0, x))
       writeIORef capture (x, y)
       assert (x + y < 100) "sum stays under threshold"
-    case singleReconstructedEvidence report.result of
+    case singleCapturedEvidence report.result of
       Just FailureEvidence {notes} -> do
         (x, y) <- readIORef capture
         (x + y) `shouldBe` 100
@@ -118,7 +118,7 @@ spec = do
       _y <- forAllSilent (intR (0, 10))
       footnote "from the footer"
       failure "always fails"
-    case singleReconstructedEvidence report.result of
+    case singleCapturedEvidence report.result of
       Just FailureEvidence {message, notes} -> do
         message `shouldBe` "always fails"
         case notes of
@@ -134,7 +134,7 @@ spec = do
     report <- check def do
       x <- forAll (intR (0, 100))
       x === x + 1
-    case singleReconstructedEvidence report.result of
+    case singleCapturedEvidence report.result of
       Just FailureEvidence {message, diff} -> do
         message `shouldBe` "=== failed, values are not equal"
         -- Structural diff: two integers are one-liners so they diff as

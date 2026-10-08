@@ -55,8 +55,9 @@
 --      The claim lives inside the @checkin@ rule itself, so the failure
 --      journals into that worker's own step and renders in-band under its
 --      @Step N: checkin@ row, tagged with the round\/worker that saw the
---      stale count. This is the run's first reproduction footer: a
---      concurrent run is always 'Hegel.Report.Unreproducible'.
+--      stale count. The race fails on most but not every replay, so the
+--      engine confirms it under nondeterministic handling and its caveat
+--      renders above the replay token.
 --   10. concurrent pool, invariant at the round join — the same racing
 --      machine, but the claim moves to an 'Hegel.Stateful.Concurrent.Invariant',
 --      checked on the root case only after every worker in the round has

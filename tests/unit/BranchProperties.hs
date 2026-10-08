@@ -24,7 +24,7 @@ import Hegel.Property.Branch qualified as Branch
 import Hegel.Report (FailureEvidence (..), Note (..), Report (..), Result (..), isBranchFailure, isBranchHeader, renderReport, renderReportRich)
 import Hegel.Settings (Settings (..), defaultSettings)
 import Test.Hspec
-import TestSupport (expectReconstructed, singleReconstructedEvidence)
+import TestSupport (expectCaptured, singleCapturedEvidence)
 import UnliftIO.IORef (atomicModifyIORef', newIORef, readIORef)
 
 intR :: (Int, Int) -> Gen Int
@@ -55,7 +55,7 @@ spec = describe "concurrent combinators" do
       report <- check def do
         _ <- Branch.concurrently (assert False "left branch always fails") (pure ())
         pure ()
-      case singleReconstructedEvidence report.result of
+      case singleCapturedEvidence report.result of
         Just FailureEvidence {message} -> message `shouldBe` "left branch always fails"
         other -> expectationFailure ("expected failure, got: " <> show other)
 
@@ -67,7 +67,7 @@ spec = describe "concurrent combinators" do
               check def do
                 _ <- Branch.concurrently (assert False "left") (assert False "right")
                 pure ()
-            pure case singleReconstructedEvidence report.result of
+            pure case singleCapturedEvidence report.result of
               Just FailureEvidence {message} -> Just message
               _ -> Nothing
       results <- replicateM 20 oneRun
@@ -77,7 +77,7 @@ spec = describe "concurrent combinators" do
       report <- check def do
         _ <- Branch.concurrently (annotateShow (1 :: Int)) (annotateShow (2 :: Int))
         assert False "force a counterexample so the journal renders"
-      case singleReconstructedEvidence report.result of
+      case singleCapturedEvidence report.result of
         Just FailureEvidence {notes} -> do
           let headers = [n.text | n <- notes, isBranchHeader n]
           headers `shouldBe` ["Branch 1", "Branch 2"]
@@ -90,7 +90,7 @@ spec = describe "concurrent combinators" do
       report <- check def do
         _ <- Branch.concurrently (assert False "left branch always fails") (assert False "right branch always fails")
         pure ()
-      case singleReconstructedEvidence report.result of
+      case singleCapturedEvidence report.result of
         Just FailureEvidence {message, notes} -> do
           message `shouldBe` "left branch always fails"
           let branchFailures = [n.text | n <- notes, isBranchFailure n]
@@ -115,7 +115,7 @@ spec = describe "concurrent combinators" do
       report <- check def do
         _ <- Branch.concurrently (annotateShow (1 :: Int)) (annotateShow (2 :: Int))
         assert False "unrelated top-level assertion"
-      case singleReconstructedEvidence report.result of
+      case singleCapturedEvidence report.result of
         Just FailureEvidence {notes} -> [n.text | n <- notes, isBranchFailure n] `shouldBe` []
         other -> expectationFailure ("expected failure, got: " <> show other)
       ("unrelated top-level assertion" `T.isInfixOf` renderReport report) `shouldBe` True
@@ -218,7 +218,7 @@ spec = describe "concurrent combinators" do
       report <- check def do
         rs <- Branch.replicateConcurrently 3 (forAll (intR (0, 1000)))
         assert (all (< 42) rs) "every branch stays small"
-      evidence <- expectReconstructed report.result
+      evidence <- expectCaptured report.result
       evidence.message `shouldBe` "every branch stays small"
 
   describe "Pool concurrency safety" do

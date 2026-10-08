@@ -117,7 +117,7 @@ data PhraseTable = PhraseTable
     stored :: Text -> Text,
     -- | The footer for a failure with nothing to replay:
     --
-    -- e.g. @\"this failure came from a concurrent run, so there is no stored example to replay\"@.
+    -- e.g. @\"the engine could not confirm this failure, so there is no stored example to replay\"@.
     unreproducible :: Text,
     -- | A concurrent stateful step's round, 1-based worker, and
     -- concurrency group, for the event log's own origin column:
@@ -135,7 +135,7 @@ english =
         counted n "step" <> " elided" <> maybe "" (\c -> " (" <> c <> ")") mConcerns,
       elidedBranches = \k -> T.pack (show k) <> (if k == 1 then " branch passed" else " branches passed"),
       stored = \key -> "stored under " <> key <> " and replays automatically next run",
-      unreproducible = "this failure came from a concurrent run, so there is no stored example to replay",
+      unreproducible = "the engine could not confirm this failure, so there is no stored example to replay",
       stepOrigin = \r w mGroup ->
         "round " <> T.pack (show r) <> ", worker " <> T.pack (show w) <> maybe "" (\g -> " (" <> g <> ")") mGroup
     }

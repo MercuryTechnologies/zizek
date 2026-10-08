@@ -133,12 +133,12 @@ library
     Hegel.Internal.Event
     Hegel.Internal.Foreign.CString
     Hegel.Internal.Foreign.Raw
-    Hegel.Internal.Reconstruction
     Hegel.Internal.Replay
     Hegel.Internal.RunnerConfig
     Hegel.Internal.StatefulRound
     Hegel.Internal.TestCase
     Hegel.Internal.Tick
+    Hegel.Nondeterminism
     Hegel.Phase
     Hegel.Pool
     Hegel.Property
@@ -199,6 +199,7 @@ executable profile-hegel
   main-is: Main.hs
   other-modules:
     Handles
+    Nondeterministic
     Stress
     Warehouse
 

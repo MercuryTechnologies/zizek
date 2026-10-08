@@ -1,6 +1,6 @@
 -- | End-to-end tests for the pool-event stream ("Hegel.Internal.Event"):
--- events recorded during the final reconstruction replay, sharing one clock
--- with the note journal.
+-- events recorded during a case the engine stamps for capture, sharing one
+-- clock with the note journal.
 module PoolEvents (spec) where
 
 import Data.Default.Class (def)
@@ -18,7 +18,7 @@ import Hegel.Report
 import Hegel.Runner (check)
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
-import TestSupport (singleReconstructedEvidence)
+import TestSupport (singleCapturedEvidence)
 import TraceFixtures (eventfulMachine)
 
 -- | Run 'eventfulMachine' to a counterexample and hand its journal and event
@@ -26,7 +26,7 @@ import TraceFixtures (eventfulMachine)
 withEventfulFailure :: ([Note] -> [Event] -> Expectation) -> Expectation
 withEventfulFailure body = do
   report <- check def (Stateful.run eventfulMachine)
-  case singleReconstructedEvidence report.result of
+  case singleCapturedEvidence report.result of
     Just FailureEvidence {notes, events} -> body notes events
     other -> expectationFailure ("expected failure, got: " <> show other)
 
@@ -92,6 +92,6 @@ spec = describe "pool-event stream" do
                 ]
             }
     report <- check def (Stateful.run machine)
-    case singleReconstructedEvidence report.result of
+    case singleCapturedEvidence report.result of
       Just FailureEvidence {events} -> events `shouldBe` []
       other -> expectationFailure ("expected failure, got: " <> show other)

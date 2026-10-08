@@ -5,7 +5,7 @@
 -- scenario (@examples/gallery/Main.hs@).
 --
 -- The point is coverage of the composed-report machinery: the per-case event
--- stream (recorded only on the final reconstruction replay, 'Silent'
+-- stream (recorded only on cases the engine stamps for capture, 'Silent'
 -- otherwise) and the one-shot @Trace.build@ / flat-layout render.
 --
 -- 'Fixed' clears a handle's contents on close, so every @read_closed@ sees an

@@ -13,6 +13,7 @@ module WireEnumCoverage (wireEnumCoverageSpec) where
 
 import Data.ByteString qualified as BS
 import Data.Foldable (for_, traverse_)
+import Data.Int (Int64)
 import Data.List (nub)
 import Data.Word (Word32, Word64)
 import Foreign (alloca, peek, withArrayLen)
@@ -22,6 +23,7 @@ import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Internal.DataSource (Label (..), combineLabels, labelName)
 import Hegel.Internal.Foreign.Raw
 import Hegel.Internal.TestCase (Status (..))
+import Hegel.Nondeterminism (Nondeterminism (..))
 import Hegel.Phase (Phase (..))
 import Hegel.Verbosity (Verbosity (..))
 import Test.Hspec
@@ -30,6 +32,8 @@ import Witch qualified
 foreign import ccall unsafe "hegel_guard_backend" guardBackend :: Word32 -> IO CInt
 
 foreign import ccall unsafe "hegel_guard_verbosity" guardVerbosity :: Word32 -> IO CInt
+
+foreign import ccall unsafe "hegel_guard_nondeterminism" guardNondeterminism :: Word32 -> IO CInt
 
 foreign import ccall unsafe "hegel_guard_phase" guardPhase :: Word32 -> IO CInt
 
@@ -49,6 +53,8 @@ wireEnumCoverageSpec = describe "wire enum coverage (conversion values vs hegel.
     allRecognized guardBackend (Witch.into @Word32 <$> [Default, Urandom])
   it "Verbosity" $
     allRecognized guardVerbosity (Witch.into @Word32 <$> [Quiet, Normal, Verbose, Debug])
+  it "Nondeterminism" $
+    allRecognized guardNondeterminism (Witch.into @Word32 <$> [Tolerate, Warn, Forbid])
   it "Phase" $
     allRecognized guardPhase (Witch.into @Word32 <$> [Explicit, Reuse, Generate, Target, Shrink])
   it "HealthCheck" $
@@ -77,6 +83,8 @@ wireEnumCoverageSpec = describe "wire enum coverage (conversion values vs hegel.
           combineLabels labels `shouldBe` engine
   it "Status" $
     allRecognized guardStatus (Witch.into @Word32 <$> [Valid, Invalid, Overrun, Interesting "x"])
+  it "HEGEL_STATE_MACHINE_DONE is INT64_MIN" $
+    HEGEL_STATE_MACHINE_DONE `shouldBe` (minBound :: Int64)
   it "hegel_result_t" $
     allRecognized
       guardResult

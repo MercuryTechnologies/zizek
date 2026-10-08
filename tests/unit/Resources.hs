@@ -24,7 +24,7 @@ import Hegel.Report (Abort (..), Report (..), Result (..))
 import Hegel.Settings (Settings (..), defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
-import TestSupport (expectReconstructed)
+import TestSupport (expectCaptured)
 import UnliftIO.Exception (throwIO)
 import UnliftIO.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 
@@ -37,7 +37,7 @@ increment :: Stateful.Rule Counter IO
 increment = Stateful.Rule "increment" \(Counter n) -> pure (Counter (n + 1))
 
 -- | A deliberately violated invariant, giving a machine a deterministic
--- counterexample (and thus a reconstruction replay) when nothing else about
+-- counterexample, and thus the engine's final replay, when nothing else about
 -- it aborts the run first.
 neverAboveFive :: Stateful.Invariant Counter IO
 neverAboveFive =
@@ -93,7 +93,7 @@ spec = describe "resource" do
     readIORef opened `shouldReturn` True
     readIORef closed `shouldReturn` True
 
-  it "runs open/close once per case in Machine.initial, with no leak across shrinks or the reconstruction replay" do
+  it "runs open/close once per case in Machine.initial, with no leak across shrinks or the final replay" do
     opened <- newIORef (0 :: Int)
     closed <- newIORef (0 :: Int)
     let machine =
@@ -106,7 +106,7 @@ spec = describe "resource" do
               invariants = [neverAboveFive]
             }
     report <- check def (Stateful.run machine)
-    void (expectReconstructed report.result)
+    void (expectCaptured report.result)
     o <- readIORef opened
     c <- readIORef closed
     o `shouldSatisfy` (> 0)
