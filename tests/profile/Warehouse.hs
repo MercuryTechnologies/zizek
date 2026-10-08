@@ -113,19 +113,19 @@ cancelOrder bug =
 -- equals the reservation totals recomputed from the order table.
 reservationsMatchOrders :: Stateful.Invariant Warehouse IO
 reservationsMatchOrders =
-  Stateful.Invariant "reservations_match_orders" \w ->
+  Stateful.invariant "reservations_match_orders" \w ->
     w.reserved === Map.filter (> 0) (Map.fromListWith (+) (Map.elems w.pending))
 
 stockCoversReservations :: Stateful.Invariant Warehouse IO
 stockCoversReservations =
-  Stateful.Invariant "stock_covers_reservations" \w ->
+  Stateful.invariant "stock_covers_reservations" \w ->
     assert
       (and [Map.findWithDefault 0 sku w.stock >= q | (sku, q) <- Map.toList w.reserved])
       "every reservation is backed by on-hand stock"
 
 stockNonNegative :: Stateful.Invariant Warehouse IO
 stockNonNegative =
-  Stateful.Invariant "stock_non_negative" \w ->
+  Stateful.invariant "stock_non_negative" \w ->
     assert (all (>= 0) w.stock) "stock never goes negative"
 
 machine :: Bug -> Stateful.Machine Warehouse IO

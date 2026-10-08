@@ -46,6 +46,9 @@ data NoteKind
   | -- | A concurrent stateful round's join point, carrying the step index
     -- this boundary occupies in the log and the round number it closes.
     RoundBoundary !Int !Int
+  | -- | A stateful machine's final-state invariant check, carrying the step
+    -- index this boundary occupies in the log.
+    FinalBoundary !Int
   deriving stock (Show, Eq)
 
 -- | One entry in a failure report's journal: rendered text plus the call

@@ -95,7 +95,7 @@ import Data.Time.Calendar (Day, fromGregorianValid, toGregorian)
 import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), makeTimeOfDayValid)
 import Data.Vector.Unboxed qualified as Vector.Unboxed
 import Data.Word (Word32, Word64, Word8)
-import Foreign (ForeignPtr, Ptr, alloca, allocaBytes, castPtr, nullPtr, peek, with, withArray, withForeignPtr, withMany)
+import Foreign (ForeignPtr, Ptr, alloca, allocaBytes, castPtr, fromBool, nullPtr, peek, with, withArray, withForeignPtr, withMany)
 import Foreign.C.String (CString)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt, CSize (..))
 import Foreign.Concurrent qualified as Concurrent
@@ -673,20 +673,22 @@ freePool tc pool = void (hegel_pool_free tc.handle.ctx pool)
 -- | Register a sequential state machine running at most @stepCount@ steps per
 -- test case; returns its handle.
 --
--- @ruleNames@ must be non-empty and @stepCount@ positive.
-newStateMachine :: (HasCallStack) => TestCase -> Int64 -> [Text] -> [Text] -> IO (Ptr HegelStateMachine)
-newStateMachine tc stepCount ruleNames invariantNames =
+-- @ruleNames@ must be non-empty and @stepCount@ positive. Each invariant
+-- pairs its name with whether it runs at every join point.
+newStateMachine :: (HasCallStack) => TestCase -> Int64 -> [Text] -> [(Text, Bool)] -> IO (Ptr HegelStateMachine)
+newStateMachine tc stepCount ruleNames invariants =
   -- One sequential group (id 0) for every rule.
-  fst <$> newConcurrentStateMachine tc ruleNames (replicate (length ruleNames) 0) invariantNames 1 1 stepCount
+  fst <$> newConcurrentStateMachine tc ruleNames (replicate (length ruleNames) 0) invariants 1 1 stepCount
 
 -- | A generalization of 'newStateMachine' that supports the @libhegel@ round
 -- protocol.
 --
 -- @ruleGroups@ must hold exactly one concurrency-group ID per @ruleNames@
 -- entry, in the same order; @ruleNames@ must be non-empty. Rules are weighted
--- equally, and every invariant is flagged to run at every join point.
-newConcurrentStateMachine :: (HasCallStack) => TestCase -> [Text] -> [Int64] -> [Text] -> Int64 -> Int64 -> Int64 -> IO (Ptr HegelStateMachine, Int)
-newConcurrentStateMachine tc ruleNames ruleGroups invariantNames minConcurrency maxConcurrency stepCount
+-- equally. Each invariant pairs its name with whether it runs at every join
+-- point.
+newConcurrentStateMachine :: (HasCallStack) => TestCase -> [Text] -> [Int64] -> [(Text, Bool)] -> Int64 -> Int64 -> Int64 -> IO (Ptr HegelStateMachine, Int)
+newConcurrentStateMachine tc ruleNames ruleGroups invariants minConcurrency maxConcurrency stepCount
   | length ruleGroups /= length ruleNames =
       throwIO
         ( malformedTest
@@ -700,7 +702,7 @@ newConcurrentStateMachine tc ruleNames ruleGroups invariantNames minConcurrency 
           withArray rulePtrs \rulesArr ->
             withArray invPtrs \invArr ->
               withArray ruleGroups \groupsArr ->
-                withArray (CBool 1 <$ invariantNames) \alwaysCheckArr ->
+                withArray (map fromBool alwaysChecks) \alwaysCheckArr ->
                   withSlotOf tc.slot \outHandle ->
                     alloca \outConcurrency -> do
                       hegel_new_state_machine
@@ -722,6 +724,8 @@ newConcurrentStateMachine tc ruleNames ruleGroups invariantNames minConcurrency 
                       handle <- peek outHandle
                       concurrency <- fromIntegral <$> (peek outConcurrency :: IO Int64)
                       pure (handle, concurrency)
+  where
+    (invariantNames, alwaysChecks) = unzip invariants
 
 -- | Start the machine's next round, or 'Nothing' once the engine has
 -- decided the whole state machine is done stepping.

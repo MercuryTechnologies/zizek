@@ -32,7 +32,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Hegel.Internal.Event (Event (..), Operation (..), Var (..))
 import Hegel.Internal.Tick (Tick (..))
-import Hegel.Report.Note (Note (..), NoteKind (Drawn, Response, RoundBoundary, StepHeader, StepOrigin))
+import Hegel.Report.Note (Note (..), NoteKind (Drawn, FinalBoundary, Response, RoundBoundary, StepHeader, StepOrigin))
 import Hegel.Report.Note qualified as Note
 
 -- * Trace
@@ -190,14 +190,15 @@ segment notes = case break isHeader notes of
        in Segment {header = (\(i, l) -> Header {index = i, rule = l, start = h.clock}) <$> parseHeader h, body} : go rest'
     isHeader n = n.depth == 0 && maybe False (const True) (parseHeader n)
 
--- | A 'StepHeader' or 'RoundBoundary' note's structured index and display
--- label.
+-- | A 'StepHeader', 'RoundBoundary', or 'FinalBoundary' note's structured
+-- index and display label.
 parseHeader :: Note -> Maybe (Int, Text)
 parseHeader n
   | n.depth == 0, StepHeader i label <- n.kind = Just (i, label)
   | n.depth == 0,
     RoundBoundary i roundIdx <- n.kind =
       Just (i, "round " <> T.pack (show roundIdx) <> " invariant check")
+  | n.depth == 0, FinalBoundary i <- n.kind = Just (i, "final invariant check")
   | otherwise = Nothing
 
 -- | Is this event a step activity (as opposed to out-of-band vocabulary

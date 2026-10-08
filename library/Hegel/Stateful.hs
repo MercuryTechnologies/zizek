@@ -16,7 +16,7 @@
 -- increment = Stateful.rule "increment" \\(Counter n) -> pure (Counter (n + 1))
 --
 -- neverAboveTen :: Stateful.Invariant Counter IO
--- neverAboveTen = Stateful.Invariant "never_above_ten" \\(Counter n) ->
+-- neverAboveTen = Stateful.invariant "never_above_ten" \\(Counter n) ->
 --   assert (n <= 10) "counter stays small"
 --
 -- counterMachine :: Stateful.Machine Counter IO
@@ -53,6 +53,8 @@ module Hegel.Stateful
     Rule (..),
     rule,
     Invariant (..),
+    invariant,
+    alwaysInvariant,
     Machine (..),
     defaultStepCount,
 
@@ -67,7 +69,7 @@ where
 
 import Control.Exception (mask_)
 import Control.Exception qualified
-import Control.Monad (when)
+import Control.Monad (unless, when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Foldable (for_)
 import Data.Text (Text)
@@ -81,10 +83,9 @@ import Hegel.Internal.DataSource
     newStateMachine,
     startSpan,
     stateMachineNextGroup,
-    stateMachineShouldCheckInvariant,
     stopSpan,
   )
-import Hegel.Internal.StatefulRound (RoundSpan (..), RoundVerdict (..), Worker (..), lookupRule, runRound, stepText)
+import Hegel.Internal.StatefulRound (RoundSpan (..), RoundVerdict (..), Worker (..), lookupRule, runRound, selectInvariants, stepText)
 import Hegel.Property.Internal
   ( Env (..),
     PropertyT,
@@ -96,7 +97,7 @@ import Hegel.Property.Internal
     withFailureNoteIn,
     withScope,
   )
-import Hegel.Report (NoteKind (Annotation, Response, StepHeader), renderValue)
+import Hegel.Report (NoteKind (Annotation, FinalBoundary, Response, StepHeader), renderValue)
 import UnliftIO (MonadUnliftIO, throwIO, withRunInIO)
 import UnliftIO.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 
@@ -115,14 +116,26 @@ data Rule s m = Rule
 rule :: Text -> (s -> PropertyT m s) -> Rule s m
 rule name apply = Rule {name, apply}
 
--- | An invariant checked after every successful rule application and after
--- the initial state is constructed.
+-- | A property of the model checked on the machine's initial and final
+-- states, and at the join points between rounds the engine samples.
 --
 -- May draw values but must not modify the model.
 data Invariant s m = Invariant
   { name :: !Text,
+    -- | Whether to check this invariant at every join point instead of a
+    -- sampled subset of them.
+    alwaysRun :: !Bool,
     check :: s -> PropertyT m ()
   }
+
+-- | Construct an 'Invariant' that the engine checks at a sampled subset of
+-- join points, about once per test case on average.
+invariant :: Text -> (s -> PropertyT m ()) -> Invariant s m
+invariant name check = Invariant {name, alwaysRun = False, check}
+
+-- | Construct an 'Invariant' checked at every join point.
+alwaysInvariant :: Text -> (s -> PropertyT m ()) -> Invariant s m
+alwaysInvariant name check = Invariant {name, alwaysRun = True, check}
 
 -- | Journal a step annotation without a source location.
 --
@@ -176,10 +189,12 @@ defaultStepCount = 50
 --
 -- Registers the given 'Machine' with @libhegel@, constructs the initial state,
 -- checks all invariants, then drives a round loop until the engine reports the
--- machine is done or the choice budget is exhausted.
+-- machine is done or the choice budget is exhausted. Every invariant is checked
+-- again on the final state.
 --
--- Each round pulls rules from the engine until its own budget is exhausted,
--- then invariants are checked once at the round's join point.
+-- Each round pulls rules from the engine until its own budget is exhausted.
+-- At the round's join point the engine picks which invariants to check: every
+-- 'alwaysRun' one, and a sampled subset of the rest.
 --
 -- The engine owns the step cap and bounds every case to at most the
 -- machine's 'stepCount' steps.
@@ -196,13 +211,10 @@ run machine = withFrozenCallStack $ do
   let tc = env.testCase
 
       -- Each invariant's draws (and any failure) report one level below the
-      -- step header, via 'nested'. At a join point the engine decides which
-      -- invariants run; the initial state checks every one.
-      checkInvariants joinPoint s =
-        for_ (zip [0 ..] machine.invariants) \(i, invariant) -> do
-          shouldCheck <- maybe (pure True) (\sm -> liftIO (stateMachineShouldCheckInvariant tc sm i)) joinPoint
-          when shouldCheck $
-            nested (withFailureNoteIn env.journal (withScope InStep (invariant.check s)))
+      -- step header, via 'nested'.
+      checkInvariants invariants s =
+        for_ invariants \inv ->
+          nested (withFailureNoteIn env.journal (withScope InStep (inv.check s)))
 
   -- Acquire the state-machine handle and register its release atomically
   -- under 'mask_', the same fix 'Hegel.Property.Internal.resource' applies,
@@ -213,13 +225,14 @@ run machine = withFrozenCallStack $ do
   sm <-
     withRunInIO \runInIO ->
       mask_ do
-        sm <- newStateMachine tc (fromIntegral machine.stepCount) (map (.name) machine.rules) (map (.name) machine.invariants)
+        sm <- newStateMachine tc (fromIntegral machine.stepCount) (map (.name) machine.rules) (map (\inv -> (inv.name, inv.alwaysRun)) machine.invariants)
         runInIO (registerFinalizer (freeStateMachine tc sm))
         pure sm
 
   s0 <- withFailureNoteIn env.journal (withScope CaseSetup machine.initial)
-  stepNote "Initial invariant check."
-  checkInvariants Nothing s0
+  unless (null machine.invariants) $
+    stepNote "Initial invariant check."
+  checkInvariants machine.invariants s0
 
   -- The current model, threaded by 'Hegel.Internal.StatefulRound.Worker's
   -- IO-shaped dispatch rather than by return value: the generic round driver
@@ -282,7 +295,8 @@ run machine = withFrozenCallStack $ do
                   rejected <- readIORef rejectedRef
                   stopSpan tc rejected
                   s' <- readIORef stateRef
-                  runInIO (checkInvariants (Just sm) s')
+                  sampled <- selectInvariants tc sm machine.invariants
+                  runInIO (checkInvariants sampled s')
                   roundLoop
                 -- The round is concluding outright, not being rejected, so
                 -- this closes discarded = 'False' — matching every other exit
@@ -296,5 +310,13 @@ run machine = withFrozenCallStack $ do
                   Control.Exception.throwIO e
 
     roundLoop
+
+  -- The final state gets its own log row, so a violation the sampled join
+  -- points missed is not blamed on the last rule alone.
+  unless (null machine.invariants) do
+    attempts <- liftIO (readIORef attemptsRef)
+    note (FinalBoundary (attempts + 1)) Nothing "Final invariant check."
+    sFinal <- liftIO (readIORef stateRef)
+    checkInvariants machine.invariants sFinal
 {-# INLINEABLE run #-}
 {-# SPECIALIZE run :: Machine s IO -> PropertyT IO () #-}

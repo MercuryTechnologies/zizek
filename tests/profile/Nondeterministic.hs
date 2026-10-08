@@ -51,7 +51,7 @@ raceMachine =
   Concurrent.Machine
     { initial = liftIO (RaceModel <$> newIORef 0 <*> newIORef 0),
       rules = [increment],
-      invariants = [Concurrent.Invariant "no_lost_updates" noLostUpdates],
+      invariants = [Concurrent.invariant "no_lost_updates" noLostUpdates],
       stepCount = 20
     }
   where

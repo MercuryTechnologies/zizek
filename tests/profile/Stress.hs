@@ -140,12 +140,12 @@ cancelOrder =
 
 reservationsMatchOrders :: Stateful.Invariant Ledger IO
 reservationsMatchOrders =
-  Stateful.Invariant "reservations_match_orders" \w ->
+  Stateful.invariant "reservations_match_orders" \w ->
     w.reserved === Map.filter (> 0) (Map.fromListWith (+) (Map.elems w.pending))
 
 stockCoversReservations :: Stateful.Invariant Ledger IO
 stockCoversReservations =
-  Stateful.Invariant "stock_covers_reservations" \w ->
+  Stateful.invariant "stock_covers_reservations" \w ->
     assert
       (and [Map.findWithDefault 0 sku w.stock >= q | (sku, q) <- Map.toList w.reserved])
       "every reservation is backed by on-hand stock"
@@ -154,7 +154,7 @@ stockCoversReservations =
 -- can't be optimized away while its thunks still accumulate.
 auditNeverForgets :: Stateful.Invariant Ledger IO
 auditNeverForgets =
-  Stateful.Invariant "audit_never_forgets" \w ->
+  Stateful.invariant "audit_never_forgets" \w ->
     assert (length w.audit >= 0) "audit log is well-formed"
 
 -- | Passing (bug-free) machine; the pathology is memory, not search.

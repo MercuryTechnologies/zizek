@@ -302,7 +302,7 @@ counterMachine =
         ],
       stepCount = Stateful.defaultStepCount,
       invariants =
-        [ Stateful.Invariant "non_negative" \n ->
+        [ Stateful.invariant "non_negative" \n ->
             assert (0 <= n) "counter never goes negative"
         ]
     }

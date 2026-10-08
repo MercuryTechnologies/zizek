@@ -59,14 +59,12 @@
 --      engine confirms it under nondeterministic handling and its caveat
 --      renders above the replay token.
 --   10. concurrent pool, invariant at the round join — the same racing
---      machine, but the claim moves to an 'Hegel.Stateful.Concurrent.Invariant',
---      checked on the root case only after every worker in the round has
---      finished, the shape that catches corruption no single worker could see
---      on its own. The invariant's own draws run at depth 1 under whichever
---      step the round happened to fold last, so /that/ step's row and splice
---      carry the failure mark and the origin tag, even though the step
---      itself did nothing wrong; the invariant's own body splices in
---      underneath, as a second declaration.
+--      machine, but the claim moves to an always-run
+--      'Hegel.Stateful.Concurrent.Invariant', checked on the root case after
+--      every worker in each round has finished, the shape that catches
+--      corruption no single worker could see on its own. The failure marks
+--      the round's own  N invariant check@ row rather than any worker
+--      step, and the invariant's body splices in underneath.
 --   11. concurrent groups — the same racing pool, pared to a single seeded
 --      connection @checkout@\/@checkin@ toggle forever. The two share a
 --      @"writers"@ 'Hegel.Stateful.Concurrent.grouped' concurrency group,
@@ -296,19 +294,19 @@ cancelOrder =
 -- equals the reservation totals recomputed from the order table.
 reservationsMatchOrders :: Stateful.Invariant Warehouse IO
 reservationsMatchOrders =
-  Stateful.Invariant "reservations_match_orders" \w ->
+  Stateful.invariant "reservations_match_orders" \w ->
     w.reserved === Map.filter (> 0) (Map.fromListWith (+) (Map.elems w.pending))
 
 stockCoversReservations :: Stateful.Invariant Warehouse IO
 stockCoversReservations =
-  Stateful.Invariant "stock_covers_reservations" \w ->
+  Stateful.invariant "stock_covers_reservations" \w ->
     assert
       (and [Map.findWithDefault 0 sku w.stock >= q | (sku, q) <- Map.toList w.reserved])
       "every reservation is backed by on-hand stock"
 
 stockNonNegative :: Stateful.Invariant Warehouse IO
 stockNonNegative =
-  Stateful.Invariant "stock_non_negative" \w ->
+  Stateful.invariant "stock_non_negative" \w ->
     assert (all (>= 0) w.stock) "stock never goes negative"
 
 warehouseMachine :: Stateful.Machine Warehouse IO
@@ -599,11 +597,9 @@ checkinPlain = Concurrent.rule "checkin" checkinBody
 
 -- | The same claim as 'checkinAsserting', checked on the root case once
 -- every worker in the round has finished rather than inside any one rule.
--- Its failure attaches to whichever step the round happened to fold last,
--- not to the step that caused the drift.
 cacheMatchesPool :: Concurrent.Invariant PoolModel IO
 cacheMatchesPool =
-  Concurrent.Invariant "cache_matches_pool" \m -> do
+  Concurrent.alwaysInvariant "cache_matches_pool" \m -> do
     actual <- liftIO (Pool.size m.idle)
     cachedNow <- liftIO (readIORef m.cached)
     cachedNow === actual

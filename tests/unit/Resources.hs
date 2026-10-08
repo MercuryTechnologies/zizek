@@ -41,7 +41,7 @@ increment = Stateful.Rule "increment" \(Counter n) -> pure (Counter (n + 1))
 -- it aborts the run first.
 neverAboveFive :: Stateful.Invariant Counter IO
 neverAboveFive =
-  Stateful.Invariant "never_above_five" \(Counter n) ->
+  Stateful.invariant "never_above_five" \(Counter n) ->
     assert (n <= 5) "counter does not exceed 5"
 
 isOk :: Result -> Bool
@@ -135,7 +135,7 @@ spec = describe "resource" do
   it "throws MalformedTest inside an Invariant's check after a successful step" do
     let checkAfterStep :: Stateful.Invariant Counter IO
         checkAfterStep =
-          Stateful.Invariant "resource_after_step" \(Counter n) ->
+          Stateful.invariant "resource_after_step" \(Counter n) ->
             when (n > 0) do
               _ <- resource (pure ()) (const (pure ()))
               pure ()
@@ -156,7 +156,7 @@ spec = describe "resource" do
     -- just the post-step ones.
     let checkOnInitial :: Stateful.Invariant Counter IO
         checkOnInitial =
-          Stateful.Invariant "resource_on_initial" \_ -> do
+          Stateful.invariant "resource_on_initial" \_ -> do
             _ <- resource (pure ()) (const (pure ()))
             pure ()
         machine =

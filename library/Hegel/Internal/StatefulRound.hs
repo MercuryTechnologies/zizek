@@ -15,6 +15,9 @@ module Hegel.Internal.StatefulRound
     -- * Fan-out
     runRound,
 
+    -- * Join points
+    selectInvariants,
+
     -- * Reporting
     lookupRule,
     stepText,
@@ -22,6 +25,7 @@ module Hegel.Internal.StatefulRound
 where
 
 import Control.Exception (SomeException, fromException, mask, onException, throw, throwIO, toException)
+import Control.Monad (filterM)
 import Data.Foldable (traverse_)
 import Data.List (sortOn)
 import Data.Text (Text)
@@ -30,7 +34,7 @@ import Data.Traversable (for)
 import Foreign (Ptr)
 import Hegel.Exception (InvariantViolation (..))
 import Hegel.Internal.Control (AssumeRejected (..), ControlSignal (Assume, Stop), TestStopped (..), catchControl, isAborting)
-import Hegel.Internal.DataSource (Label (LabelStatefulRule), startSpan, stateMachineNextRule, stateMachineRuleRejected, stopSpan)
+import Hegel.Internal.DataSource (Label (LabelStatefulRule), startSpan, stateMachineNextRule, stateMachineRuleRejected, stateMachineShouldCheckInvariant, stopSpan)
 import Hegel.Internal.Foreign.Raw (HegelStateMachine)
 import Hegel.Internal.TestCase (TestCase)
 import UnliftIO.Async (Async)
@@ -151,6 +155,17 @@ waitWorkerOutcome h =
   Async.waitCatch h >>= \case
     Right () -> pure RoundDone
     Left e -> pure (classifyWorkerOutcome e)
+
+-- * Join points
+
+-- | The invariants to run at the join point the root test case @tc@ has just
+-- reached, in registration order.
+--
+-- The engine is asked about every invariant before any of them runs, so call
+-- this exactly once per join point on generation and replay alike.
+selectInvariants :: TestCase -> Ptr HegelStateMachine -> [a] -> IO [a]
+selectInvariants tc sm invariants =
+  map snd <$> filterM (\(i, _) -> stateMachineShouldCheckInvariant tc sm i) (zip [0 ..] invariants)
 
 -- * Reporting
 

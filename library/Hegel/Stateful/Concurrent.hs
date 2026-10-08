@@ -12,6 +12,8 @@ module Hegel.Stateful.Concurrent
     rule,
     grouped,
     Invariant (..),
+    invariant,
+    alwaysInvariant,
     Machine (..),
     defaultStepCount,
 
@@ -32,7 +34,7 @@ where
 
 import Control.Exception (mask_)
 import Control.Exception qualified as E
-import Control.Monad (void, when)
+import Control.Monad (unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (for_)
 import Data.Int (Int64)
@@ -41,13 +43,11 @@ import Data.Map.Strict qualified as Map
 import Data.Sequence ((|>))
 import Data.Text (Text)
 import Data.Text qualified as T
-import Foreign (Ptr)
 import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Internal.Control (malformedTest)
-import Hegel.Internal.DataSource (freeStateMachine, newConcurrentStateMachine, stateMachineNextGroup, stateMachineShouldCheckInvariant)
+import Hegel.Internal.DataSource (freeStateMachine, newConcurrentStateMachine, stateMachineNextGroup)
 import Hegel.Internal.Event (Event (..))
-import Hegel.Internal.Foreign.Raw (HegelStateMachine)
-import Hegel.Internal.StatefulRound (RoundSpan (..), RoundVerdict (..), Worker (..), lookupRule, runRound, stepText)
+import Hegel.Internal.StatefulRound (RoundSpan (..), RoundVerdict (..), Worker (..), lookupRule, runRound, selectInvariants, stepText)
 import Hegel.Internal.TestCase (TestCase (..), withClones)
 import Hegel.Internal.Tick (Tick)
 import Hegel.Internal.Tick qualified as Tick
@@ -70,8 +70,8 @@ import Hegel.Property.Internal
     withFailureNoteIn,
     withScope,
   )
-import Hegel.Report (Note (..), NoteKind (Annotation, RoundBoundary, StepHeader, StepOrigin))
-import Hegel.Stateful (Invariant (..), defaultStepCount)
+import Hegel.Report (Note (..), NoteKind (Annotation, FinalBoundary, RoundBoundary, StepHeader, StepOrigin))
+import Hegel.Stateful (Invariant (..), alwaysInvariant, defaultStepCount, invariant)
 import UnliftIO (MonadUnliftIO, throwIO, withRunInIO)
 import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef)
 
@@ -251,14 +251,11 @@ run bounds machine = withFrozenCallStack $ do
       -- Every invariant's draws (and any failure) run on the root test
       -- case, ambient journal untouched: unlike a worker's dispatch, only
       -- this one root handle ever touches it, so nothing here needs the
-      -- concurrency safety a worker's env forces. At a join point the engine
-      -- decides which invariants run; the initial state checks every one.
-      checkInvariants :: Maybe (Ptr HegelStateMachine) -> s -> PropertyT m ()
-      checkInvariants joinPoint s =
-        for_ (zip [0 ..] machine.invariants) \(i, invariant) -> do
-          shouldCheck <- maybe (pure True) (\sm -> liftIO (stateMachineShouldCheckInvariant tc sm i)) joinPoint
-          when shouldCheck $
-            nested (withFailureNoteIn env.journal (withScope InStep (invariant.check s)))
+      -- concurrency safety a worker's env forces.
+      checkInvariants :: [Invariant s m] -> s -> PropertyT m ()
+      checkInvariants invariants s =
+        for_ invariants \inv ->
+          nested (withFailureNoteIn env.journal (withScope InStep (inv.check s)))
 
   -- Acquire the state-machine handle and register its release atomically
   -- under 'mask_', the same fix 'Hegel.Property.Internal.resource' applies.
@@ -270,7 +267,7 @@ run bounds machine = withFrozenCallStack $ do
             tc
             (map (.name) machine.rules)
             groupIds
-            (map (.name) machine.invariants)
+            (map (\inv -> (inv.name, inv.alwaysRun)) machine.invariants)
             (fromIntegral bounds.minWorkers)
             (fromIntegral bounds.maxWorkers)
             (fromIntegral machine.stepCount)
@@ -278,8 +275,9 @@ run bounds machine = withFrozenCallStack $ do
         pure acquired
 
   s0 <- withFailureNoteIn env.journal (withScope CaseSetup machine.initial)
-  note Annotation Nothing "Initial invariant check."
-  checkInvariants Nothing s0
+  unless (null machine.invariants) $
+    note Annotation Nothing "Initial invariant check."
+  checkInvariants machine.invariants s0
 
   withBaseRunInIO \runBase ->
     withClones concurrency tc \clones -> do
@@ -342,10 +340,14 @@ run bounds machine = withFrozenCallStack $ do
                 mRoundIdx <- foldRound
                 case verdict of
                   ContinueRound -> do
-                    for_ mRoundIdx \roundIdx -> do
-                      stepIdx <- atomicModifyIORef' stepCounter \i -> (i + 1, i + 1)
-                      runBase (runPropertyT env (note (RoundBoundary stepIdx roundIdx) Nothing (roundBoundaryText roundIdx)))
-                    runBase (runPropertyT env (checkInvariants (Just sm) s0))
+                    -- A round whose join point runs no invariant gets no
+                    -- boundary row, since there is nothing to show under it.
+                    sampled <- selectInvariants tc sm machine.invariants
+                    unless (null sampled) do
+                      for_ mRoundIdx \roundIdx -> do
+                        stepIdx <- atomicModifyIORef' stepCounter \i -> (i + 1, i + 1)
+                        runBase (runPropertyT env (note (RoundBoundary stepIdx roundIdx) Nothing (roundBoundaryText roundIdx)))
+                      runBase (runPropertyT env (checkInvariants sampled s0))
                     roundLoop
                   -- NOTE: This /must/ be 'Control.Exception.throwIO', and not
                   -- a safe-exceptions variant that would re-wrap 'e' as a
@@ -356,5 +358,12 @@ run bounds machine = withFrozenCallStack $ do
                   Conclude e -> E.throwIO e
 
       roundLoop
+
+      -- The final state gets its own boundary row, so a violation the sampled
+      -- join points missed is not blamed on whichever worker step ran last.
+      unless (null machine.invariants) do
+        stepIdx <- atomicModifyIORef' stepCounter \i -> (i + 1, i + 1)
+        runBase (runPropertyT env (note (FinalBoundary stepIdx) Nothing "final invariant check"))
+        runBase (runPropertyT env (checkInvariants machine.invariants s0))
 {-# INLINEABLE run #-}
 {-# SPECIALIZE run :: Concurrency -> Machine s IO -> PropertyT IO () #-}

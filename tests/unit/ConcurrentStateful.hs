@@ -141,7 +141,7 @@ behaviorSpec = describe "run (behavior)" do
         bump = Concurrent.rule "bump" \ref -> liftIO (modifyIORef' ref (+ 1))
         neverAboveThree :: Concurrent.Invariant (IORef Int) IO
         neverAboveThree =
-          Concurrent.Invariant "never_above_three" \ref -> do
+          Concurrent.invariant "never_above_three" \ref -> do
             n <- liftIO (readIORef ref)
             assert (n <= 3) "counter stays small"
         machine =
@@ -160,7 +160,7 @@ behaviorSpec = describe "run (behavior)" do
         bump = Concurrent.rule "bump" \ref -> liftIO (modifyIORef' ref (+ 1))
         neverAboveThree :: Concurrent.Invariant (IORef Int) IO
         neverAboveThree =
-          Concurrent.Invariant "never_above_three" \ref -> do
+          Concurrent.invariant "never_above_three" \ref -> do
             n <- liftIO (readIORef ref)
             assert (n <= 3) "counter stays small"
         machine =
@@ -258,7 +258,7 @@ behaviorSpec = describe "run (behavior)" do
             liftIO (atomicModifyIORef' touchedThisRound \s -> (Set.insert grp s, ()))
         oneGroupPerRound :: Concurrent.Invariant () IO
         oneGroupPerRound =
-          Concurrent.Invariant "one_group_per_round" \_ -> liftIO do
+          Concurrent.alwaysInvariant "one_group_per_round" \_ -> liftIO do
             groups <- atomicModifyIORef' touchedThisRound \s -> (Set.empty, s)
             when (Set.size groups > 1) (writeIORef violated True)
         machine =
@@ -283,7 +283,7 @@ behaviorSpec = describe "run (behavior)" do
             modifyIORef' m.attempts (+ 1)
         noLostUpdates :: Concurrent.Invariant RaceModel IO
         noLostUpdates =
-          Concurrent.Invariant "no_lost_updates" \m -> do
+          Concurrent.invariant "no_lost_updates" \m -> do
             c <- liftIO (readIORef m.counter)
             a <- liftIO (readIORef m.attempts)
             c === a

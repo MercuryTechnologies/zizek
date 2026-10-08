@@ -87,7 +87,7 @@ spec = describe "pool-event stream" do
               rules = [Stateful.Rule "increment" \n -> pure (n + 1)],
               stepCount = Stateful.defaultStepCount,
               invariants =
-                [ Stateful.Invariant "never_above_five" \n ->
+                [ Stateful.invariant "never_above_five" \n ->
                     assert (n <= 5) "counter does not exceed 5"
                 ]
             }

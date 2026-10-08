@@ -16,12 +16,12 @@ import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, assume, forAll, forAllSilent)
-import Hegel.Report (Abort (..), FailureEvidence (..), Note (..), NoteKind (..), Report (..), Result (..), isFailureNote, renderReportRich)
-import Hegel.Runner (check)
+import Hegel.Report (Abort (..), FailureEvidence (..), FailureOutcome (..), Note (..), NoteKind (..), Report (..), Result (..), isFailureNote, renderReportRich)
+import Hegel.Runner (check, replay)
 import Hegel.Settings (Settings (..))
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
-import TestSupport (expectCaptured, singleCapturedEvidence)
+import TestSupport (allFailureOutcomes, expectCaptured, expectToken, singleCapturedEvidence)
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -70,13 +70,13 @@ stepRecorder failAssumption steps settings = do
 -- | A deliberately correct invariant.
 alwaysNonNegative :: Stateful.Invariant Counter IO
 alwaysNonNegative =
-  Stateful.Invariant "always_non_negative" \(Counter n) ->
+  Stateful.invariant "always_non_negative" \(Counter n) ->
     assert (n >= 0) "counter is non-negative"
 
 -- | A deliberately violated invariant: triggers once counter exceeds 5.
 neverAboveFive :: Stateful.Invariant Counter IO
 neverAboveFive =
-  Stateful.Invariant "never_above_five" \(Counter n) ->
+  Stateful.invariant "never_above_five" \(Counter n) ->
     assert (n <= 5) "counter does not exceed 5"
 
 -- | A stack model whose rules draw values, so a counterexample only reproduces
@@ -382,4 +382,95 @@ spec :: Spec
 spec = do
   poolSpec
   statefulSpec
+  invariantSamplingSpec
   poolMachineSpec
+
+-- ---------------------------------------------------------------------------
+-- Invariant sampling
+
+-- | Per test case, how many steps ran and how many times each of an
+-- always-run and a sampled invariant was checked, newest case first.
+data Checks = Checks {steps :: !Int, always :: !Int, sampled :: !Int}
+  deriving stock (Show)
+
+invariantCadence :: IO [Checks]
+invariantCadence = do
+  perCase <- newIORef ([] :: [Checks])
+  let bump f = atomicModifyIORef' perCase \case
+        (top : rest) -> (f top : rest, ())
+        [] -> ([], ())
+      stepping :: Stateful.Rule Counter IO
+      stepping =
+        Stateful.Rule "step" \(Counter n) -> do
+          liftIO (bump \c -> c {steps = c.steps + 1})
+          pure (Counter (n + 1))
+      machine =
+        Stateful.Machine
+          { initial = do
+              liftIO (atomicModifyIORef' perCase \cs -> (Checks 0 0 0 : cs, ()))
+              pure (Counter 0),
+            rules = [stepping],
+            stepCount = 20,
+            invariants =
+              [ Stateful.alwaysInvariant "every_join_point" \_ -> liftIO (bump \c -> c {always = c.always + 1}),
+                Stateful.invariant "sampled" \_ -> liftIO (bump \c -> c {sampled = c.sampled + 1})
+              ]
+          }
+  report <- check def {testCases = 50} (Stateful.run machine)
+  report.result `shouldSatisfy` \case
+    Ok -> True
+    _ -> False
+  readIORef perCase
+
+invariantSamplingSpec :: Spec
+invariantSamplingSpec = describe "Invariant sampling" do
+  it "a sampled invariant shrinks a persistent violation to the minimal counterexample" do
+    let machine =
+          Stateful.Machine
+            { initial = pure (Counter 0),
+              rules = [increment],
+              stepCount = Stateful.defaultStepCount,
+              invariants = [neverAboveFive]
+            }
+    report <- check def (Stateful.run machine)
+    evidence <- expectCaptured report.result
+    evidence.message `shouldBe` "counter does not exceed 5"
+    length [n | n <- evidence.notes, StepHeader _ _ <- [n.kind]] `shouldBe` 6
+
+  it "an always-run invariant is checked at every join point plus the initial and final states" do
+    cases <- invariantCadence
+    cases `shouldNotSatisfy` null
+    -- A sequential machine runs one rule per round, so each step is followed
+    -- by exactly one join point.
+    cases `shouldSatisfy` all (\c -> c.always == c.steps + 2)
+
+  it "a sampled invariant is checked on the initial and final states, and less often in between" do
+    cases <- invariantCadence
+    cases `shouldSatisfy` all (\c -> c.sampled >= 2 && c.sampled <= c.always)
+    sum (map (.sampled) cases) `shouldSatisfy` (< sum (map (.always) cases))
+
+  it "a drawing sampled invariant's counterexample reproduces on replay" do
+    -- The invariant draws on every check, so its draws interleave with the
+    -- engine's sampling decisions; replay only reproduces when both stay
+    -- aligned.
+    let drawingInvariant :: Stateful.Invariant Counter IO
+        drawingInvariant =
+          Stateful.invariant "drawing_never_above_three" \(Counter n) -> do
+            _ <- forAll intGen
+            assert (n <= 3) "counter does not exceed 3"
+        machine =
+          Stateful.Machine
+            { initial = pure (Counter 0),
+              rules = [increment],
+              stepCount = Stateful.defaultStepCount,
+              invariants = [drawingInvariant]
+            }
+    report <- check def (Stateful.run machine)
+    evidence <- expectCaptured report.result
+    token <- case allFailureOutcomes report.result of
+      [outcome] -> expectToken outcome
+      other -> fail ("expected one failure, got " <> show (length other))
+    replayed <- replay def token (Stateful.run machine)
+    actual <- expectCaptured replayed.result
+    actual.message `shouldBe` evidence.message
+    map (.failureReplayToken) (allFailureOutcomes replayed.result) `shouldBe` [Just token]
