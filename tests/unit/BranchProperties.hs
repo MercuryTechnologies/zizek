@@ -4,7 +4,7 @@ module BranchProperties (spec) where
 import Control.Monad (replicateM)
 import Control.Monad.IO.Class (liftIO)
 import Data.Default.Class (def)
-import Data.Foldable (traverse_)
+import Data.Foldable (for_, traverse_)
 import Data.Function ((&))
 import Data.List (sort)
 import Data.Text qualified as T
@@ -13,7 +13,8 @@ import Hegel.Gen qualified as Gen
 import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Pool qualified as Pool
 import Hegel.Property
-  ( annotateShow,
+  ( annotate,
+    annotateShow,
     assert,
     check,
     discard,
@@ -186,6 +187,25 @@ spec = describe "concurrent combinators" do
       ("10 branches passed" `T.isInfixOf` rich) `shouldBe` True
       ("unrelated top-level assertion" `T.isInfixOf` rich) `shouldBe` True
       T.count "Branch " rich `shouldBe` 0
+
+    it "keeps top-level activity outside the branch count" do
+      report <- check def do
+        traverse_ (\i -> annotate ("setup step " <> T.pack (show (i :: Int)))) [1 .. 5]
+        Branch.concurrently_ (pure ()) (assert False "right branch always fails")
+      rich <- renderReportRich report
+      for_ [1 .. 5 :: Int] \i ->
+        ("setup step " <> T.pack (show i)) `shouldSatisfy` (`T.isInfixOf` rich)
+      ("Branch 2:" `T.isInfixOf` rich) `shouldBe` True
+      ("passed" `T.isInfixOf` rich) `shouldBe` False
+
+    it "counts only branches in the summary past the splice threshold" do
+      report <- check def do
+        traverse_ (\i -> annotate ("setup step " <> T.pack (show (i :: Int)))) [1 .. 5]
+        Branch.mapConcurrently_ (\i -> assert (i /= (7 :: Int)) "branch seven fails") [1 .. 10]
+      rich <- renderReportRich report
+      for_ [1 .. 5 :: Int] \i ->
+        ("setup step " <> T.pack (show i)) `shouldSatisfy` (`T.isInfixOf` rich)
+      ("9 branches passed" `T.isInfixOf` rich) `shouldBe` True
 
     it "still shows every branch's data below the splice threshold" do
       report <- check def do

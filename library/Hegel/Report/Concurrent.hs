@@ -30,11 +30,12 @@ concurrentGroupsDoc phrases decls notes
   | otherwise = Just (PP.vsep (summary <> headers <> listings))
   where
     (groups, _footers) = toGroups notes
-    n = length groups
-    failing = filter groupHasBranchFailure groups
-    passed = filter (not . groupHasBranchFailure) groups
-    belowThreshold = n <= branchSpliceThreshold
-    shown = if belowThreshold then groups else failing
+    branches = filter isBranchGroup groups
+    passed = filter (not . groupHasBranchFailure) branches
+    belowThreshold = length branches <= branchSpliceThreshold
+    -- Top-level activity outside every branch always renders, in journal
+    -- order; only branches are subject to the threshold.
+    shown = filter (\g -> not (isBranchGroup g) || belowThreshold || groupHasBranchFailure g) groups
 
     -- Per-branch header lines (and any note that couldn't splice), each
     -- paired with the value fragments that did splice.
@@ -65,10 +66,16 @@ perBranchDoc decls g = (renderedHeader, fragments)
       | null fragments || length structured > 1 = [PP.vsep anchored]
       | otherwise = []
 
--- | The branch count at or above which passing branches stop splicing and
--- collapse into a summary line. Below it, every branch splices.
+-- | The most branches that all splice. Past it, passing branches collapse
+-- into a summary line and only failing ones splice.
 branchSpliceThreshold :: Int
 branchSpliceThreshold = 4
+
+-- | Is this group a branch or fork, as opposed to top-level activity?
+isBranchGroup :: Group -> Bool
+isBranchGroup g = case (snd g.root).kind of
+  BranchHeader _ -> True
+  _ -> False
 
 -- | Does this group's subtree carry a branch's own in-band 'BranchFailure'?
 groupHasBranchFailure :: Group -> Bool
