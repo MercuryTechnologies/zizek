@@ -140,5 +140,6 @@ machine bug =
               nextOrder = 1
             },
       rules = [restock, placeOrder, fulfillOrder, cancelOrder bug],
+      stepCount = Stateful.defaultStepCount,
       invariants = [reservationsMatchOrders, stockCoversReservations, stockNonNegative]
     }

@@ -324,11 +324,11 @@ spec = do
         t `shouldSatisfy` (>= TimeOfDay 8 0 0)
         t `shouldSatisfy` (<= TimeOfDay 17 0 0)
 
-    -- A single-point range pinned to a whole-microsecond value exercises the
-    -- microsecond round-trip exactly, confirming a bound isn't floored below
+    -- A single-point range pinned to a whole-nanosecond value exercises the
+    -- nanosecond round-trip exactly, confirming a bound isn't floored below
     -- itself when it carries sub-second precision.
-    it "respects a microsecond-precision bound exactly" $ do
-      let t = TimeOfDay 0 0 0.999999
+    it "respects a nanosecond-precision bound exactly" $ do
+      let t = TimeOfDay 0 0 0.999999999
       prop (Gen.time & Gen.min t & Gen.max t & Gen.build) $ \d ->
         d `shouldBe` t
 

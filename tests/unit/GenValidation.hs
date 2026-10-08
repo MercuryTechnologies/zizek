@@ -108,6 +108,7 @@ spec = do
             Concurrent.Machine
               { initial = pure (),
                 rules = [Concurrent.rule "invalid draw" (\() -> void (Property.forAll (Gen.int & Gen.min 2 & Gen.max 1 & Gen.build)))],
+                stepCount = Concurrent.defaultStepCount,
                 invariants = []
               }
       report <- Property.check defaultSettings (Concurrent.run (Concurrent.fixed 2) machine)
@@ -156,7 +157,7 @@ spec = do
       token <- case allFailureOutcomes baseline.result of
         [outcome] -> expectToken outcome
         other -> fail (show other)
-      for_ [defaultSettings {testCases = -1}, defaultSettings {statefulStepCount = 0}, defaultSettings {maxCloneDepth = -1}] \settings -> do
+      for_ [defaultSettings {testCases = -1}, defaultSettings {maxCloneDepth = -1}] \settings -> do
         ran <- newIORef False
         let body = liftIO (writeIORef ran True)
         for_ [Property.check settings body, Runner.checkWithProgress (\_ -> writeIORef ran True) settings body, Runner.replay settings token body] \run -> do
@@ -183,8 +184,8 @@ spec = do
         other -> expectationFailure (show other)
       readIORef ran `shouldReturn` False
     it "accepts the numeric limits without starting an engine" do
-      Settings.validate defaultSettings {testCases = 0, statefulStepCount = 1, maxCloneDepth = 0} `shouldSatisfy` either (const False) (const True)
-      Settings.validate defaultSettings {testCases = maxBound, statefulStepCount = maxBound, maxCloneDepth = maxBound} `shouldSatisfy` either (const False) (const True)
+      Settings.validate defaultSettings {testCases = 0, maxCloneDepth = 0} `shouldSatisfy` either (const False) (const True)
+      Settings.validate defaultSettings {testCases = maxBound, maxCloneDepth = maxBound} `shouldSatisfy` either (const False) (const True)
     it "validates the effective sample count" do
       Runner.samples defaultSettings {testCases = -1} 0 (pure True) `shouldReturn` []
       Runner.samples defaultSettings (-1) (pure True) `shouldThrow` \SettingsError {} -> True
@@ -369,8 +370,8 @@ spec = do
         prop (Gen.time & Gen.max (TimeOfDay 23 59 60) & Gen.build) (\_ -> pure ())
           `shouldThrow` messageContains "Hegel.Gen.Time"
 
-      it "rejects a bound finer than microsecond resolution" $ do
-        prop (Gen.time & Gen.max (TimeOfDay 0 0 0.0000005) & Gen.build) (\_ -> pure ())
+      it "rejects a bound finer than nanosecond resolution" $ do
+        prop (Gen.time & Gen.max (TimeOfDay 0 0 0.0000000005) & Gen.build) (\_ -> pure ())
           `shouldThrow` messageContains "Hegel.Gen.Time"
 
     describe "Gen.datetime" $ do

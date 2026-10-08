@@ -1,6 +1,6 @@
 -- | 'TimeOfDay' generator.
 --
--- Full day by default, midnight to @23:59:59.999999@; narrow with
+-- Full day by default, midnight to @23:59:59.999999999@; narrow with
 -- 'Hegel.Gen.Builder.min' and 'Hegel.Gen.Builder.max':
 --
 -- > Gen.time & Gen.min midnight & Gen.max (TimeOfDay 12 0 0) & Gen.build
@@ -31,7 +31,7 @@ data TimeBuilder = TimeBuilder
   }
 
 -- | Generate a random time of day, defaulting to the full day: midnight to
--- @23:59:59.999999@.
+-- @23:59:59.999999999@.
 time :: TimeBuilder
 time = TimeBuilder {bMin = Nothing, bMax = Nothing}
 
@@ -49,23 +49,23 @@ instance Build TimeBuilder TimeOfDay where
     drawTime tc lo hi
     where
       lo = fromMaybe midnight b.bMin
-      hi = fromMaybe (TimeOfDay 23 59 59.999999) b.bMax
+      hi = fromMaybe (TimeOfDay 23 59 59.999999999) b.bMax
 
 -- | Require @hour@ in @[0, 23]@, @minute@\/@second@ in @[0, 59]@, and
--- @second@'s fractional part to be a whole number of microseconds, throwing
+-- @second@'s fractional part to be a whole number of nanoseconds, throwing
 -- 'ValidationError' otherwise.
 checkFields :: (HasCallStack) => Text -> TimeOfDay -> IO ()
 checkFields ctx t
   | t.todHour < 0 || t.todHour > 23 = invalid "hour" t.todHour
   | t.todMin < 0 || t.todMin > 59 = invalid "minute" t.todMin
   | t.todSec < 0 || t.todSec >= 60 = invalid "second" t.todSec
-  | not (wholeMicroseconds t.todSec) =
+  | not (wholeNanoseconds t.todSec) =
       throwIO
-        (ValidationError Diagnostic {context = ctx, detail = "second must have whole microsecond precision", values = [("second", T.pack (show t.todSec))], callStack = callStack})
+        (ValidationError Diagnostic {context = ctx, detail = "second must have whole nanosecond precision", values = [("second", T.pack (show t.todSec))], callStack = callStack})
   | otherwise = pure ()
   where
-    wholeMicroseconds :: Pico -> Bool
-    wholeMicroseconds (MkFixed ps) = ps `mod` 1_000_000 == 0
+    wholeNanoseconds :: Pico -> Bool
+    wholeNanoseconds (MkFixed ps) = ps `mod` 1_000 == 0
     invalid :: (HasCallStack, Show a) => Text -> a -> IO ()
     invalid field v =
       throwIO

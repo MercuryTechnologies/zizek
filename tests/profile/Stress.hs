@@ -171,6 +171,7 @@ heavyMachine =
               audit = []
             },
       rules = [restock, placeOrder, fulfillOrder, cancelOrder],
+      stepCount = Stateful.defaultStepCount,
       invariants = [reservationsMatchOrders, stockCoversReservations, auditNeverForgets]
     }
 

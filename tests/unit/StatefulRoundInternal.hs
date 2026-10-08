@@ -148,10 +148,10 @@ fanOutSpec = describe "runRound (real engine, several workers)" do
     dispatches <- newIORef (0 :: Int)
     seenWorkers <- newMVar Set.empty
     let n = 3 :: Int64
-    report <- check def {testCases = 5, statefulStepCount = 300} do
+    report <- check def {testCases = 5} do
       env <- askEnv
       let tc = env.testCase
-      (sm, _concurrency) <- liftIO (newConcurrentStateMachine tc ["increment"] [0] [] n n)
+      (sm, _concurrency) <- liftIO (newConcurrentStateMachine tc ["increment"] [0] [] n n 300)
       registerFinalizer (freeStateMachine tc sm)
       liftIO $ withClones (fromIntegral n) tc \clones -> do
         let mkWorker i clone =
@@ -178,11 +178,6 @@ fanOutSpec = describe "runRound (real engine, several workers)" do
                     ContinueRound -> roundLoop
                     Conclude _ -> pure ()
         roundLoop
-    -- The very first max_concurrency > 1 state-machine creation in this
-    -- whole run discards as an ordinary invalid case (the engine's own
-    -- documented way of flipping the run nondeterministic); every case
-    -- after that runs with real concurrency. Nothing here ever fails, so
-    -- the run reports 'Ok' either way.
     report.result `shouldSatisfy` isOk
     finalCounter <- readIORef counter
     finalDispatches <- readIORef dispatches
@@ -194,14 +189,14 @@ fanOutSpec = describe "runRound (real engine, several workers)" do
     active <- newIORef (0 :: Int)
     let n = 3 :: Int64
     -- The engine hands a worker zero rules on its first pull with real
-    -- (non-negligible) probability, independent of 'statefulStepCount', so
+    -- (non-negligible) probability, independent of the step count, so
     -- waiting for every one of @n@ workers to reach 'dispatch' is not a
     -- precondition this round can guarantee. One worker mid-dispatch is
     -- enough to exercise cancellation.
-    report <- check def {testCases = 1, statefulStepCount = fromIntegral n} do
+    report <- check def {testCases = 1} do
       env <- askEnv
       let tc = env.testCase
-      (sm, _concurrency) <- liftIO (newConcurrentStateMachine tc ["stall"] [0] [] n n)
+      (sm, _concurrency) <- liftIO (newConcurrentStateMachine tc ["stall"] [0] [] n n n)
       registerFinalizer (freeStateMachine tc sm)
       liftIO $ withClones (fromIntegral n) tc \clones -> do
         let mkWorker clone =

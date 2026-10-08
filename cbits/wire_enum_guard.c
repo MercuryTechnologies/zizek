@@ -1,9 +1,8 @@
 /*
  * Closed-world guard for the libhegel C enums that zizek mirrors as Haskell
  * ADTs (Hegel.Backend, Hegel.Verbosity, Hegel.Phase, Hegel.HealthCheck,
- * Hegel.Internal.DataSource's Label, Hegel.Internal.TestCase's Status,
- * Hegel.Runner's RunStatus, and hegel_result_t's error-code pattern synonyms
- * in Hegel.Internal.Foreign.Raw).
+ * Hegel.Internal.TestCase's Status, Hegel.Runner's RunStatus, and
+ * hegel_result_t's error-code pattern synonyms in Hegel.Internal.Foreign.Raw).
  *
  * Each function is an EXHAUSTIVE switch with no `default:`. Compiled with
  * `-Werror=switch-enum -Werror=switch`, the build FAILS if hegel-rust adds a
@@ -13,11 +12,10 @@
  * under `-Wswitch`, not `-Wswitch-enum`.
  *
  * Parameters take the wire width our `Witch.into` produces (Word32 for
- * Backend/Verbosity/Phase/HealthCheck/Status, Word64 for Label; RunStatus and
- * hegel_result_t are read from the engine as a plain `int` and untested
- * here) and cast to the enum, so the FFI imports in
- * tests/ffi/WireEnumCoverage.hs line up and the switch still checks the
- * enum's members.
+ * Backend/Verbosity/Phase/HealthCheck/Status; RunStatus and hegel_result_t
+ * are read from the engine as a plain `int` and untested here) and cast to
+ * the enum, so the FFI imports in tests/ffi/WireEnumCoverage.hs line up and
+ * the switch still checks the enum's members.
  */
 
 #include <hegel.h>
@@ -25,7 +23,6 @@
 
 int hegel_guard_backend(uint32_t x) {
   switch ((hegel_backend_t)x) {
-    case HEGEL_BACKEND_AUTO:
     case HEGEL_BACKEND_DEFAULT:
     case HEGEL_BACKEND_URANDOM:
       return 0;
@@ -68,48 +65,6 @@ int hegel_guard_health_check(uint32_t x) {
   return -1;
 }
 
-int hegel_guard_label(uint64_t x) {
-  switch ((hegel_label_t)x) {
-    case HEGEL_LABEL_LIST:
-    case HEGEL_LABEL_LIST_ELEMENT:
-    case HEGEL_LABEL_SET:
-    case HEGEL_LABEL_SET_ELEMENT:
-    case HEGEL_LABEL_MAP:
-    case HEGEL_LABEL_MAP_ENTRY:
-    case HEGEL_LABEL_TUPLE:
-    case HEGEL_LABEL_ONE_OF:
-    case HEGEL_LABEL_OPTIONAL:
-    case HEGEL_LABEL_FIXED_DICT:
-    case HEGEL_LABEL_FLAT_MAP:
-    case HEGEL_LABEL_FILTER:
-    case HEGEL_LABEL_MAPPED:
-    case HEGEL_LABEL_SAMPLED_FROM:
-    case HEGEL_LABEL_ENUM_VARIANT:
-    case HEGEL_LABEL_FEATURE_FLAG:
-    case HEGEL_LABEL_REGEX:
-    case HEGEL_LABEL_EMAIL:
-    case HEGEL_LABEL_URL:
-    case HEGEL_LABEL_DOMAIN:
-    case HEGEL_LABEL_DATE:
-    case HEGEL_LABEL_TIME:
-    case HEGEL_LABEL_DATETIME:
-    case HEGEL_LABEL_UUID:
-    case HEGEL_LABEL_IP_ADDRESS:
-    case HEGEL_LABEL_INTEGER:
-    case HEGEL_LABEL_FLOAT:
-    case HEGEL_LABEL_BOOLEAN:
-    case HEGEL_LABEL_BYTES:
-    case HEGEL_LABEL_STRING:
-    case HEGEL_LABEL_STATEFUL_RULE:
-    case HEGEL_LABEL_FRESH_ID:
-    case HEGEL_LABEL_SET_CHOICE:
-    case HEGEL_LABEL_CONCURRENCY:
-    case HEGEL_LABEL_RECURSIVE:
-      return 0;
-  }
-  return -1;
-}
-
 int hegel_guard_status(uint32_t x) {
   switch ((hegel_status_t)x) {
     case HEGEL_STATUS_VALID:
@@ -126,7 +81,6 @@ int hegel_guard_run_status(int x) {
     case HEGEL_RUN_STATUS_PASSED:
     case HEGEL_RUN_STATUS_FAILED:
     case HEGEL_RUN_STATUS_ERROR:
-    case HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC:
       return 0;
   }
   return -1;

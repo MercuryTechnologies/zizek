@@ -20,6 +20,9 @@ cabal/*
 # captured profiles (scripts/profile-*.sh output)
 profiles/
 
+# misc. notes for planning and such that don't make sense to track
+notes
+
 # local claude settings
 .claude/settings.local.json
 

@@ -375,5 +375,6 @@ transferMachine =
             assert False "reads of closed handles always fail (bug)"
             pure m
         ],
+      stepCount = Stateful.defaultStepCount,
       invariants = []
     }

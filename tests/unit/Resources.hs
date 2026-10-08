@@ -102,6 +102,7 @@ spec = describe "resource" do
                 _ <- resource (modifyIORef' opened (+ 1)) (const (modifyIORef' closed (+ 1)))
                 pure (Counter 0),
               rules = [increment],
+              stepCount = Stateful.defaultStepCount,
               invariants = [neverAboveFive]
             }
     report <- check def (Stateful.run machine)
@@ -125,6 +126,7 @@ spec = describe "resource" do
           Stateful.Machine
             { initial = pure (Counter 0),
               rules = [onceRule],
+              stepCount = Stateful.defaultStepCount,
               invariants = []
             }
     report <- check def (Stateful.run machine)
@@ -141,6 +143,7 @@ spec = describe "resource" do
           Stateful.Machine
             { initial = pure (Counter 0),
               rules = [increment],
+              stepCount = Stateful.defaultStepCount,
               invariants = [checkAfterStep]
             }
     report <- check def (Stateful.run machine)
@@ -160,6 +163,7 @@ spec = describe "resource" do
           Stateful.Machine
             { initial = pure (Counter 0),
               rules = [increment],
+              stepCount = Stateful.defaultStepCount,
               invariants = [checkOnInitial]
             }
     report <- check def (Stateful.run machine)
@@ -176,6 +180,7 @@ spec = describe "resource" do
           Stateful.Machine
             { initial = pure (Counter 0),
               rules = [bumpingRule],
+              stepCount = Stateful.defaultStepCount,
               invariants = []
             }
     report <- check def (Stateful.run machine)
@@ -219,6 +224,7 @@ spec = describe "resource" do
                 _ <- resource (pure ()) (const (pure ()))
                 pure (Counter 0),
               rules = [increment],
+              stepCount = Stateful.defaultStepCount,
               invariants = []
             }
         outerRule :: Stateful.Rule Counter IO
@@ -230,6 +236,7 @@ spec = describe "resource" do
           Stateful.Machine
             { initial = pure (Counter 0),
               rules = [outerRule],
+              stepCount = Stateful.defaultStepCount,
               invariants = []
             }
     report <- check def (Stateful.run outerMachine)
@@ -246,6 +253,7 @@ spec = describe "resource" do
             Stateful.Machine
               { initial = pure (Counter 0),
                 rules = [bugRule],
+                stepCount = Stateful.defaultStepCount,
                 invariants = []
               }
       report <- check def (Stateful.run machine)
@@ -262,6 +270,7 @@ spec = describe "resource" do
             Stateful.Machine
               { initial = pure (Counter 0),
                 rules = [bugRule],
+                stepCount = Stateful.defaultStepCount,
                 invariants = []
               }
       report <- check def (Stateful.run machine)

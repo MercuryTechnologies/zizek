@@ -186,11 +186,9 @@ spec = do
       r2 <- check settings {phases = [Explicit, Reuse, Shrink]} failing
       void (expectReconstructed r2.result)
 
-  it "reports unexpected success during reconstruction" $ do
-    -- Fails exactly once. With shrinking enabled the engine's own replays
-    -- would observe the disagreement and flag a flaky test (UnhealthyInput);
-    -- with the Shrink phase off, the only re-execution is zizek's final
-    -- reconstruction replay — which the engine cannot see — and it passes.
+  it "reports a fail-once flake as an unreproducible failure" $ do
+    -- Fails exactly once. The engine's own replay of the failure passes, so
+    -- it reports the failure unconfirmed, with no reproducer to replay.
     flag <- newIORef False
     let nondeterministic :: Property ()
         nondeterministic = do
@@ -203,8 +201,9 @@ spec = do
               assert False "fails exactly once (nondeterministic)"
     r <- check defaultSettings {phases = [Generate]} nondeterministic
     case failureEvidenceStatuses r.result of
-      [Diverged (ReplayDivergence UnexpectedSuccess)] -> pure ()
-      other -> expectationFailure ("expected a structured replay divergence, got: " <> show other)
+      [Observed _] -> pure ()
+      other -> expectationFailure ("expected an observed failure, got: " <> show other)
+    r.reproduction `shouldBe` Unreproducible
 
   it "a passing run reports Unstored even with persistence configured" $
     withSystemTempDirectory "zizek-replay-passing" \dbDir -> do

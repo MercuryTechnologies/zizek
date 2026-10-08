@@ -53,6 +53,7 @@ module Hegel.Internal.DataSource
     stateMachineNextGroup,
     stateMachineNextRule,
     stateMachineRuleRejected,
+    stateMachineShouldCheckInvariant,
     freeStateMachine,
 
     -- * Recursive generation
@@ -65,6 +66,9 @@ module Hegel.Internal.DataSource
 
     -- * Spans
     Label (..),
+    labelName,
+    labelFromName,
+    combineLabels,
     startSpan,
     stopSpan,
   )
@@ -72,7 +76,7 @@ where
 
 import Control.Exception (finally, throwIO)
 import Control.Monad (void)
-import Data.Bits (bit, shiftL, shiftR, testBit, (.&.))
+import Data.Bits (bit, shiftL, shiftR, testBit, xor, (.&.))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Fixed (Fixed (MkFixed), Pico)
@@ -89,6 +93,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time.Calendar (Day, fromGregorianValid, toGregorian)
 import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), makeTimeOfDayValid)
+import Data.Vector.Unboxed qualified as Vector.Unboxed
 import Data.Word (Word32, Word64, Word8)
 import Foreign (ForeignPtr, Ptr, alloca, allocaBytes, castPtr, nullPtr, peek, with, withArray, withForeignPtr, withMany)
 import Foreign.C.String (CString)
@@ -314,13 +319,13 @@ hegelDateToDay hd = fromGregorianValid (fromIntegral hd.year) (fromIntegral hd.m
 
 timeOfDayToHegelTime :: TimeOfDay -> HegelTime
 timeOfDayToHegelTime t =
-  HegelTime {hour = fromIntegral t.todHour, minute = fromIntegral t.todMin, second = wholeSeconds, microsecond = micros}
+  HegelTime {hour = fromIntegral t.todHour, minute = fromIntegral t.todMin, second = wholeSeconds, nanosecond = nanos}
   where
-    (wholeSeconds, micros) = picoToMicros t.todSec
+    (wholeSeconds, nanos) = picoToNanos t.todSec
 
 hegelTimeToTimeOfDay :: HegelTime -> Maybe TimeOfDay
 hegelTimeToTimeOfDay ht =
-  makeTimeOfDayValid (fromIntegral ht.hour) (fromIntegral ht.minute) (microsToPico ht.second ht.microsecond)
+  makeTimeOfDayValid (fromIntegral ht.hour) (fromIntegral ht.minute) (nanosToPico ht.second ht.nanosecond)
 
 localTimeToHegelDatetime :: LocalTime -> HegelDatetime
 localTimeToHegelDatetime lt =
@@ -330,20 +335,20 @@ hegelDatetimeToLocalTime :: HegelDatetime -> Maybe LocalTime
 hegelDatetimeToLocalTime hdt = LocalTime <$> hegelDateToDay hdt.date <*> hegelTimeToTimeOfDay hdt.time
 
 -- | Split a time-of-day second component into whole seconds and a
--- microsecond count. Callers must ensure @s@ carries no finer-than-microsecond
+-- nanosecond count. Callers must ensure @s@ carries no finer-than-nanosecond
 -- precision; 'Hegel.Gen.Time.checkFields' rejects such a bound before this
 -- ever runs.
-picoToMicros :: Pico -> (Word8, Word32)
-picoToMicros (MkFixed ps) = (fromInteger wholeSeconds, fromInteger micros)
+picoToNanos :: Pico -> (Word8, Word32)
+picoToNanos (MkFixed ps) = (fromInteger wholeSeconds, fromInteger nanos)
   where
     (wholeSeconds, remainder) = ps `divMod` 1_000_000_000_000
-    micros = remainder `div` 1_000_000
+    nanos = remainder `div` 1_000
 
--- | Combine a whole second count and a microsecond count into a
+-- | Combine a whole second count and a nanosecond count into a
 -- picosecond-precision time-of-day second component.
-microsToPico :: Word8 -> Word32 -> Pico
-microsToPico wholeSeconds micros =
-  MkFixed (toInteger wholeSeconds * 1_000_000_000_000 + toInteger micros * 1_000_000)
+nanosToPico :: Word8 -> Word32 -> Pico
+nanosToPico wholeSeconds nanos =
+  MkFixed (toInteger wholeSeconds * 1_000_000_000_000 + toInteger nanos * 1_000)
 
 -- | Draw a string from a generator built by a @build*Gen@ constructor below.
 --
@@ -489,10 +494,10 @@ buildTextGen spec =
 buildRegexGen :: Text -> Bool -> Maybe (ForeignPtr HegelStringGenerator) -> IO (ForeignPtr HegelStringGenerator)
 buildRegexGen pat fullmatch mAlphabet =
   withContext \ctx ->
-    CString.withText pat \patPtr ->
+    BS.useAsCStringLen (TE.encodeUtf8 pat) \(patPtr, patLen) ->
       withNullableAlphabet mAlphabet \alphaPtr ->
         alloca \outGen -> do
-          hegel_string_generator_regex ctx patPtr (CBool (if fullmatch then 1 else 0)) alphaPtr outGen
+          hegel_string_generator_regex ctx (castPtr patPtr) (fromIntegral patLen) (CBool (if fullmatch then 1 else 0)) alphaPtr outGen
             >>= throwOnError ctx
           peek outGen >>= wrapStringGenerator
   where
@@ -665,21 +670,23 @@ freePool tc pool = void (hegel_pool_free tc.handle.ctx pool)
 
 -- * State machines
 
--- | Register sequential state machine; returns its handle.
+-- | Register a sequential state machine running at most @stepCount@ steps per
+-- test case; returns its handle.
 --
--- @ruleNames@ must be non-empty.
-newStateMachine :: (HasCallStack) => TestCase -> [Text] -> [Text] -> IO (Ptr HegelStateMachine)
-newStateMachine tc ruleNames invariantNames =
+-- @ruleNames@ must be non-empty and @stepCount@ positive.
+newStateMachine :: (HasCallStack) => TestCase -> Int64 -> [Text] -> [Text] -> IO (Ptr HegelStateMachine)
+newStateMachine tc stepCount ruleNames invariantNames =
   -- One sequential group (id 0) for every rule.
-  fst <$> newConcurrentStateMachine tc ruleNames (replicate (length ruleNames) 0) invariantNames 1 1
+  fst <$> newConcurrentStateMachine tc ruleNames (replicate (length ruleNames) 0) invariantNames 1 1 stepCount
 
 -- | A generalization of 'newStateMachine' that supports the @libhegel@ round
 -- protocol.
 --
 -- @ruleGroups@ must hold exactly one concurrency-group ID per @ruleNames@
--- entry, in the same order; @ruleNames@ must be non-empty.
-newConcurrentStateMachine :: (HasCallStack) => TestCase -> [Text] -> [Int64] -> [Text] -> Int64 -> Int64 -> IO (Ptr HegelStateMachine, Int)
-newConcurrentStateMachine tc ruleNames ruleGroups invariantNames minConcurrency maxConcurrency
+-- entry, in the same order; @ruleNames@ must be non-empty. Rules are weighted
+-- equally, and every invariant is flagged to run at every join point.
+newConcurrentStateMachine :: (HasCallStack) => TestCase -> [Text] -> [Int64] -> [Text] -> Int64 -> Int64 -> Int64 -> IO (Ptr HegelStateMachine, Int)
+newConcurrentStateMachine tc ruleNames ruleGroups invariantNames minConcurrency maxConcurrency stepCount
   | length ruleGroups /= length ruleNames =
       throwIO
         ( malformedTest
@@ -693,24 +700,28 @@ newConcurrentStateMachine tc ruleNames ruleGroups invariantNames minConcurrency 
           withArray rulePtrs \rulesArr ->
             withArray invPtrs \invArr ->
               withArray ruleGroups \groupsArr ->
-                withSlotOf tc.slot \outHandle ->
-                  alloca \outConcurrency -> do
-                    hegel_new_state_machine
-                      tc.handle.ctx
-                      tc.handle.ptr
-                      rulesArr
-                      groupsArr
-                      (fromIntegral (length ruleNames))
-                      invArr
-                      (fromIntegral (length invariantNames))
-                      minConcurrency
-                      maxConcurrency
-                      outHandle
-                      outConcurrency
-                      >>= handleReturnCode tc
-                    handle <- peek outHandle
-                    concurrency <- fromIntegral <$> (peek outConcurrency :: IO Int64)
-                    pure (handle, concurrency)
+                withArray (CBool 1 <$ invariantNames) \alwaysCheckArr ->
+                  withSlotOf tc.slot \outHandle ->
+                    alloca \outConcurrency -> do
+                      hegel_new_state_machine
+                        tc.handle.ctx
+                        tc.handle.ptr
+                        rulesArr
+                        groupsArr
+                        nullPtr
+                        (fromIntegral (length ruleNames))
+                        invArr
+                        alwaysCheckArr
+                        (fromIntegral (length invariantNames))
+                        minConcurrency
+                        maxConcurrency
+                        stepCount
+                        outHandle
+                        outConcurrency
+                        >>= handleReturnCode tc
+                      handle <- peek outHandle
+                      concurrency <- fromIntegral <$> (peek outConcurrency :: IO Int64)
+                      pure (handle, concurrency)
 
 -- | Start the machine's next round, or 'Nothing' once the engine has
 -- decided the whole state machine is done stepping.
@@ -748,6 +759,20 @@ stateMachineRuleRejected :: TestCase -> Ptr HegelStateMachine -> Int -> IO ()
 stateMachineRuleRejected tc sm workerIndex = do
   result <- hegel_state_machine_rule_rejected tc.handle.ctx tc.handle.ptr sm (fromIntegral workerIndex)
   handleReturnCode tc result
+
+-- | Whether to run invariant @invariantIndex@ at the current join point.
+--
+-- Call once per invariant per join point, unconditionally, on the root
+-- handle that drives 'stateMachineNextGroup'. The initial and final states
+-- are the caller's to check without asking.
+--
+-- Throws 'TestStopped' when the choice budget is exhausted.
+stateMachineShouldCheckInvariant :: TestCase -> Ptr HegelStateMachine -> Int -> IO Bool
+stateMachineShouldCheckInvariant tc sm invariantIndex =
+  alloca \outCheck -> do
+    hegel_state_machine_should_check_invariant tc.handle.ctx tc.handle.ptr sm (fromIntegral invariantIndex) outCheck
+      >>= handleReturnCode tc
+    (\(CBool b) -> b /= 0) <$> peek outCheck
 
 -- | Release a state-machine handle from 'newStateMachine'. Each handle must
 -- be freed exactly once.
@@ -834,7 +859,8 @@ stopSpan tc isDiscard = do
   handleReturnCode tc result
 
 -- | Span labels used to group related draws so the engine can shrink them
--- as a unit. Numeric values match @libhegel@'s constants.
+-- as a unit. Each label is derived from a @zizek.<kind>@ name, so it never
+-- collides with the engine's own @hegel.<kind>@ spans.
 data Label
   = LabelList
   | LabelListElement
@@ -854,26 +880,55 @@ data Label
   | LabelFeatureFlag
   | LabelStatefulRule
   | LabelRecursive
-  deriving stock (Show)
+  deriving stock (Show, Eq, Enum, Bounded)
 
--- | The @hegel_label_t@ wire identifier (the @HEGEL_LABEL_*@ constants are the
--- single source of truth).
+-- | The name a 'Label' is derived from.
+labelName :: Label -> ByteString
+labelName = \case
+  LabelList -> "zizek.list"
+  LabelListElement -> "zizek.list_element"
+  LabelSet -> "zizek.set"
+  LabelSetElement -> "zizek.set_element"
+  LabelMap -> "zizek.map"
+  LabelMapEntry -> "zizek.map_entry"
+  LabelTuple -> "zizek.tuple"
+  LabelOneOf -> "zizek.one_of"
+  LabelOptional -> "zizek.optional"
+  LabelFixedDict -> "zizek.fixed_dict"
+  LabelFlatMap -> "zizek.flat_map"
+  LabelFilter -> "zizek.filter"
+  LabelMapped -> "zizek.mapped"
+  LabelSampledFrom -> "zizek.sampled_from"
+  LabelEnumVariant -> "zizek.enum_variant"
+  LabelFeatureFlag -> "zizek.feature_flag"
+  LabelStatefulRule -> "zizek.stateful_rule"
+  LabelRecursive -> "zizek.recursive"
+
+-- | The span label passed to @libhegel@.
 instance Witch.From Label Word64 where
-  from LabelList = HEGEL_LABEL_LIST
-  from LabelListElement = HEGEL_LABEL_LIST_ELEMENT
-  from LabelSet = HEGEL_LABEL_SET
-  from LabelSetElement = HEGEL_LABEL_SET_ELEMENT
-  from LabelMap = HEGEL_LABEL_MAP
-  from LabelMapEntry = HEGEL_LABEL_MAP_ENTRY
-  from LabelTuple = HEGEL_LABEL_TUPLE
-  from LabelOneOf = HEGEL_LABEL_ONE_OF
-  from LabelOptional = HEGEL_LABEL_OPTIONAL
-  from LabelFixedDict = HEGEL_LABEL_FIXED_DICT
-  from LabelFlatMap = HEGEL_LABEL_FLAT_MAP
-  from LabelFilter = HEGEL_LABEL_FILTER
-  from LabelMapped = HEGEL_LABEL_MAPPED
-  from LabelSampledFrom = HEGEL_LABEL_SAMPLED_FROM
-  from LabelEnumVariant = HEGEL_LABEL_ENUM_VARIANT
-  from LabelFeatureFlag = HEGEL_LABEL_FEATURE_FLAG
-  from LabelStatefulRule = HEGEL_LABEL_STATEFUL_RULE
-  from LabelRecursive = HEGEL_LABEL_RECURSIVE
+  from label = Vector.Unboxed.unsafeIndex labelTable (fromEnum label)
+
+-- | Every label's wire value, indexed by constructor, so each name is hashed
+-- once rather than on every span.
+labelTable :: Vector.Unboxed.Vector Word64
+labelTable = Vector.Unboxed.fromList (labelFromName . labelName <$> [minBound .. maxBound])
+{-# NOINLINE labelTable #-}
+
+-- | The span label for a generator identified by @name@: the 64-bit FNV-1a
+-- hash of its bytes, equal to what @hegel_label_from_name@ computes.
+labelFromName :: ByteString -> Word64
+labelFromName = fnv1a fnvOffsetBasis
+
+-- | The order-sensitive combination of component labels, equal to what
+-- @hegel_label_combine@ computes. Pass the generator's own label first.
+combineLabels :: [Word64] -> Word64
+combineLabels = foldl' (\h l -> fnv1a h (word64LE l)) fnvOffsetBasis
+  where
+    word64LE :: Word64 -> ByteString
+    word64LE w = BS.pack [fromIntegral (w `shiftR` (8 * i)) | i <- [0 .. 7]]
+
+fnv1a :: Word64 -> ByteString -> Word64
+fnv1a = BS.foldl' (\h b -> (h `xor` fromIntegral b) * 0x100000001b3)
+
+fnvOffsetBasis :: Word64
+fnvOffsetBasis = 0xcbf29ce484222325

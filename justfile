@@ -5,7 +5,7 @@ nix_dirs := "."
 format:
   @cabal-gild -i zizek.cabal -o zizek.cabal
   @find {{hs_dirs}} -name '*.hs' | xargs ormolu --mode inplace
-  @find {{nix_dirs}} -name '*.nix' -not -path './dist-newstyle/*' | xargs nixpkgs-fmt
+  @find {{nix_dirs}} -name '*.nix' -not -path './dist-newstyle/*' -not -path './references/*' | xargs nixpkgs-fmt
 
 # Verify formatting without modifying files (for CI / pre-commit).
 check-format:

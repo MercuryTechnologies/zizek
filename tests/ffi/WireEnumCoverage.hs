@@ -6,15 +6,20 @@
 -- enumerator, this test target fails to build. This module is the runtime half:
 -- it feeds every value our 'Witch.From' instances produce to the matching guard
 -- and asserts it is recognized (returns @0@), catching /value drift/ — a
--- conversion whose code no longer matches the header.
+-- conversion whose code no longer matches the header. Span labels have no enum, so
+-- their check compares our name-derived values against the engine's own
+-- derivation.
 module WireEnumCoverage (wireEnumCoverageSpec) where
 
-import Data.Foldable (traverse_)
+import Data.ByteString qualified as BS
+import Data.Foldable (for_, traverse_)
+import Data.List (nub)
 import Data.Word (Word32, Word64)
+import Foreign (alloca, peek, withArrayLen)
 import Foreign.C.Types (CInt (..))
 import Hegel.Backend (Backend (..))
 import Hegel.HealthCheck (HealthCheck (..))
-import Hegel.Internal.DataSource (Label (..))
+import Hegel.Internal.DataSource (Label (..), combineLabels, labelName)
 import Hegel.Internal.Foreign.Raw
 import Hegel.Internal.TestCase (Status (..))
 import Hegel.Phase (Phase (..))
@@ -30,8 +35,6 @@ foreign import ccall unsafe "hegel_guard_phase" guardPhase :: Word32 -> IO CInt
 
 foreign import ccall unsafe "hegel_guard_health_check" guardHealthCheck :: Word32 -> IO CInt
 
-foreign import ccall unsafe "hegel_guard_label" guardLabel :: Word64 -> IO CInt
-
 foreign import ccall unsafe "hegel_guard_status" guardStatus :: Word32 -> IO CInt
 
 foreign import ccall unsafe "hegel_guard_result" guardResult :: CInt -> IO CInt
@@ -43,7 +46,7 @@ allRecognized guard = traverse_ \w -> guard w `shouldReturn` 0
 wireEnumCoverageSpec :: Spec
 wireEnumCoverageSpec = describe "wire enum coverage (conversion values vs hegel.h)" $ do
   it "Backend" $
-    allRecognized guardBackend (Witch.into @Word32 <$> [Auto, Default, Urandom])
+    allRecognized guardBackend (Witch.into @Word32 <$> [Default, Urandom])
   it "Verbosity" $
     allRecognized guardVerbosity (Witch.into @Word32 <$> [Quiet, Normal, Verbose, Debug])
   it "Phase" $
@@ -52,30 +55,26 @@ wireEnumCoverageSpec = describe "wire enum coverage (conversion values vs hegel.
     allRecognized
       guardHealthCheck
       (Witch.into @Word32 <$> [FilterTooMuch, TooSlow, TestCasesTooLarge, LargeInitialTestCase])
-  it "Label" $
-    allRecognized
-      guardLabel
-      ( Witch.into @Word64
-          <$> [ LabelList,
-                LabelListElement,
-                LabelSet,
-                LabelSetElement,
-                LabelMap,
-                LabelMapEntry,
-                LabelTuple,
-                LabelOneOf,
-                LabelOptional,
-                LabelFixedDict,
-                LabelFlatMap,
-                LabelFilter,
-                LabelMapped,
-                LabelSampledFrom,
-                LabelEnumVariant,
-                LabelFeatureFlag,
-                LabelStatefulRule,
-                LabelRecursive
-              ]
-      )
+  describe "Label" $ do
+    it "derives every label the way hegel_label_from_name does" $
+      withContext \ctx ->
+        for_ [minBound .. maxBound :: Label] \label -> do
+          engine <- BS.useAsCString (labelName label) \name ->
+            alloca \out -> do
+              hegel_label_from_name ctx name out >>= throwOnError ctx
+              peek out
+          Witch.into @Word64 label `shouldBe` engine
+    it "gives every label a distinct value" $ do
+      let labels = Witch.into @Word64 <$> [minBound .. maxBound :: Label]
+      length (nub labels) `shouldBe` length labels
+    it "combines labels the way hegel_label_combine does" $
+      withContext \ctx ->
+        for_ [[], [1], [1, 2], [2, 1], Witch.into @Word64 <$> [minBound .. maxBound :: Label]] \labels -> do
+          engine <- withArrayLen labels \len arr ->
+            alloca \out -> do
+              hegel_label_combine ctx arr (fromIntegral len) out >>= throwOnError ctx
+              peek out
+          combineLabels labels `shouldBe` engine
   it "Status" $
     allRecognized guardStatus (Witch.into @Word32 <$> [Valid, Invalid, Overrun, Interesting "x"])
   it "hegel_result_t" $

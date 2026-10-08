@@ -204,6 +204,7 @@ palindromeMachine =
   Stateful.Machine
     { initial = pure (Stack []),
       rules = [push, checkPalindrome],
+      stepCount = Stateful.defaultStepCount,
       invariants = []
     }
 
@@ -321,6 +322,7 @@ warehouseMachine =
               nextOrder = 1
             },
       rules = [restock, placeOrder, fulfillOrder, cancelOrder],
+      stepCount = Stateful.defaultStepCount,
       invariants = [reservationsMatchOrders, stockCoversReservations, stockNonNegative]
     }
 
@@ -404,6 +406,7 @@ connectionMachine =
             assert (not open) "a checked-in connection has no open transaction"
             pure m
         ],
+      stepCount = Stateful.defaultStepCount,
       invariants = []
     }
 
@@ -459,6 +462,7 @@ ledgerMachine =
             assert (not (funded a && funded b)) "funds stay consolidated in one account"
             pure m
         ],
+      stepCount = Stateful.defaultStepCount,
       invariants = []
     }
 
@@ -608,6 +612,7 @@ inRuleAssertMachine =
   Concurrent.Machine
     { initial = newPoolModel,
       rules = [connect, checkout, checkinAsserting],
+      stepCount = concurrentStepCount,
       invariants = []
     }
 
@@ -616,16 +621,20 @@ invariantJoinMachine =
   Concurrent.Machine
     { initial = newPoolModel,
       rules = [connect, checkout, checkinPlain],
+      stepCount = concurrentStepCount,
       invariants = [cacheMatchesPool]
     }
 
--- | A tighter budget than 'def'. @statefulStepCount@ bounds /rounds/, not
--- raw steps, once concurrency exceeds 1, and up to five rule dispatches can
--- land in a single round. A nondeterministic run is never shrunk, so the
--- log below is the live case exactly as it ran; a tight round budget is
--- what keeps it readable.
+-- | A tighter case budget than 'def' for the concurrent scenarios.
 concurrentPoolSettings :: Settings
-concurrentPoolSettings = def {testCases = 20, statefulStepCount = 3}
+concurrentPoolSettings = def {testCases = 20}
+
+-- | A tighter step budget than 'Concurrent.defaultStepCount'. A concurrent
+-- machine's step count bounds rounds rather than raw steps, and up to five
+-- rule dispatches can land in a single round, so a tight round budget is
+-- what keeps the log readable.
+concurrentStepCount :: Int
+concurrentStepCount = 3
 
 -- * Scenario 11: concurrent groups (writers and readers never share a round)
 
@@ -682,5 +691,6 @@ groupedMachine =
           Concurrent.grouped "checkin" "writers" checkinBody,
           peek
         ],
+      stepCount = concurrentStepCount,
       invariants = [cacheMatchesPool]
     }

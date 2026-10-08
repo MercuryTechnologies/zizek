@@ -16,7 +16,7 @@ import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, assume, forAll, forAllSilent)
-import Hegel.Report (FailureEvidence (..), Note (..), NoteKind (..), Report (..), Result (..), isFailureNote, renderReportRich)
+import Hegel.Report (Abort (..), FailureEvidence (..), Note (..), NoteKind (..), Report (..), Result (..), isFailureNote, renderReportRich)
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..))
 import Hegel.Stateful qualified as Stateful
@@ -42,8 +42,8 @@ increment =
 --
 -- With @failAssumption@ set the rule rejects via 'assume' on every step, so
 -- the model never advances though every dispatch still counts.
-stepRecorder :: Bool -> Settings -> IO [Int]
-stepRecorder failAssumption settings = do
+stepRecorder :: Bool -> Int -> Settings -> IO [Int]
+stepRecorder failAssumption steps settings = do
   perCase <- newIORef ([] :: [Int])
   let bump =
         atomicModifyIORef' perCase \case
@@ -61,6 +61,7 @@ stepRecorder failAssumption settings = do
               liftIO (atomicModifyIORef' perCase \cs -> (0 : cs, ()))
               pure (Counter 0),
             rules = [recording],
+            stepCount = steps,
             invariants = []
           }
   _ <- check settings (Stateful.run machine)
@@ -152,6 +153,7 @@ statefulSpec = describe "Machine" do
           Stateful.Machine
             { initial = pure (Counter 0),
               rules = [increment],
+              stepCount = Stateful.defaultStepCount,
               invariants = [alwaysNonNegative]
             }
     report <- check def (Stateful.run machine)
@@ -164,26 +166,12 @@ statefulSpec = describe "Machine" do
           Stateful.Machine
             { initial = pure (Counter 0),
               rules = [increment],
+              stepCount = Stateful.defaultStepCount,
               invariants = [neverAboveFive]
             }
     report <- check def (Stateful.run machine)
     evidence <- expectReconstructed report.result
     evidence.message `shouldBe` "counter does not exceed 5"
-
-  it "a counterexample past step 50 under a higher statefulStepCount still reconstructs" do
-    let neverAbove150 :: Stateful.Invariant Counter IO
-        neverAbove150 =
-          Stateful.Invariant "never_above_150" \(Counter n) ->
-            assert (n <= 150) "counter does not exceed 150"
-        machine =
-          Stateful.Machine
-            { initial = pure (Counter 0),
-              rules = [increment],
-              invariants = [neverAbove150]
-            }
-    report <- check def {statefulStepCount = 200} (Stateful.run machine)
-    evidence <- expectReconstructed report.result
-    evidence.message `shouldBe` "counter does not exceed 150"
 
   it "machinery annotations carry no source location" do
     -- The 'Step N: ...' / invariant-check annotations are emitted by
@@ -194,6 +182,7 @@ statefulSpec = describe "Machine" do
           Stateful.Machine
             { initial = pure (Counter 0),
               rules = [increment],
+              stepCount = Stateful.defaultStepCount,
               invariants = [neverAboveFive]
             }
     report <- check def (Stateful.run machine)
@@ -216,6 +205,7 @@ statefulSpec = describe "Machine" do
           Stateful.Machine
             { initial = pure (Counter 0),
               rules = [increment],
+              stepCount = Stateful.defaultStepCount,
               invariants = [neverAboveFive]
             }
     report <- check def (Stateful.run machine)
@@ -237,6 +227,7 @@ statefulSpec = describe "Machine" do
           Stateful.Machine
             { initial = pure (Counter 0),
               rules = [increment],
+              stepCount = Stateful.defaultStepCount,
               invariants = [neverAboveFive]
             }
     report <- check def (Stateful.run machine)
@@ -251,6 +242,7 @@ statefulSpec = describe "Machine" do
           Stateful.Machine
             { initial = pure (Stack []),
               rules = [push, pushNonZeroBug],
+              stepCount = Stateful.defaultStepCount,
               invariants = []
             }
     report <- check def (Stateful.run machine)
@@ -263,6 +255,7 @@ statefulSpec = describe "Machine" do
           Stateful.Machine
             { initial = pure (Counter 0),
               rules = [],
+              stepCount = Stateful.defaultStepCount,
               invariants = []
             }
     report <- check def (Stateful.run machine)
@@ -270,7 +263,21 @@ statefulSpec = describe "Machine" do
       Aborted _ -> pure ()
       other -> expectationFailure ("expected Aborted, got: " <> show other)
 
-  it "an overrun inside a rule's draw is reported as GaveUp, not a fabricated counterexample" do
+  it "machine with a stepCount below 1 is aborted" do
+    let machine :: Stateful.Machine Counter IO
+        machine =
+          Stateful.Machine
+            { initial = pure (Counter 0),
+              rules = [increment],
+              stepCount = 0,
+              invariants = []
+            }
+    report <- check def (Stateful.run machine)
+    case report.result of
+      Aborted _ -> pure ()
+      other -> expectationFailure ("expected Aborted, got: " <> show other)
+
+  it "an overrun inside a rule's draw is a health-check abort, not a fabricated counterexample" do
     let overrunning :: Stateful.Rule Counter IO
         overrunning =
           Stateful.Rule "overrun" \s -> do
@@ -280,36 +287,37 @@ statefulSpec = describe "Machine" do
           Stateful.Machine
             { initial = pure (Counter 0),
               rules = [overrunning],
+              stepCount = Stateful.defaultStepCount,
               invariants = []
             }
     report <-
       check
-        def {testCases = 5, suppressHealthCheck = [LargeInitialTestCase, TestCasesTooLarge]}
+        def {testCases = 5, suppressHealthCheck = [LargeInitialTestCase]}
         (Stateful.run machine)
     case report.result of
-      GaveUp _ -> pure ()
-      other -> expectationFailure ("expected GaveUp, got: " <> show other)
+      Aborted (UnhealthyInput msg) -> T.unpack msg `shouldContain` "TestCasesTooLarge"
+      other -> expectationFailure ("expected a TestCasesTooLarge abort, got: " <> show other)
 
-  it "the default statefulStepCount bounds steps, and most cases hit it exactly" do
+  it "the default stepCount bounds steps, and most cases hit it exactly" do
     -- Analogue of the Rust reference's test_step_cap_is_50_most_of_the_time.
-    counts <- stepRecorder False def {testCases = 30}
+    counts <- stepRecorder False Stateful.defaultStepCount def {testCases = 30}
     counts `shouldSatisfy` all (\c -> c >= 1 && c <= 50)
     length (filter (== 50) counts) `shouldSatisfy` (> length counts `div` 2)
 
   it "an assume-rejecting rule's attempts are still bounded" do
     -- Analogue of the Rust reference's test_hopeless_machine_attempts_are_bounded.
     -- A rejected rule is reported to the engine and does not count toward
-    -- 'Hegel.Settings.statefulStepCount', so a machine whose rule never gets
+    -- the machine's stepCount, so a machine whose rule never gets
     -- past its precondition is bounded by the engine's separate 1000-attempt
     -- cap on a case with no successful rule, rather than the step cap.
-    counts <- stepRecorder True def {testCases = 10}
+    counts <- stepRecorder True Stateful.defaultStepCount def {testCases = 10}
     counts `shouldSatisfy` all (\c -> c >= 1 && c <= 1000)
     length (filter (== 1000) counts) `shouldSatisfy` (> length counts `div` 2)
 
-  it "statefulStepCount replaces the default cap" do
+  it "stepCount replaces the default cap" do
     -- Analogue of the Rust reference's test_stateful_step_count_setting_bounds_steps.
     let n = 7 :: Int
-    counts <- stepRecorder False def {testCases = 30, statefulStepCount = n}
+    counts <- stepRecorder False n def {testCases = 30}
     counts `shouldSatisfy` all (\c -> c >= 1 && c <= n)
     length (filter (== n) counts) `shouldSatisfy` (> length counts `div` 2)
 
@@ -355,6 +363,7 @@ poolMachine =
         p <- Pool.new
         pure (Model p Set.empty),
       rules = [register, useReusable, useConsumed],
+      stepCount = Stateful.defaultStepCount,
       invariants = []
     }
 

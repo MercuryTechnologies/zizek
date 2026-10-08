@@ -125,6 +125,7 @@ multipleProperty = do
               if branch == 0 then firstDiff value else secondDiff value
               pure pool
           ],
+        stepCount = Stateful.defaultStepCount,
         invariants = []
       }
 

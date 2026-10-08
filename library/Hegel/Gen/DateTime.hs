@@ -56,12 +56,12 @@ instance HasMax DateTimeBuilder LocalTime where
 
 instance HasYear DateTimeBuilder where
   minYear y b = b {bMin = Just (LocalTime (fromGregorian y 1 1) midnight)}
-  maxYear y b = b {bMax = Just (LocalTime (fromGregorian y 12 31) (TimeOfDay 23 59 59.999999))}
+  maxYear y b = b {bMax = Just (LocalTime (fromGregorian y 12 31) (TimeOfDay 23 59 59.999999999))}
 
 -- | Restrict draws to the given calendar day, spanning its full range of
 -- times of day.
 onDay :: Day -> DateTimeBuilder -> DateTimeBuilder
-onDay d b = b {bMin = Just (LocalTime d midnight), bMax = Just (LocalTime d (TimeOfDay 23 59 59.999999))}
+onDay d b = b {bMin = Just (LocalTime d midnight), bMax = Just (LocalTime d (TimeOfDay 23 59 59.999999999))}
 
 instance Build DateTimeBuilder LocalTime where
   build b = withFrozenCallStack $ Draw \tc -> do
@@ -73,4 +73,4 @@ instance Build DateTimeBuilder LocalTime where
     drawDatetime tc lo hi
     where
       lo = fromMaybe (LocalTime (fromGregorian (-999999) 1 1) midnight) b.bMin
-      hi = fromMaybe (LocalTime (fromGregorian 999999 12 31) (TimeOfDay 23 59 59.999999)) b.bMax
+      hi = fromMaybe (LocalTime (fromGregorian 999999 12 31) (TimeOfDay 23 59 59.999999999)) b.bMax

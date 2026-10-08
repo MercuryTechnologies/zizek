@@ -20,7 +20,6 @@ import Hegel.Replay (encodeReplayToken)
 import Hegel.Report (Report (..), Result (..))
 import Hegel.Runner qualified as Runner
 import Hegel.Settings (Settings (..), defaultSettings)
-import Hegel.Stateful qualified as Stateful
 import Hegel.Tasty qualified as Native
 import Test.Hspec
 import Test.Hspec.Core.Spec qualified as Core
@@ -46,12 +45,12 @@ spec = do
       override <- parsed [("test-cases", "1")]
       resolved <- either fail pure (Config.resolve invalid override)
       resolved.testCases `shouldBe` 1
-      for_ [defaultSettings {statefulStepCount = 0}, defaultSettings {maxCloneDepth = -1}] \settings ->
+      for_ [defaultSettings {maxCloneDepth = -1}] \settings ->
         Config.resolve settings Config.emptyOverrides `shouldSatisfy` isLeft
 
     it "renders invalid programmatic settings consistently in Hspec and Tasty" do
       ran <- newIORef False
-      let settings = defaultSettings {statefulStepCount = 0}
+      let settings = defaultSettings {maxCloneDepth = -1}
           body = liftIO (writeIORef ran True)
       native <- runTree mempty (Native.testPropertyWith settings "bad settings" body)
       Tree.resultSuccessful native `shouldBe` False
@@ -64,17 +63,16 @@ spec = do
 
     it "preserves absent values and overlays only supplied settings" do
       low <- parsed [("test-cases", "7"), ("seed", "11"), ("database", "off")]
-      high <- parsed [("stateful-steps", "3"), ("seed", "12")]
+      high <- parsed [("seed", "12")]
       resolved <- either fail pure (Config.resolve defaultSettings (Config.overlay low high))
       resolved.testCases `shouldBe` 7
-      resolved.statefulStepCount `shouldBe` 3
       resolved.seed `shouldBe` Just 12
       unchanged <- either fail pure (Config.resolve resolved Config.emptyOverrides)
       show unchanged `shouldBe` show resolved
 
     it "accepts numeric bounds and rejects malformed and overflowing inputs" do
-      for_ [("test-cases", "0"), ("test-cases", show (maxBound :: Int)), ("stateful-steps", "1"), ("seed", show (maxBound :: Word64))] \entry -> void (parsed [entry])
-      for_ [("test-cases", "-1"), ("test-cases", "1.0"), ("test-cases", " 2"), ("test-cases", "+2"), ("test-cases", show (toInteger (maxBound :: Int) + 1)), ("stateful-steps", "0"), ("seed", "18446744073709551616"), ("seed", ""), ("database", "directory:"), ("database", "somewhere")] \entry@(name, _) ->
+      for_ [("test-cases", "0"), ("test-cases", show (maxBound :: Int)), ("seed", show (maxBound :: Word64))] \entry -> void (parsed [entry])
+      for_ [("test-cases", "-1"), ("test-cases", "1.0"), ("test-cases", " 2"), ("test-cases", "+2"), ("test-cases", show (toInteger (maxBound :: Int) + 1)), ("seed", "18446744073709551616"), ("seed", ""), ("database", "directory:"), ("database", "somewhere")] \entry@(name, _) ->
         case Config.parseOverrides (`lookup` [entry]) of
           Left message -> message `shouldContain` name
           Right value -> expectationFailure (show value)
@@ -103,18 +101,6 @@ spec = do
       invalid <- runTree (singleOption (Native.HegelTestCases (Just "no"))) (Native.testProperty "invalid" body)
       Tree.resultSuccessful invalid `shouldBe` False
       readIORef count `shouldReturn` 0
-
-    it "applies stateful step overrides to engine execution" do
-      steps <- newIORef (0 :: Int)
-      let machine =
-            Stateful.Machine
-              { initial = liftIO (writeIORef steps 0),
-                rules = [Stateful.Rule "step" (\() -> liftIO (modifyIORef' steps (+ 1)))],
-                invariants = [Stateful.Invariant "budget" (\() -> liftIO (readIORef steps) >>= \n -> assert (n <= 1) "step budget")]
-              }
-      result <- runTree (singleOption (Native.HegelStatefulSteps (Just "1"))) (Native.testProperty "steps" (Stateful.run machine))
-      Tree.resultSuccessful result `shouldBe` True
-      readIORef steps `shouldReturn` 1
 
     it "replays a matching identity once with phases disabled and leaves other identities exploring" do
       baseline <- Runner.check defaultSettings failing

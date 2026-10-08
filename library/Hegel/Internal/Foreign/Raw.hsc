@@ -87,42 +87,15 @@ module Hegel.Internal.Foreign.Raw
     pattern HEGEL_HC_TEST_CASES_TOO_LARGE,
     pattern HEGEL_HC_LARGE_INITIAL_TEST_CASE,
 
-    -- * Span label pattern synonyms
-    -- $labels
-    pattern HEGEL_LABEL_LIST,
-    pattern HEGEL_LABEL_LIST_ELEMENT,
-    pattern HEGEL_LABEL_SET,
-    pattern HEGEL_LABEL_SET_ELEMENT,
-    pattern HEGEL_LABEL_MAP,
-    pattern HEGEL_LABEL_MAP_ENTRY,
-    pattern HEGEL_LABEL_TUPLE,
-    pattern HEGEL_LABEL_ONE_OF,
-    pattern HEGEL_LABEL_OPTIONAL,
-    pattern HEGEL_LABEL_FIXED_DICT,
-    pattern HEGEL_LABEL_FLAT_MAP,
-    pattern HEGEL_LABEL_FILTER,
-    pattern HEGEL_LABEL_MAPPED,
-    pattern HEGEL_LABEL_SAMPLED_FROM,
-    pattern HEGEL_LABEL_ENUM_VARIANT,
-    pattern HEGEL_LABEL_FEATURE_FLAG,
-    pattern HEGEL_LABEL_STATEFUL_RULE,
-    pattern HEGEL_LABEL_RECURSIVE,
-
-    -- * Mode pattern synonyms
-    -- $modes
-    pattern HEGEL_MODE_TEST_RUN,
-    pattern HEGEL_MODE_SINGLE_TEST_CASE,
-
     -- * Backend pattern synonyms
     -- $backend
-    pattern HEGEL_BACKEND_AUTO,
     pattern HEGEL_BACKEND_DEFAULT,
     pattern HEGEL_BACKEND_URANDOM,
 
     -- * Verbosity pattern synonyms
     -- $verbosity
-    pattern HEGEL_VERBOSITY_QUIET,
     pattern HEGEL_VERBOSITY_NORMAL,
+    pattern HEGEL_VERBOSITY_QUIET,
     pattern HEGEL_VERBOSITY_VERBOSE,
     pattern HEGEL_VERBOSITY_DEBUG,
 
@@ -138,7 +111,6 @@ module Hegel.Internal.Foreign.Raw
     pattern HEGEL_RUN_STATUS_PASSED,
     pattern HEGEL_RUN_STATUS_FAILED,
     pattern HEGEL_RUN_STATUS_ERROR,
-    pattern HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC,
 
     -- * Context lifecycle
     -- $context
@@ -150,10 +122,8 @@ module Hegel.Internal.Foreign.Raw
     -- $settings
     hegel_settings_new,
     hegel_settings_free,
-    hegel_settings_set_mode,
     hegel_settings_set_backend,
     hegel_settings_set_test_cases,
-    hegel_settings_set_stateful_step_count,
     hegel_settings_set_verbosity,
     hegel_settings_set_seed,
     hegel_settings_set_derandomize,
@@ -176,6 +146,8 @@ module Hegel.Internal.Foreign.Raw
     -- $pertestcase
     hegel_start_span,
     hegel_stop_span,
+    hegel_label_from_name,
+    hegel_label_combine,
     hegel_new_collection,
     hegel_collection_more,
     hegel_collection_reject,
@@ -188,6 +160,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_state_machine_next_group,
     hegel_state_machine_next_rule,
     hegel_state_machine_rule_rejected,
+    hegel_state_machine_should_check_invariant,
     hegel_state_machine_free,
     hegel_new_recursion,
     hegel_recursion_branch,
@@ -198,7 +171,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_target,
     hegel_mark_complete,
     hegel_test_case_clone,
-    hegel_test_case_is_nondeterministic,
+    hegel_test_case_should_capture,
 
     -- * Typed draws
     -- $typeddraws
@@ -390,12 +363,12 @@ instance Storable HegelDate where
     (#poke hegel_date_t, day) p v.day
 
 -- | Mirrors @hegel_time_t@: a time of day, with @hour@ in @[0, 23]@,
--- @minute@\/@second@ in @[0, 59]@, and @microsecond@ in @[0, 999999]@.
+-- @minute@\/@second@ in @[0, 59]@, and @nanosecond@ in @[0, 999999999]@.
 data HegelTime = HegelTime
   { hour :: !Word8,
     minute :: !Word8,
     second :: !Word8,
-    microsecond :: !Word32
+    nanosecond :: !Word32
   }
 
 instance Storable HegelTime where
@@ -406,12 +379,12 @@ instance Storable HegelTime where
       <$> (#peek hegel_time_t, hour) p
       <*> (#peek hegel_time_t, minute) p
       <*> (#peek hegel_time_t, second) p
-      <*> (#peek hegel_time_t, microsecond) p
+      <*> (#peek hegel_time_t, nanosecond) p
   poke p v = do
     (#poke hegel_time_t, hour) p v.hour
     (#poke hegel_time_t, minute) p v.minute
     (#poke hegel_time_t, second) p v.second
-    (#poke hegel_time_t, microsecond) p v.microsecond
+    (#poke hegel_time_t, nanosecond) p v.nanosecond
 
 -- | Mirrors @hegel_datetime_t@: a naive date and time of day, with no
 -- timezone.
@@ -548,101 +521,10 @@ pattern HEGEL_HC_TEST_CASES_TOO_LARGE = (#const HEGEL_HC_TEST_CASES_TOO_LARGE)
 pattern HEGEL_HC_LARGE_INITIAL_TEST_CASE :: Word32
 pattern HEGEL_HC_LARGE_INITIAL_TEST_CASE = (#const HEGEL_HC_LARGE_INITIAL_TEST_CASE)
 
--- $labels
---
--- @Word64@ identifiers passed to 'hegel_start_span', which tag a span with the
--- structure it represents (e.g. list, set, map, tuple, filter).
---
--- The engine uses these labels to shrink generated values intelligently.
---
--- Only the values mirrored by 'Hegel.Internal.DataSource.Label' have a
--- synonym here: the client-side spans this library itself opens.
---
--- Labels 17 through 30 are spans the engine emits internally around its own
--- typed-draw primitives, and labels 32 through 34 are spans the engine emits
--- internally around pool and concurrency primitives, so nothing here
--- constructs or matches any of them. Label 35, 'HEGEL_LABEL_RECURSIVE', is
--- the one exception in that upper range: 'Hegel.Gen.Recursive' opens it
--- itself, the same way it opens every other span below.
-
-pattern HEGEL_LABEL_LIST :: Word64
-pattern HEGEL_LABEL_LIST = (#const HEGEL_LABEL_LIST)
-
-pattern HEGEL_LABEL_LIST_ELEMENT :: Word64
-pattern HEGEL_LABEL_LIST_ELEMENT = (#const HEGEL_LABEL_LIST_ELEMENT)
-
-pattern HEGEL_LABEL_SET :: Word64
-pattern HEGEL_LABEL_SET = (#const HEGEL_LABEL_SET)
-
-pattern HEGEL_LABEL_SET_ELEMENT :: Word64
-pattern HEGEL_LABEL_SET_ELEMENT = (#const HEGEL_LABEL_SET_ELEMENT)
-
-pattern HEGEL_LABEL_MAP :: Word64
-pattern HEGEL_LABEL_MAP = (#const HEGEL_LABEL_MAP)
-
-pattern HEGEL_LABEL_MAP_ENTRY :: Word64
-pattern HEGEL_LABEL_MAP_ENTRY = (#const HEGEL_LABEL_MAP_ENTRY)
-
-pattern HEGEL_LABEL_TUPLE :: Word64
-pattern HEGEL_LABEL_TUPLE = (#const HEGEL_LABEL_TUPLE)
-
-pattern HEGEL_LABEL_ONE_OF :: Word64
-pattern HEGEL_LABEL_ONE_OF = (#const HEGEL_LABEL_ONE_OF)
-
-pattern HEGEL_LABEL_OPTIONAL :: Word64
-pattern HEGEL_LABEL_OPTIONAL = (#const HEGEL_LABEL_OPTIONAL)
-
-pattern HEGEL_LABEL_FIXED_DICT :: Word64
-pattern HEGEL_LABEL_FIXED_DICT = (#const HEGEL_LABEL_FIXED_DICT)
-
-pattern HEGEL_LABEL_FLAT_MAP :: Word64
-pattern HEGEL_LABEL_FLAT_MAP = (#const HEGEL_LABEL_FLAT_MAP)
-
-pattern HEGEL_LABEL_FILTER :: Word64
-pattern HEGEL_LABEL_FILTER = (#const HEGEL_LABEL_FILTER)
-
-pattern HEGEL_LABEL_MAPPED :: Word64
-pattern HEGEL_LABEL_MAPPED = (#const HEGEL_LABEL_MAPPED)
-
-pattern HEGEL_LABEL_SAMPLED_FROM :: Word64
-pattern HEGEL_LABEL_SAMPLED_FROM = (#const HEGEL_LABEL_SAMPLED_FROM)
-
-pattern HEGEL_LABEL_ENUM_VARIANT :: Word64
-pattern HEGEL_LABEL_ENUM_VARIANT = (#const HEGEL_LABEL_ENUM_VARIANT)
-
-pattern HEGEL_LABEL_FEATURE_FLAG :: Word64
-pattern HEGEL_LABEL_FEATURE_FLAG = (#const HEGEL_LABEL_FEATURE_FLAG)
-
--- | Outer span around one stateful-testing rule invocation, grouping a
--- round's draws so the shrinker can delete a whole step at once.
-pattern HEGEL_LABEL_STATEFUL_RULE :: Word64
-pattern HEGEL_LABEL_STATEFUL_RULE = (#const HEGEL_LABEL_STATEFUL_RULE)
-
--- | Span around one sub-value of a recursively defined value, grouping its
--- leaf-or-branch decision and draws so the shrinker can replace it with one
--- of its own subtrees.
-pattern HEGEL_LABEL_RECURSIVE :: Word64
-pattern HEGEL_LABEL_RECURSIVE = (#const HEGEL_LABEL_RECURSIVE)
-
--- $modes
---
--- @uint32_t@ values passed to 'hegel_settings_set_mode', which select whether a
--- run executes the full test loop ('HEGEL_MODE_TEST_RUN') or replays a single
--- test case ('HEGEL_MODE_SINGLE_TEST_CASE').
-
-pattern HEGEL_MODE_TEST_RUN :: Word32
-pattern HEGEL_MODE_TEST_RUN = (#const HEGEL_MODE_TEST_RUN)
-
-pattern HEGEL_MODE_SINGLE_TEST_CASE :: Word32
-pattern HEGEL_MODE_SINGLE_TEST_CASE = (#const HEGEL_MODE_SINGLE_TEST_CASE)
-
 -- $backend
 --
 -- @uint32_t@ values passed to 'hegel_settings_set_backend', which select the
 -- engine's source of randomness.
-
-pattern HEGEL_BACKEND_AUTO :: Word32
-pattern HEGEL_BACKEND_AUTO = (#const HEGEL_BACKEND_AUTO)
 
 pattern HEGEL_BACKEND_DEFAULT :: Word32
 pattern HEGEL_BACKEND_DEFAULT = (#const HEGEL_BACKEND_DEFAULT)
@@ -655,11 +537,11 @@ pattern HEGEL_BACKEND_URANDOM = (#const HEGEL_BACKEND_URANDOM)
 -- @uint32_t@ levels passed to 'hegel_settings_set_verbosity', which control how
 -- much diagnostic output the engine emits.
 
-pattern HEGEL_VERBOSITY_QUIET :: Word32
-pattern HEGEL_VERBOSITY_QUIET = (#const HEGEL_VERBOSITY_QUIET)
-
 pattern HEGEL_VERBOSITY_NORMAL :: Word32
 pattern HEGEL_VERBOSITY_NORMAL = (#const HEGEL_VERBOSITY_NORMAL)
+
+pattern HEGEL_VERBOSITY_QUIET :: Word32
+pattern HEGEL_VERBOSITY_QUIET = (#const HEGEL_VERBOSITY_QUIET)
 
 pattern HEGEL_VERBOSITY_VERBOSE :: Word32
 pattern HEGEL_VERBOSITY_VERBOSE = (#const HEGEL_VERBOSITY_VERBOSE)
@@ -697,9 +579,6 @@ pattern HEGEL_STATUS_INTERESTING = (#const HEGEL_STATUS_INTERESTING)
 -- * passed (the property held)
 -- * failed (the property has counterexamples)
 -- * error (the run itself failed and produced no verdict)
--- * failed, nondeterministically (the property failed on a run a concurrent
---   state machine declared nondeterministic, so the failure carries no
---   reproduce blob)
 
 pattern HEGEL_RUN_STATUS_PASSED :: CInt
 pattern HEGEL_RUN_STATUS_PASSED = (#const HEGEL_RUN_STATUS_PASSED)
@@ -709,9 +588,6 @@ pattern HEGEL_RUN_STATUS_FAILED = (#const HEGEL_RUN_STATUS_FAILED)
 
 pattern HEGEL_RUN_STATUS_ERROR :: CInt
 pattern HEGEL_RUN_STATUS_ERROR = (#const HEGEL_RUN_STATUS_ERROR)
-
-pattern HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC :: CInt
-pattern HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC = (#const HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC)
 
 -- $context
 --
@@ -753,10 +629,6 @@ foreign import ccall unsafe "hegel_settings_new"
 foreign import ccall unsafe "hegel_settings_free"
   hegel_settings_free :: Ptr HegelContext -> Ptr HegelSettings -> IO CInt
 
--- | Set the run mode (full test loop or single test case).
-foreign import ccall unsafe "hegel_settings_set_mode"
-  hegel_settings_set_mode :: Ptr HegelContext -> Ptr HegelSettings -> Word32 -> IO CInt
-
 -- | Select the engine's randomness backend (one of the @HEGEL_BACKEND_*@
 -- values).
 foreign import ccall unsafe "hegel_settings_set_backend"
@@ -765,10 +637,6 @@ foreign import ccall unsafe "hegel_settings_set_backend"
 -- | Set the maximum number of valid test cases to run (default: 100).
 foreign import ccall unsafe "hegel_settings_set_test_cases"
   hegel_settings_set_test_cases :: Ptr HegelContext -> Ptr HegelSettings -> Word64 -> IO CInt
-
--- | Set the target number of steps a stateful test case runs (default: 50).
-foreign import ccall unsafe "hegel_settings_set_stateful_step_count"
-  hegel_settings_set_stateful_step_count :: Ptr HegelContext -> Ptr HegelSettings -> Int64 -> IO CInt
 
 -- | Set engine output verbosity.
 foreign import ccall unsafe "hegel_settings_set_verbosity"
@@ -917,8 +785,9 @@ foreign import ccall safe "hegel_run_free"
 -- than every other draw here, which are each a single RNG-consuming
 -- operation.
 
--- | Open a labeled span, where the given @label@ is one of the @HEGEL_LABEL_*@
--- constants.
+-- | Open a labeled span. A @label@ identifies the generator that opened the
+-- span, so the same generator must always pass the same one; derive it with
+-- 'hegel_label_from_name' and 'hegel_label_combine'.
 foreign import ccall unsafe "hegel_start_span"
   hegel_start_span :: Ptr HegelContext -> Ptr HegelTestCase -> Word64 -> IO CInt
 
@@ -927,6 +796,22 @@ foreign import ccall unsafe "hegel_start_span"
 -- Pass @1@ for @discard@ to mark it rejected (e.g. a filter predicate failed).
 foreign import ccall unsafe "hegel_stop_span"
   hegel_stop_span :: Ptr HegelContext -> Ptr HegelTestCase -> CBool -> IO CInt
+
+-- | Write the span label for a generator identified by @name@ into
+-- @*out_label@: the 64-bit FNV-1a hash of the name's bytes.
+foreign import ccall unsafe "hegel_label_from_name"
+  hegel_label_from_name :: Ptr HegelContext -> CString -> Ptr Word64 -> IO CInt
+
+-- | Write the order-sensitive combination of @len@ labels into
+-- @*out_label@, for a generator built from component generators.
+foreign import ccall unsafe "hegel_label_combine"
+  hegel_label_combine
+    :: Ptr HegelContext
+    -> Ptr Word64 -- ^ @labels@ (may be @NULL@ when @len@ is 0)
+    -> CSize      -- ^ @len@
+    -> Ptr Word64 -- ^ out: combined label
+    -> IO CInt
+
 
 -- | Start an engine-managed variable-length collection.
 --
@@ -1013,32 +898,41 @@ foreign import ccall unsafe "hegel_pool_free"
 --
 -- @rule_names@ and @invariant_names@ are arrays of NUL-terminated UTF-8
 -- strings; @rule_groups@ is a parallel array of concurrency-group ids, one
--- per rule. The engine draws the machine's concurrency level in
--- @[min_concurrency, max_concurrency]@ and writes it into
--- @*out_concurrency@; pass @1, 1@ for a sequential machine, which fixes the
--- level without consuming entropy.
+-- per rule, and @rule_weights@ a parallel array of finite, strictly positive
+-- selection weights, or @NULL@ for equal weights. @invariant_always_check@
+-- is an array parallel to @invariant_names@, or @NULL@ for all-false: a
+-- flagged invariant makes 'hegel_state_machine_should_check_invariant'
+-- answer true without consuming entropy. The engine draws the machine's
+-- concurrency level in @[min_concurrency, max_concurrency]@ and writes it
+-- into @*out_concurrency@; pass @1, 1@ for a sequential machine, which fixes
+-- the level without consuming entropy. @step_count@ is the most counted
+-- rounds a test case runs.
 --
 -- On success writes a caller-owned handle into @*out_state_machine@;
 -- release it with 'hegel_state_machine_free'.
 --
 -- Returns 'HEGEL_E_INVALID_ARG' when @num_rules@ is zero, an entry of
--- @rule_groups@ is 'HEGEL_STATE_MACHINE_DONE', the concurrency bounds are
--- invalid, or a name is not valid UTF-8. Returns 'HEGEL_E_ASSUME' for the
--- run's first @max_concurrency > 1@ creation; see @hegel.h@.
+-- @rule_groups@ is 'HEGEL_STATE_MACHINE_DONE', a weight is not finite and
+-- positive, the concurrency bounds are invalid, @step_count < 1@, or a name
+-- is not valid UTF-8.
 foreign import ccall unsafe "hegel_new_state_machine"
   hegel_new_state_machine
     :: Ptr HegelContext
     -> Ptr HegelTestCase
     -> Ptr CString  -- ^ @rule_names@
     -> Ptr Int64    -- ^ @rule_groups@ (parallel to @rule_names@)
+    -> Ptr CDouble  -- ^ @rule_weights@ (parallel to @rule_names@, or @NULL@)
     -> CSize        -- ^ @num_rules@
     -> Ptr CString  -- ^ @invariant_names@
+    -> Ptr CBool    -- ^ @invariant_always_check@ (parallel to @invariant_names@, or @NULL@)
     -> CSize        -- ^ @num_invariants@
     -> Int64        -- ^ @min_concurrency@
     -> Int64        -- ^ @max_concurrency@
+    -> Int64        -- ^ @step_count@
     -> Ptr (Ptr HegelStateMachine) -- ^ out: caller-owned handle
     -> Ptr Int64    -- ^ out: drawn @concurrency@ level
     -> IO CInt
+
 
 -- | Start the machine's next round, writing the current round's concurrency
 -- group id into @*out_group_id@, or 'HEGEL_STATE_MACHINE_DONE' once the
@@ -1091,6 +985,25 @@ foreign import ccall unsafe "hegel_state_machine_rule_rejected"
     -> Ptr HegelTestCase
     -> Ptr HegelStateMachine
     -> Int64 -- ^ @worker_index@
+    -> IO CInt
+
+-- | Decide whether to run invariant @invariant_index@ at the current join
+-- point, writing the decision into @*out_should_check@.
+--
+-- An invariant flagged in @invariant_always_check@ answers true without
+-- consuming entropy; any other is a recorded draw. Call once per invariant
+-- per join point, unconditionally, from the handle that drives
+-- 'hegel_state_machine_next_group'. The machine's initial and final states
+-- are the caller's to check, without calling this.
+--
+-- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted.
+foreign import ccall unsafe "hegel_state_machine_should_check_invariant"
+  hegel_state_machine_should_check_invariant
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Ptr HegelStateMachine
+    -> Int64     -- ^ @invariant_index@
+    -> Ptr CBool -- ^ out: whether to check it
     -> IO CInt
 
 -- | Release a state-machine handle from 'hegel_new_state_machine'. Safe to
@@ -1391,20 +1304,22 @@ foreign import ccall unsafe "hegel_string_generator_text"
     -> Ptr (Ptr HegelStringGenerator) -- ^ out: caller-owned handle
     -> IO CInt
 
--- | Build a __regex__ string generator: strings matching @pattern@
--- (Python-@re@ syntax). When @fullmatch@ is true the whole string matches the
--- pattern; otherwise the match may be padded on either side. @alphabet@
+-- | Build a __regex__ string generator: strings matching the @pattern_len@
+-- UTF-8 bytes at @pattern@, in Python-@re@ syntax, which may contain NUL.
+-- When @fullmatch@ is true the whole string matches the pattern; otherwise
+-- the match may be padded on either side. @alphabet@
 -- (optional, @NULL@ for none) must be a __text__ generator constraining the
 -- padding and wildcard characters.
 --
 -- On success writes a caller-owned handle into @*out_generator@; release with
 -- 'hegel_string_generator_free'. Returns 'HEGEL_E_INVALID_ARG' for a
--- @NULL@\/non-UTF-8\/invalid @pattern@, or an @alphabet@ that is not a text
+-- non-UTF-8 or unparseable @pattern@, or an @alphabet@ that is not a text
 -- generator.
 foreign import ccall unsafe "hegel_string_generator_regex"
   hegel_string_generator_regex
     :: Ptr HegelContext
-    -> CString                        -- ^ @pattern@
+    -> Ptr Word8                      -- ^ @pattern@ (UTF-8 bytes; @NULL@ with length 0 is the empty pattern)
+    -> CSize                          -- ^ @pattern_len@
     -> CBool                          -- ^ @fullmatch@
     -> Ptr HegelStringGenerator       -- ^ @alphabet@ (borrowed, nullable)
     -> Ptr (Ptr HegelStringGenerator) -- ^ out: caller-owned handle
@@ -1511,11 +1426,12 @@ foreign import ccall unsafe "hegel_test_case_clone"
     -> Ptr (Ptr HegelTestCase) -- ^ out: caller-owned clone
     -> IO CInt
 
--- | Write whether this test case belongs to a run already known to be
--- nondeterministic into @*out_is_nondeterministic@; see
--- 'HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC'.
-foreign import ccall unsafe "hegel_test_case_is_nondeterministic"
-  hegel_test_case_is_nondeterministic :: Ptr HegelContext -> Ptr HegelTestCase -> Ptr CBool -> IO CInt
+-- | Write whether the engine stamped this test case for capture into
+-- @*out_should_capture@: a stamped case's output and, if it fails, its
+-- diagnostic are material for that failure origin's report. Read it once at
+-- case start.
+foreign import ccall unsafe "hegel_test_case_should_capture"
+  hegel_test_case_should_capture :: Ptr HegelContext -> Ptr HegelTestCase -> Ptr CBool -> IO CInt
 
 -- $reproduction
 --

@@ -34,7 +34,6 @@ module Hegel.Tasty
     testPropertyWith,
     testPropertyModify,
     HegelTestCases (..),
-    HegelStatefulSteps (..),
     HegelSeed (..),
     HegelDatabase (..),
     HegelReplay (..),
@@ -67,7 +66,6 @@ instance IsTest HegelTest where
   testOptions =
     pure
       [ Option (Proxy @HegelTestCases),
-        Option (Proxy @HegelStatefulSteps),
         Option (Proxy @HegelSeed),
         Option (Proxy @HegelDatabase),
         Option (Proxy @HegelReplay),
@@ -142,16 +140,6 @@ instance IsOption HegelTestCases where
   optionName = pure "hegel-test-cases"
   optionHelp = pure "Nonnegative case budget; also accepts TASTY_HEGEL_TEST_CASES"
 
--- | Optional native Tasty override for @--hegel-stateful-steps@.
-newtype HegelStatefulSteps = HegelStatefulSteps (Maybe String)
-  deriving stock (Eq, Show)
-
-instance IsOption HegelStatefulSteps where
-  defaultValue = HegelStatefulSteps Nothing
-  parseValue = Just . HegelStatefulSteps . Just
-  optionName = pure "hegel-stateful-steps"
-  optionHelp = pure "Positive per-case stateful step limit; also accepts TASTY_HEGEL_STATEFUL_STEPS"
-
 -- | Optional native Tasty override for @--hegel-seed@.
 newtype HegelSeed = HegelSeed (Maybe String)
   deriving stock (Eq, Show)
@@ -196,9 +184,8 @@ optionOverrides :: OptionSet -> Either String Config.Overrides
 optionOverrides opts = Config.parseOverrides (\name -> lookup name values >>= id)
   where
     HegelTestCases testCases = lookupOption opts
-    HegelStatefulSteps statefulSteps = lookupOption opts
     HegelSeed seed = lookupOption opts
     HegelDatabase database = lookupOption opts
     HegelReplay replay = lookupOption opts
     HegelReplayKey replayKey = lookupOption opts
-    values = [("test-cases", testCases), ("stateful-steps", statefulSteps), ("seed", seed), ("database", database), ("replay", replay), ("replay-key", replayKey)]
+    values = [("test-cases", testCases), ("seed", seed), ("database", database), ("replay", replay), ("replay-key", replayKey)]

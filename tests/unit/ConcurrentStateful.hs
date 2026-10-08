@@ -1,6 +1,7 @@
 -- | Unit tests for 'Hegel.Stateful.Concurrent'.
 module ConcurrentStateful (spec) where
 
+import Control.Applicative ((<|>))
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket_, fromException)
 import Control.Monad (when)
@@ -18,7 +19,7 @@ import Hegel.Gen qualified as Gen
 import Hegel.Internal.Control (MalformedTest (..))
 import Hegel.Property (assert, assume, forAll, resource, (===))
 import Hegel.Property.Fork qualified as Fork
-import Hegel.Report (Abort (..), FailureEvidence (..), FailureOutcome (..), Note (..), NoteKind (Annotation, StepHeader, StepOrigin), Report (..), Reproduction (..), Result (..), Stats (..), renderReport, renderReportRich)
+import Hegel.Report (Abort (..), FailureEvidence (..), Note (..), NoteKind (Annotation, StepHeader, StepOrigin), Report (..), Reproduction (..), Result (..), Stats (..), renderReport, renderReportRich)
 import Hegel.Report.Trace (Step (..), Trace (..))
 import Hegel.Report.Trace qualified as Trace
 import Hegel.Runner (check)
@@ -26,7 +27,7 @@ import Hegel.Settings (Settings (..))
 import Hegel.Stateful.Concurrent qualified as Concurrent
 import System.Timeout (timeout)
 import Test.Hspec
-import TestSupport (allFailureOutcomes, expectObserved, expectReconstructed, singleObservedEvidence, singleReconstructedEvidence)
+import TestSupport (expectReconstructed, singleObservedEvidence, singleReconstructedEvidence)
 import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
@@ -80,14 +81,21 @@ validationSpec :: Spec
 validationSpec = describe "run (validation)" do
   it "a machine with no rules is a malformed test" do
     let machine :: Concurrent.Machine Counter IO
-        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [], invariants = []}
+        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [], invariants = [], stepCount = Concurrent.defaultStepCount}
     report <- check def (Concurrent.run (Concurrent.fixed 1) machine)
     report.result `shouldSatisfy` isMalformedTestAbort "at least one rule"
+
+  it "a stepCount below 1 is a malformed test" do
+    let noop :: Concurrent.Rule Counter IO
+        noop = Concurrent.rule "noop" \_ -> pure ()
+        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [noop], invariants = [], stepCount = 0}
+    report <- check def (Concurrent.run (Concurrent.fixed 1) machine)
+    report.result `shouldSatisfy` isMalformedTestAbort "stepCount must be at least 1"
 
   it "invalid concurrency bounds are a malformed test" do
     let noop :: Concurrent.Rule Counter IO
         noop = Concurrent.rule "noop" \_ -> pure ()
-        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [noop], invariants = []}
+        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [noop], invariants = [], stepCount = Concurrent.defaultStepCount}
     for_ [(0, 1), (2, 1)] \(lo, hi) -> do
       report <- check def (Concurrent.run (Concurrent.between lo hi) machine)
       report.result `shouldSatisfy` isMalformedTestAbort "1 <= min <= max"
@@ -98,7 +106,7 @@ validationSpec = describe "run (validation)" do
           Concurrent.rule "bad" \_ -> do
             _ <- resource (pure ()) (const (pure ()))
             pure ()
-        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [badRule], invariants = []}
+        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [badRule], invariants = [], stepCount = Concurrent.defaultStepCount}
     report <- check def (Concurrent.run (Concurrent.fixed 1) machine)
     report.result `shouldSatisfy` isMalformedTestAbort "resource:"
 
@@ -107,28 +115,14 @@ validationSpec = describe "run (validation)" do
 
 behaviorSpec :: Spec
 behaviorSpec = describe "run (behavior)" do
-  it "discards the run's first max>1 machine creation as invalid rather than failing" do
+  it "runs a max>1 machine without discarding any case" do
     let noop :: Concurrent.Rule Counter IO
         noop = Concurrent.rule "noop" \_ -> pure ()
-        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [noop], invariants = []}
+        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [noop], invariants = [], stepCount = Concurrent.defaultStepCount}
     report <- check def {testCases = 10} (Concurrent.run (Concurrent.upTo 2) machine)
     report.result `shouldSatisfy` isOk
-    report.stats.invalid `shouldSatisfy` (>= 1)
+    report.stats.invalid `shouldBe` 0
     report.stats.valid `shouldSatisfy` (>= 1)
-
-  it "the first max>1 machine creation costs exactly one discarded case" do
-    -- 'testCases' targets valid examples, not raw attempts, so the engine
-    -- transparently retries past the mandatory first discard rather than
-    -- giving up: asking for exactly one valid case still costs one Invalid
-    -- case first, deterministically, since only the run's first creation
-    -- above max concurrency 1 is ever rejected.
-    let noop :: Concurrent.Rule Counter IO
-        noop = Concurrent.rule "noop" \_ -> pure ()
-        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [noop], invariants = []}
-    report <- check def {testCases = 1} (Concurrent.run (Concurrent.upTo 2) machine)
-    report.result `shouldSatisfy` isOk
-    report.stats.invalid `shouldBe` 1
-    report.stats.valid `shouldBe` 1
 
   it "fixed 1 keeps the run fully deterministic" do
     let failing :: Concurrent.Rule Counter IO
@@ -136,7 +130,7 @@ behaviorSpec = describe "run (behavior)" do
           Concurrent.rule "fail_on_42" \_ -> do
             n <- forAll intGen
             assert (n /= 42) "n is not 42"
-        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [failing], invariants = []}
+        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [failing], invariants = [], stepCount = Concurrent.defaultStepCount}
     report <- check def {testCases = 200} (Concurrent.run (Concurrent.fixed 1) machine)
     evidence <- expectReconstructed report.result
     evidence.message `shouldBe` "n is not 42"
@@ -154,9 +148,10 @@ behaviorSpec = describe "run (behavior)" do
           Concurrent.Machine
             { initial = liftIO (newIORef 0),
               rules = [bump],
+              stepCount = 10,
               invariants = [neverAboveThree]
             }
-    report <- check def {statefulStepCount = 10} (Concurrent.run (Concurrent.fixed 1) machine)
+    report <- check def (Concurrent.run (Concurrent.fixed 1) machine)
     evidence <- expectReconstructed report.result
     evidence.message `shouldBe` "counter stays small"
 
@@ -172,9 +167,10 @@ behaviorSpec = describe "run (behavior)" do
           Concurrent.Machine
             { initial = liftIO (newIORef 0),
               rules = [bump],
+              stepCount = 10,
               invariants = [neverAboveThree]
             }
-    report <- check def {statefulStepCount = 10} (Concurrent.run (Concurrent.fixed 1) machine)
+    report <- check def (Concurrent.run (Concurrent.fixed 1) machine)
     case singleReconstructedEvidence report.result of
       Just FailureEvidence {notes, events} ->
         let trace = Trace.build notes events
@@ -193,7 +189,7 @@ behaviorSpec = describe "run (behavior)" do
             n <- forAll intGen
             assume (n `mod` 5 /= 0)
             liftIO (modifyIORef' ref (+ 1))
-        machine = Concurrent.Machine {initial = liftIO (newIORef 0), rules = [sometimesRejects], invariants = []}
+        machine = Concurrent.Machine {initial = liftIO (newIORef 0), rules = [sometimesRejects], invariants = [], stepCount = Concurrent.defaultStepCount}
     report <- check def {testCases = 20} (Concurrent.run (Concurrent.fixed 1) machine)
     report.result `shouldSatisfy` isOk
 
@@ -207,8 +203,8 @@ behaviorSpec = describe "run (behavior)" do
             n <- liftIO (atomicModifyIORef' ref \a -> (a + 1, a + 1))
             assume (n /= 1)
             assert (n < 2) "fails on the second attempt"
-        machine = Concurrent.Machine {initial = liftIO (newIORef 0), rules = [flaky], invariants = []}
-    report <- check def {testCases = 1, statefulStepCount = 5} (Concurrent.run (Concurrent.fixed 1) machine)
+        machine = Concurrent.Machine {initial = liftIO (newIORef 0), rules = [flaky], invariants = [], stepCount = 5}
+    report <- check def {testCases = 1} (Concurrent.run (Concurrent.fixed 1) machine)
     case singleReconstructedEvidence report.result of
       Just FailureEvidence {notes} -> do
         let rejectionNotes =
@@ -232,12 +228,12 @@ behaviorSpec = describe "run (behavior)" do
                   (atomicModifyIORef' active \a -> (a - 1, ()))
                   (threadDelay maxBound)
             assume False
-        machine = Concurrent.Machine {initial = pure (), rules = [leaky], invariants = []}
+        machine = Concurrent.Machine {initial = pure (), rules = [leaky], invariants = [], stepCount = 3}
     -- A tight step budget matters here: every rejected dispatch spawns and
     -- abandons another fork, and the default budget (50) would let a single
     -- case churn through far more fork spawn\/cancel cycles than this test
     -- needs to exercise the fix.
-    report <- check def {testCases = 10, statefulStepCount = 3} (Concurrent.run (Concurrent.fixed 3) machine)
+    report <- check def {testCases = 10} (Concurrent.run (Concurrent.fixed 3) machine)
     report.result `shouldSatisfy` isOk
     let waitForSettled = do
           a <- readIORef active
@@ -269,9 +265,10 @@ behaviorSpec = describe "run (behavior)" do
           Concurrent.Machine
             { initial = pure (),
               rules = [mkRule "a1" "g1", mkRule "a2" "g1", mkRule "b1" "g2"],
+              stepCount = 15,
               invariants = [oneGroupPerRound]
             }
-    report <- check def {testCases = 5, statefulStepCount = 15} (Concurrent.run (Concurrent.upTo 4) machine)
+    report <- check def {testCases = 5} (Concurrent.run (Concurrent.upTo 4) machine)
     report.result `shouldSatisfy` isOk
     v <- readIORef violated
     v `shouldBe` False
@@ -294,17 +291,20 @@ behaviorSpec = describe "run (behavior)" do
           Concurrent.Machine
             { initial = liftIO (RaceModel <$> newIORef 0 <*> newIORef 0),
               rules = [raceRule],
+              stepCount = 30,
               invariants = [noLostUpdates]
             }
-    report <- check def {testCases = 20, statefulStepCount = 30} (Concurrent.run (Concurrent.fixed 4) machine)
-    evidence <- expectObserved report.result
+    report <- check def {testCases = 20} (Concurrent.run (Concurrent.fixed 4) machine)
+    -- A race can fail deterministically, and be reconstructed, or flakily,
+    -- and be observed without a reproducer.
+    evidence <- maybe (expectationFailure (show report.result) >> fail "no evidence") pure (singleEvidence report.result)
     evidence.diff `shouldSatisfy` (/= Nothing)
 
-  it "a failure reports its own assertion message and no reproducer" $
+  it "a deterministic failure is stored and reconstructed with its own assertion message" $
     withSystemTempDirectory "zizek-concurrent-stateful" \dbDir -> do
       let failing :: Concurrent.Rule Counter IO
           failing = Concurrent.rule "boom" \_ -> assert False "always fails"
-          machine = Concurrent.Machine {initial = pure (Counter 0), rules = [failing], invariants = []}
+          machine = Concurrent.Machine {initial = pure (Counter 0), rules = [failing], invariants = [], stepCount = Concurrent.defaultStepCount}
           settings =
             def
               { testCases = 5,
@@ -312,24 +312,20 @@ behaviorSpec = describe "run (behavior)" do
                 databaseKey = Just "concurrent-stateful-origin-spec"
               }
       report <- check settings (Concurrent.run (Concurrent.upTo 2) machine)
-      report.reproduction `shouldBe` Unreproducible
-      map (.failureReplayToken) (allFailureOutcomes report.result) `shouldBe` [Nothing]
-      case singleObservedEvidence report.result of
-        Just FailureEvidence {message} -> message `shouldBe` "always fails"
-        _ -> expectationFailure "expected an observed failure"
+      report.reproduction `shouldBe` Stored "concurrent-stateful-origin-spec"
+      evidence <- expectReconstructed report.result
+      evidence.message `shouldBe` "always fails"
       let rendered = renderReport report
-      ("no stored example to replay" `T.isInfixOf` rendered) `shouldBe` True
-      ("stored under" `T.isInfixOf` rendered) `shouldBe` False
+      ("stored under" `T.isInfixOf` rendered) `shouldBe` True
       richRendered <- renderReportRich report
-      ("no stored example to replay" `T.isInfixOf` richRendered) `shouldBe` True
-      ("stored under" `T.isInfixOf` richRendered) `shouldBe` False
+      ("stored under" `T.isInfixOf` richRendered) `shouldBe` True
 
-  it "captures the failing rule's own step, live, in a nondeterministic report" do
+  it "reports the failing rule's own step with its round and worker" do
     let failing :: Concurrent.Rule Counter IO
         failing = Concurrent.rule "boom" \_ -> assert False "always fails"
-        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [failing], invariants = []}
+        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [failing], invariants = [], stepCount = Concurrent.defaultStepCount}
     report <- check def {testCases = 5} (Concurrent.run (Concurrent.fixed 2) machine)
-    case singleObservedEvidence report.result of
+    case singleReconstructedEvidence report.result of
       Just FailureEvidence {notes} -> do
         let isBoomStep :: Note -> Bool
             isBoomStep n = case n.kind of
@@ -369,3 +365,8 @@ spec = do
   internGroupsSpec
   validationSpec
   behaviorSpec
+
+-- | The one failure's evidence, whether reconstructed from a reproducer or
+-- observed without one.
+singleEvidence :: Result -> Maybe FailureEvidence
+singleEvidence result = singleReconstructedEvidence result <|> singleObservedEvidence result

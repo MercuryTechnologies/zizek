@@ -20,8 +20,8 @@
 -- identity and persistence for a property that consumes an Hspec fixture.
 -- Direct @it "name" (\fixture -> property)@ uses unkeyed, nonpersisted defaults.
 --
--- Shared @HEGEL_TEST_CASES@, @HEGEL_STATEFUL_STEPS@, @HEGEL_SEED@, and
--- @HEGEL_DATABASE@ overrides are read during each example's execution.
+-- Shared @HEGEL_TEST_CASES@, @HEGEL_SEED@, and @HEGEL_DATABASE@ overrides are
+-- read during each example's execution.
 -- Database values are @off@, @default@, or @directory:PATH@.
 -- @HEGEL_REPLAY@ and @HEGEL_REPLAY_KEY@ must be supplied together and select
 -- one replay for the exact matching key, bypassing phases and database access.

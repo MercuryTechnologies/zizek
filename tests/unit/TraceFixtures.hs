@@ -207,6 +207,7 @@ eventfulMachine =
             Stateful.respond "consumed ok"
             pure m {consumed = True}
         ],
+      stepCount = Stateful.defaultStepCount,
       invariants =
         [ Stateful.Invariant "never_reuse_and_consume" \m ->
             assert (not (m.reused && m.consumed)) "reuse and consume never both happen (bug)"

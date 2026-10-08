@@ -296,6 +296,7 @@ counterMachine =
             d <- forAll smallInt
             pure (n + d)
         ],
+      stepCount = Stateful.defaultStepCount,
       invariants =
         [ Stateful.Invariant "non_negative" \n ->
             assert (0 <= n) "counter never goes negative"

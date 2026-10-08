@@ -81,5 +81,6 @@ machine bug =
             r === ""
             pure m
         ],
+      stepCount = Stateful.defaultStepCount,
       invariants = []
     }

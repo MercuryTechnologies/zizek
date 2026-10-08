@@ -22,7 +22,6 @@ import Text.Read (readMaybe)
 -- | Optional values supplied by one configuration source.
 data Overrides = Overrides
   { testCases :: Maybe Int,
-    statefulSteps :: Maybe Int,
     seed :: Maybe Word64,
     database :: Maybe Database,
     replay :: Maybe (Text, ReplayToken)
@@ -31,17 +30,16 @@ data Overrides = Overrides
 
 -- | Preserve every lower-priority setting.
 emptyOverrides :: Overrides
-emptyOverrides = Overrides Nothing Nothing Nothing Nothing Nothing
+emptyOverrides = Overrides Nothing Nothing Nothing Nothing
 
 -- | Names accepted by both runner integrations.
 settingNames :: [String]
-settingNames = ["test-cases", "stateful-steps", "seed", "database", "replay", "replay-key"]
+settingNames = ["test-cases", "seed", "database", "replay", "replay-key"]
 
 -- | Parse one source, requiring replay identity and token together.
 parseOverrides :: (String -> Maybe String) -> Either String Overrides
 parseOverrides get = do
   cases <- optional "test-cases" (settingInteger "test-cases" (\n -> Settings.defaultSettings {Settings.testCases = n}))
-  steps <- optional "stateful-steps" (settingInteger "stateful-steps" (\n -> Settings.defaultSettings {statefulStepCount = n}))
   seed <- optional "seed" (natural "seed" 0)
   database <- optional "database" parseDatabase
   replay <- case (get "replay", get "replay-key") of
@@ -51,7 +49,7 @@ parseOverrides get = do
         Left err -> Left ("hegel-replay: " <> show err)
         Right decoded -> Right (Just (T.pack key, decoded))
     _ -> Left "hegel-replay and hegel-replay-key: supply a token and nonempty exact identity together in one source"
-  pure (Overrides cases steps seed database replay)
+  pure (Overrides cases seed database replay)
   where
     optional :: String -> (String -> Either String a) -> Either String (Maybe a)
     optional name parser = traverse parser (get name)
@@ -104,7 +102,6 @@ overlay :: Overrides -> Overrides -> Overrides
 overlay low high =
   Overrides
     (high.testCases <|> low.testCases)
-    (high.statefulSteps <|> low.statefulSteps)
     (high.seed <|> low.seed)
     (high.database <|> low.database)
     (high.replay <|> low.replay)
@@ -114,10 +111,9 @@ resolve :: (HasCallStack) => Settings -> Overrides -> Either String Settings
 resolve settings overrides =
   let resolved =
         settings
-          { testCases = fromMaybe settings.testCases overrides.testCases,
-            statefulStepCount = fromMaybe settings.statefulStepCount overrides.statefulSteps,
-            seed = overrides.seed <|> settings.seed,
-            database = fromMaybe settings.database overrides.database
+          { Settings.testCases = fromMaybe settings.testCases overrides.testCases,
+            Settings.seed = overrides.seed <|> settings.seed,
+            Settings.database = fromMaybe settings.database overrides.database
           }
    in either (Left . displayException) Right (withFrozenCallStack (Settings.validate resolved)) >> case resolved.database of
         DatabaseDisabled -> Right resolved

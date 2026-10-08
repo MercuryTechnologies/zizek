@@ -6,8 +6,7 @@ where
 
 import Data.Word (Word32)
 import Hegel.Internal.Foreign.Raw
-  ( pattern HEGEL_BACKEND_AUTO,
-    pattern HEGEL_BACKEND_DEFAULT,
+  ( pattern HEGEL_BACKEND_DEFAULT,
     pattern HEGEL_BACKEND_URANDOM,
   )
 import Witch qualified
@@ -18,13 +17,11 @@ import Witch qualified
 -- (@seed@ \/ @derandomize@ in "Hegel.Settings") and, when left unset, is chosen
 -- fresh at the start of each run.
 data Backend
-  = -- | Choose automatically (the default): 'Urandom' when running inside
-    -- Antithesis, otherwise 'Default'.
-    Auto
-  | -- | Drive the whole run from a pseudo-random generator seeded once at the
+  = -- | Drive the whole run from a pseudo-random generator seeded once at the
     -- start, so every draw is a deterministic function of that one seed. A run
     -- therefore replays exactly given the same seed — which is what lets
-    -- shrinking, replay, and the failure database work.
+    -- shrinking, replay, and the failure database work. This is the
+    -- default.
     Default
   | -- | Read fresh entropy from @\/dev\/urandom@ on every draw, ignoring the
     -- seed entirely.
@@ -36,6 +33,5 @@ data Backend
 
 -- | The @hegel_backend_t@ wire value.
 instance Witch.From Backend Word32 where
-  from Auto = HEGEL_BACKEND_AUTO
   from Default = HEGEL_BACKEND_DEFAULT
   from Urandom = HEGEL_BACKEND_URANDOM

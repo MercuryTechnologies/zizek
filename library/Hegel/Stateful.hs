@@ -24,6 +24,7 @@
 --   { initial    = pure (Counter 0)
 --   , rules      = [increment]
 --   , invariants = [neverAboveTen]
+--   , stepCount  = Stateful.defaultStepCount
 --   }
 --
 -- test_counter :: IO ()
@@ -38,8 +39,8 @@
 --
 -- * Preconditions are expressed with 'assume'\/'discard' at the head of a
 --   rule's 'apply'; a rejected precondition skips the step without discarding
---   the entire sequence, and the skipped step does not count toward
---   'Hegel.Settings.statefulStepCount'.
+--   the entire sequence, and the skipped step does not count toward the
+--   machine's 'stepCount'.
 --
 -- * @StateT s (PropertyT m)@ rules adapt with
 --   @\\s -> execStateT myStateRule s :: s -> PropertyT m s@.
@@ -53,6 +54,7 @@ module Hegel.Stateful
     rule,
     Invariant (..),
     Machine (..),
+    defaultStepCount,
 
     -- * Execution
     run,
@@ -69,6 +71,7 @@ import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Foldable (for_)
 import Data.Text (Text)
+import Data.Text qualified as T
 import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Assertion (callSite)
 import Hegel.Internal.Control (malformedTest)
@@ -78,6 +81,7 @@ import Hegel.Internal.DataSource
     newStateMachine,
     startSpan,
     stateMachineNextGroup,
+    stateMachineShouldCheckInvariant,
     stopSpan,
   )
 import Hegel.Internal.StatefulRound (RoundSpan (..), RoundVerdict (..), Worker (..), lookupRule, runRound, stepText)
@@ -158,8 +162,15 @@ data Machine s m = Machine
   { -- | Construct the initial model state. May draw values.
     initial :: PropertyT m s,
     rules :: [Rule s m],
-    invariants :: [Invariant s m]
+    invariants :: [Invariant s m],
+    -- | The most steps a test case runs, at least 1. The engine shrinks a
+    -- failing case toward fewer.
+    stepCount :: !Int
   }
+
+-- | The step count most machines want: 50.
+defaultStepCount :: Int
+defaultStepCount = 50
 
 -- | Run a stateful test.
 --
@@ -170,22 +181,28 @@ data Machine s m = Machine
 -- Each round pulls rules from the engine until its own budget is exhausted,
 -- then invariants are checked once at the round's join point.
 --
--- The engine owns the step cap and bounds every case to at most
--- 'Hegel.Settings.statefulStepCount' steps.
+-- The engine owns the step cap and bounds every case to at most the
+-- machine's 'stepCount' steps.
 run :: forall s m. (HasCallStack, MonadUnliftIO m) => Machine s m -> PropertyT m ()
 run machine = withFrozenCallStack $ do
   when (null machine.rules) $
     throwIO $
       malformedTest "Hegel.Stateful.run" "a Machine must have at least one rule" [("rules", "0")]
+  when (machine.stepCount < 1) $
+    throwIO $
+      malformedTest "Hegel.Stateful.run" "a Machine's stepCount must be at least 1" [("stepCount", T.pack (show machine.stepCount))]
 
   env <- askEnv
   let tc = env.testCase
 
       -- Each invariant's draws (and any failure) report one level below the
-      -- step header, via 'nested'.
-      checkInvariants s =
-        for_ machine.invariants \invariant ->
-          nested (withFailureNoteIn env.journal (withScope InStep (invariant.check s)))
+      -- step header, via 'nested'. At a join point the engine decides which
+      -- invariants run; the initial state checks every one.
+      checkInvariants joinPoint s =
+        for_ (zip [0 ..] machine.invariants) \(i, invariant) -> do
+          shouldCheck <- maybe (pure True) (\sm -> liftIO (stateMachineShouldCheckInvariant tc sm i)) joinPoint
+          when shouldCheck $
+            nested (withFailureNoteIn env.journal (withScope InStep (invariant.check s)))
 
   -- Acquire the state-machine handle and register its release atomically
   -- under 'mask_', the same fix 'Hegel.Property.Internal.resource' applies,
@@ -196,13 +213,13 @@ run machine = withFrozenCallStack $ do
   sm <-
     withRunInIO \runInIO ->
       mask_ do
-        sm <- newStateMachine tc (map (.name) machine.rules) (map (.name) machine.invariants)
+        sm <- newStateMachine tc (fromIntegral machine.stepCount) (map (.name) machine.rules) (map (.name) machine.invariants)
         runInIO (registerFinalizer (freeStateMachine tc sm))
         pure sm
 
   s0 <- withFailureNoteIn env.journal (withScope CaseSetup machine.initial)
   stepNote "Initial invariant check."
-  checkInvariants s0
+  checkInvariants Nothing s0
 
   -- The current model, threaded by 'Hegel.Internal.StatefulRound.Worker's
   -- IO-shaped dispatch rather than by return value: the generic round driver
@@ -213,15 +230,13 @@ run machine = withFrozenCallStack $ do
   -- nothing observable: only this one worker ever touches it.
   stateRef <- liftIO (newIORef s0)
   -- Total rule dispatches so far this case, for 'StepHeader' numbering;
-  -- counts a rejected dispatch the same as a successful one, matching
-  -- 'Hegel.Settings.statefulStepCount'\'s own accounting.
+  -- counts a rejected dispatch the same as a successful one.
   attemptsRef <- liftIO (newIORef (0 :: Int))
   -- Whether any rule this round was rejected, so the round's span closes
   -- discarded and the shrinker can delete the whole round at once.
   rejectedRef <- liftIO (newIORef False)
 
-  -- The engine halts the loop once it has handed out 'Hegel.Settings.statefulStepCount'
-  -- steps, inclusive of steps with an 'assume'.
+  -- The engine halts the loop once the machine has run 'stepCount' steps.
   --
   -- On the root handle, it asks the engine whether another round should run,
   -- then lets 'Hegel.Internal.StatefulRound.runRound' pull this round's rules
@@ -267,7 +282,7 @@ run machine = withFrozenCallStack $ do
                   rejected <- readIORef rejectedRef
                   stopSpan tc rejected
                   s' <- readIORef stateRef
-                  runInIO (checkInvariants s')
+                  runInIO (checkInvariants (Just sm) s')
                   roundLoop
                 -- The round is concluding outright, not being rejected, so
                 -- this closes discarded = 'False' — matching every other exit

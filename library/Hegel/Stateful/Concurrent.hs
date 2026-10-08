@@ -13,6 +13,7 @@ module Hegel.Stateful.Concurrent
     grouped,
     Invariant (..),
     Machine (..),
+    defaultStepCount,
 
     -- * Concurrency groups
     anonymousGroup,
@@ -40,10 +41,12 @@ import Data.Map.Strict qualified as Map
 import Data.Sequence ((|>))
 import Data.Text (Text)
 import Data.Text qualified as T
+import Foreign (Ptr)
 import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Internal.Control (malformedTest)
-import Hegel.Internal.DataSource (freeStateMachine, newConcurrentStateMachine, stateMachineNextGroup)
+import Hegel.Internal.DataSource (freeStateMachine, newConcurrentStateMachine, stateMachineNextGroup, stateMachineShouldCheckInvariant)
 import Hegel.Internal.Event (Event (..))
+import Hegel.Internal.Foreign.Raw (HegelStateMachine)
 import Hegel.Internal.StatefulRound (RoundSpan (..), RoundVerdict (..), Worker (..), lookupRule, runRound, stepText)
 import Hegel.Internal.TestCase (TestCase (..), withClones)
 import Hegel.Internal.Tick (Tick)
@@ -68,7 +71,7 @@ import Hegel.Property.Internal
     withScope,
   )
 import Hegel.Report (Note (..), NoteKind (Annotation, RoundBoundary, StepHeader, StepOrigin))
-import Hegel.Stateful (Invariant (..))
+import Hegel.Stateful (Invariant (..), defaultStepCount)
 import UnliftIO (MonadUnliftIO, throwIO, withRunInIO)
 import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef)
 
@@ -100,7 +103,10 @@ data Machine s m = Machine
   { -- | Construct the model shared by every worker.
     initial :: PropertyT m s,
     rules :: [Rule s m],
-    invariants :: [Invariant s m]
+    invariants :: [Invariant s m],
+    -- | The most rounds a test case runs, at least 1. The engine shrinks a
+    -- failing case toward fewer.
+    stepCount :: !Int
   }
 
 -- * Concurrency groups
@@ -224,6 +230,8 @@ run bounds machine = withFrozenCallStack $ do
     throwIO (malformedTest "Hegel.Stateful.Concurrent.run" "a Machine must have at least one rule" [("rules", "0")])
   when (bounds.minWorkers < 1 || bounds.maxWorkers < bounds.minWorkers) $
     throwIO (malformedTest "Hegel.Stateful.Concurrent.run" "concurrency bounds must satisfy 1 <= min <= max" [("min", T.pack (show bounds.minWorkers)), ("max", T.pack (show bounds.maxWorkers))])
+  when (machine.stepCount < 1) $
+    throwIO (malformedTest "Hegel.Stateful.Concurrent.run" "a Machine's stepCount must be at least 1" [("stepCount", T.pack (show machine.stepCount))])
 
   env <- askEnv
   liftIO (checkCloneDepth env)
@@ -243,11 +251,14 @@ run bounds machine = withFrozenCallStack $ do
       -- Every invariant's draws (and any failure) run on the root test
       -- case, ambient journal untouched: unlike a worker's dispatch, only
       -- this one root handle ever touches it, so nothing here needs the
-      -- concurrency safety a worker's env forces.
-      checkInvariants :: s -> PropertyT m ()
-      checkInvariants s =
-        for_ machine.invariants \invariant ->
-          nested (withFailureNoteIn env.journal (withScope InStep (invariant.check s)))
+      -- concurrency safety a worker's env forces. At a join point the engine
+      -- decides which invariants run; the initial state checks every one.
+      checkInvariants :: Maybe (Ptr HegelStateMachine) -> s -> PropertyT m ()
+      checkInvariants joinPoint s =
+        for_ (zip [0 ..] machine.invariants) \(i, invariant) -> do
+          shouldCheck <- maybe (pure True) (\sm -> liftIO (stateMachineShouldCheckInvariant tc sm i)) joinPoint
+          when shouldCheck $
+            nested (withFailureNoteIn env.journal (withScope InStep (invariant.check s)))
 
   -- Acquire the state-machine handle and register its release atomically
   -- under 'mask_', the same fix 'Hegel.Property.Internal.resource' applies.
@@ -262,12 +273,13 @@ run bounds machine = withFrozenCallStack $ do
             (map (.name) machine.invariants)
             (fromIntegral bounds.minWorkers)
             (fromIntegral bounds.maxWorkers)
+            (fromIntegral machine.stepCount)
         runInIO (registerFinalizer (freeStateMachine tc (fst acquired)))
         pure acquired
 
   s0 <- withFailureNoteIn env.journal (withScope CaseSetup machine.initial)
   note Annotation Nothing "Initial invariant check."
-  checkInvariants s0
+  checkInvariants Nothing s0
 
   withBaseRunInIO \runBase ->
     withClones concurrency tc \clones -> do
@@ -333,7 +345,7 @@ run bounds machine = withFrozenCallStack $ do
                     for_ mRoundIdx \roundIdx -> do
                       stepIdx <- atomicModifyIORef' stepCounter \i -> (i + 1, i + 1)
                       runBase (runPropertyT env (note (RoundBoundary stepIdx roundIdx) Nothing (roundBoundaryText roundIdx)))
-                    runBase (runPropertyT env (checkInvariants s0))
+                    runBase (runPropertyT env (checkInvariants (Just sm) s0))
                     roundLoop
                   -- NOTE: This /must/ be 'Control.Exception.throwIO', and not
                   -- a safe-exceptions variant that would re-wrap 'e' as a

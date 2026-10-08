@@ -24,12 +24,6 @@ import Hegel.Verbosity (Verbosity (..))
 data Settings = Settings
   { -- | Nonnegative number of test cases to attempt.
     testCases :: !Int,
-    -- | Target number of steps each stateful test case runs. Every case
-    -- runs at least one step and at most this many. The engine chooses
-    -- where in that range to stop.
-    --
-    -- Must be at least 1.
-    statefulStepCount :: !Int,
     -- | RNG seed. 'Nothing' picks a fresh seed each run.
     seed :: !(Maybe Word64),
     -- | Derive the seed from a hash of 'databaseKey' so runs are
@@ -60,20 +54,19 @@ data Settings = Settings
   }
   deriving stock (Show)
 
--- | Defaults for a property run: 100 test cases, up to 50 steps per
--- stateful test case, a fresh seed each run, all phases enabled, the
--- automatic backend, quiet output, and persistence disabled.
+-- | Defaults for a property run: 100 test cases, a fresh seed each run, all
+-- phases enabled, the seeded default backend, quiet output, and persistence
+-- disabled.
 defaultSettings :: Settings
 defaultSettings =
   Settings
     { testCases = 100,
-      statefulStepCount = 50,
       seed = Nothing,
       derandomize = False,
       database = DatabaseDisabled,
       databaseKey = Nothing,
       phases = [Explicit, Reuse, Generate, Target, Shrink],
-      backend = Auto,
+      backend = Default,
       verbosity = Quiet,
       reportMultipleFailures = False,
       suppressHealthCheck = [],
@@ -92,11 +85,10 @@ instance Default Settings where
 withDatabaseKey :: Text -> Settings -> Settings
 withDatabaseKey key s = s {databaseKey = Just key}
 
--- | Require nonnegative case and clone counts and at least one stateful step.
+-- | Require nonnegative case and clone counts.
 validate :: (HasCallStack) => Settings -> Either SettingsError ()
 validate s
   | s.testCases < 0 = invalid "testCases" s.testCases "must be nonnegative"
-  | s.statefulStepCount < 1 = invalid "statefulStepCount" s.statefulStepCount "must be at least 1"
   | s.maxCloneDepth < 0 = invalid "maxCloneDepth" s.maxCloneDepth "must be nonnegative"
   | otherwise = Right ()
   where
