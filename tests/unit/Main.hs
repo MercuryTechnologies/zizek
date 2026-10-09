@@ -23,6 +23,7 @@ import SourceRendering qualified
 import StandardGenerators qualified
 import Stateful qualified
 import StatefulRoundInternal qualified
+import SupplyProperties qualified
 import System.Environment (setEnv)
 import Test.Tasty (defaultMain, testGroup)
 import Test.Tasty.Hspec (testSpec)
@@ -58,6 +59,7 @@ main = do
   forkProperties <- testSpec "fork combinators" ForkProperties.spec
   sampling <- testSpec "sampling" Sampling.spec
   recursiveGenerators <- testSpec "recursive generators" RecursiveGenerators.spec
+  supplyProperties <- testSpec "supply" SupplyProperties.spec
   runnerConfiguration <- testSpec "runner configuration" RunnerConfiguration.spec
   defaultMain
     ( testGroup
@@ -88,6 +90,7 @@ main = do
           branchProperties,
           forkProperties,
           sampling,
-          recursiveGenerators
+          recursiveGenerators,
+          supplyProperties
         ]
     )
