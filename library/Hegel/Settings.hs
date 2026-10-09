@@ -60,6 +60,8 @@ data Settings = Settings
     -- | How much diagnostic output the engine emits during a run. 'Nothing'
     -- keeps the engine quiet unless the profile asks for 'Verbose' or 'Debug'
     -- output.
+    --
+    -- That output is collected into the run's 'Hegel.Report.engineOutput'.
     verbosity :: !(Maybe Verbosity),
     -- | When 'True', the engine collects every distinct failure instead of
     -- stopping at the first.

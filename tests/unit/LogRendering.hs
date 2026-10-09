@@ -351,7 +351,8 @@ reportOf events notes =
               diff = Nothing
             },
       stats = Stats 1 0,
-      reproduction = Unstored
+      reproduction = Unstored,
+      engineOutput = []
     }
 
 -- | A two-pool transfer machine: read_closed fails on any transferred

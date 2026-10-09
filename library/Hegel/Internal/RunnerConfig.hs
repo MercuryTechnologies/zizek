@@ -113,17 +113,17 @@ execute progress settings overrides body = case overrides.replay of
   _ -> Runner.checkWithProgress progress settings body
 
 -- | Runner-specific instructions accompanying the report's replay tokens.
-replayInstructions :: Bool -> Settings -> Overrides -> Text
+replayInstructions :: Bool -> Settings -> Overrides -> [Text]
 replayInstructions native settings overrides = case settings.databaseKey of
-  Nothing -> ""
+  Nothing -> []
   Just key ->
     let selected = case overrides.replay of
-          Just (requested, _) | requested == key -> "Replay selected for identity: " <> key <> "\n"
-          _ -> ""
+          Just (requested, _) | requested == key -> ["Replay selected for identity: " <> key]
+          _ -> []
         command =
           if native
             then "--hegel-replay-key " <> quote key <> " --hegel-replay TOKEN"
             else "HEGEL_REPLAY_KEY=" <> quote key <> " HEGEL_REPLAY=TOKEN"
-     in "\n" <> selected <> "Hegel identity: " <> key <> "\nReplay with " <> command <> " and filter the runner to this test.\n"
+     in selected <> ["Hegel identity: " <> key, "Replay with " <> command <> " and filter the runner to this test."]
   where
     quote value = "'" <> T.replace "'" "'\\''" value <> "'"

@@ -13,6 +13,7 @@ import Control.Exception (SomeException, bracket, finally, mask, toException, tr
 import Control.Exception qualified as E
 import Control.Monad (unless, void)
 import Data.ByteString (ByteString)
+import Data.ByteString qualified as BS
 import Data.Foldable (traverse_)
 import Data.Functor (($>))
 import Data.List.NonEmpty (NonEmpty (..))
@@ -22,6 +23,7 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Foreign (Ptr, Storable, alloca, nullPtr, peek)
 import Foreign.C.Types (CBool (..), CInt, CSize)
 import GHC.Stack (HasCallStack, withFrozenCallStack)
@@ -85,13 +87,14 @@ checkWithProgress progress settings prop =
   where
     go = either throwIO pure (withFrozenCallStack (Settings.validate settings)) *> execute
     execute
-      | Just 0 <- settings.testCases, Just DatabaseDisabled <- settings.database = pure (Report (GaveUp "no valid examples found") (Stats 0 0) Unstored)
+      | Just 0 <- settings.testCases, Just DatabaseDisabled <- settings.database = pure (Report (GaveUp "no valid examples found") (Stats 0 0) Unstored [])
       | otherwise = withContext \ctx ->
           withResolvedSettings ctx settings \resolved s -> do
             captures <- newIORef Map.empty
+            (sink, readOutput) <- newOutputBuffer
             -- Read and copy everything out of the run handle before withRun frees
             -- it on bracket exit (see 'readRunOutcome').
-            (nValid, nInvalid, outcome) <- withRun ctx s (driveRun ctx settings prop captures progress)
+            (nValid, nInvalid, outcome) <- withRun ctx s (Just sink) (driveRun ctx settings prop captures progress)
             result <- case outcome.status of
               RunPassed
                 | nValid == 0 -> pure (GaveUp "no valid examples found")
@@ -103,13 +106,15 @@ checkWithProgress progress settings prop =
                   captured <- readIORef captures
                   pure (Failures (fmap (capturedOutcome resolved.printBlob version captured) (failure :| failures)))
               RunErrored -> pure (runErrored outcome)
+            engineOutput <- readOutput
             pure
               Report
                 { result,
                   stats = Stats nValid nInvalid,
                   reproduction = case result of
                     Failures {} -> failureReproduction outcome.failures resolved settings.databaseKey
-                    _ -> Unstored
+                    _ -> Unstored,
+                  engineOutput
                 }
 
 -- | Pump every case out of a started run, then copy its outcome.
@@ -179,23 +184,27 @@ replay settings token prop =
             then pure (diverged (Stats 0 0) (IncompatibleVersions (Replay.tokenVersionOf token) version))
             else do
               captures <- newIORef Map.empty
-              withBlobRun ctx s (Replay.tokenBlobOf token) (driveRun ctx settings prop captures (\_ -> pure ())) >>= \case
-                Left e
-                  | e.code == HEGEL_E_INVALID_ARG ->
-                      pure (diverged (Stats 0 0) (InvalidReplayBlob (fromMaybe "invalid replay blob" e.message)))
-                  | otherwise -> throwIO e
-                Right (nValid, nInvalid, outcome) -> do
-                  let stats = Stats nValid nInvalid
-                  captured <- readIORef captures
-                  pure case outcome.status of
-                    RunPassed -> diverged stats DidNotReproduce
-                    RunFailed -> case outcome.failures of
-                      [] -> Report noCounterexample stats Unstored
-                      failure : failures -> Report (Failures (replayedOutcomes captured (failure :| failures))) stats Unstored
-                    RunErrored -> Report (runErrored outcome) stats Unstored
+              (sink, readOutput) <- newOutputBuffer
+              report <-
+                withBlobRun ctx s (Replay.tokenBlobOf token) (Just sink) (driveRun ctx settings prop captures (\_ -> pure ())) >>= \case
+                  Left e
+                    | e.code == HEGEL_E_INVALID_ARG ->
+                        pure (diverged (Stats 0 0) (InvalidReplayBlob (fromMaybe "invalid replay blob" e.message)))
+                    | otherwise -> throwIO e
+                  Right (nValid, nInvalid, outcome) -> do
+                    let stats = Stats nValid nInvalid
+                    captured <- readIORef captures
+                    pure case outcome.status of
+                      RunPassed -> diverged stats DidNotReproduce
+                      RunFailed -> case outcome.failures of
+                        [] -> Report noCounterexample stats Unstored []
+                        failure : failures -> Report (Failures (replayedOutcomes captured (failure :| failures))) stats Unstored []
+                      RunErrored -> Report (runErrored outcome) stats Unstored []
+              engineOutput <- readOutput
+              pure report {engineOutput}
 
     diverged stats reason =
-      Report (Failures (FailureOutcome expected (Just token) Nothing (Diverged (ReplayDivergence reason)) :| [])) stats Unstored
+      Report (Failures (FailureOutcome expected (Just token) Nothing (Diverged (ReplayDivergence reason)) :| [])) stats Unstored []
 
     -- The engine attaches no blob to a replay's failure, since the token
     -- already holds it. When no failure has the token's origin, a divergence
@@ -242,7 +251,7 @@ sample settings gen =
     go =
       either throwIO pure (withFrozenCallStack (Settings.validate settings)) *> withContext \ctx ->
         withResolvedSettings ctx (sampling 1 settings) \_ s ->
-          withRun ctx s (drawOneCase ctx gen)
+          withRun ctx s Nothing (drawOneCase ctx gen)
 
 -- | Settings for a 'sample' or 'samples' run of @n@ generated cases, which
 -- persists nothing and draws from a fresh seed per call unless @settings@
@@ -299,7 +308,7 @@ samples settings n gen =
       | otherwise = withContext \ctx ->
           withResolvedSettings ctx (sampling n settings) \_ s -> do
             acc <- newIORef []
-            outcome <- withRun ctx s \run -> do
+            outcome <- withRun ctx s Nothing \run -> do
               collectCases ctx gen acc run
               readRunOutcome ctx run
             case outcome.status of
@@ -577,3 +586,13 @@ abortFramework action =
     if isAborting e
       then pure (aborted (Errored e))
       else throwIO (NoBacktrace e)
+
+-- | A sink collecting a run's engine output, and an action reading back every
+-- line it received so far in order.
+newOutputBuffer :: IO (OutputSink, IO [Text])
+newOutputBuffer = do
+  buffer <- newIORef []
+  let sink _ ptr len = do
+        bytes <- BS.packCStringLen (ptr, fromIntegral len)
+        modifyIORef' buffer (TE.decodeUtf8Lenient bytes :)
+  pure (sink, reverse <$> readIORef buffer)

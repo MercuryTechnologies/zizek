@@ -272,7 +272,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Word (Word32, Word64, Word8)
-import Foreign (ForeignPtr, FunPtr, Ptr, Storable (..), alloca, castPtr, mallocForeignPtrBytes, nullFunPtr, nullPtr, withForeignPtr)
+import Foreign (ForeignPtr, FunPtr, Ptr, Storable (..), alloca, castPtr, freeHaskellFunPtr, mallocForeignPtrBytes, nullFunPtr, nullPtr, withForeignPtr)
 import Foreign.C.String (CString)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt (..), CSize (..))
 
@@ -829,8 +829,6 @@ foreign import ccall unsafe "hegel_set_default_profile"
 -- 'hegel_next_test_case', the same thread a blob replay emits on. A sink
 -- shared across concurrent 'check' calls may still want thread-safety for
 -- its own reasons, but the engine itself no longer imposes it.
---
--- Currently always @NULL@ (output stays on stderr).
 type OutputSink = Ptr () -> CString -> CSize -> IO ()
 
 -- | Build the run and write a handle into @*out_run@; returns immediately. No
@@ -1772,25 +1770,42 @@ withProfileSettings ctx profile action = mask $ \restore -> do
 -- | Start a run with the given settings, run the action, then join the
 -- worker thread and free the run handle.
 --
--- Throws 'HegelError' if the engine fails to start.
-withRun :: Ptr HegelContext -> Ptr HegelSettings -> (Ptr HegelRun -> IO a) -> IO a
-withRun ctx s =
-  bracket
-    (startRun ctx \out -> hegel_run_start ctx s nullFunPtr nullPtr out)
-    (void . hegel_run_free ctx)
+-- The run's engine output goes to @sink@, or to stderr for 'Nothing'. Throws
+-- 'HegelError' if the engine fails to start.
+withRun :: Ptr HegelContext -> Ptr HegelSettings -> Maybe OutputSink -> (Ptr HegelRun -> IO a) -> IO a
+withRun ctx s sink action =
+  withOutputSink sink \callback ->
+    bracket
+      (startRun ctx \out -> hegel_run_start ctx s callback nullPtr out)
+      (void . hegel_run_free ctx)
+      action
 
 -- | Start a run that replays @blob@ until it fails, run the action, then free
 -- the run handle.
 --
--- Returns the engine's 'HegelError' without running the action when the run
--- fails to start, as it does with 'HEGEL_E_INVALID_ARG' for a blob the engine
--- cannot decode. An error the action itself raises propagates as usual.
-withBlobRun :: Ptr HegelContext -> Ptr HegelSettings -> ByteString -> (Ptr HegelRun -> IO a) -> IO (Either HegelError a)
-withBlobRun ctx s blob action = mask $ \restore -> do
-  started <- try (BS.useAsCString blob \blobPtr -> startRun ctx \out -> hegel_run_start_blob ctx s blobPtr nullFunPtr nullPtr out)
-  case started of
-    Left e -> pure (Left e)
-    Right run -> Right <$> (restore (action run) `finally` void (hegel_run_free ctx run))
+-- The run's engine output goes to @sink@, or to stderr for 'Nothing'. Returns
+-- the engine's 'HegelError' without running the action when the run fails to
+-- start, as it does with 'HEGEL_E_INVALID_ARG' for a blob the engine cannot
+-- decode. An error the action itself raises propagates as usual.
+withBlobRun :: Ptr HegelContext -> Ptr HegelSettings -> ByteString -> Maybe OutputSink -> (Ptr HegelRun -> IO a) -> IO (Either HegelError a)
+withBlobRun ctx s blob sink action =
+  withOutputSink sink \callback -> mask $ \restore -> do
+    started <- try (BS.useAsCString blob \blobPtr -> startRun ctx \out -> hegel_run_start_blob ctx s blobPtr callback nullPtr out)
+    case started of
+      Left e -> pure (Left e)
+      Right run -> Right <$> (restore (action run) `finally` void (hegel_run_free ctx run))
+
+-- | Wrap @sink@ as a C callback for the duration of the action, or pass
+-- @NULL@ for 'Nothing'.
+--
+-- The callback is released only after the action returns, so a run started
+-- inside the action must be freed inside it too.
+withOutputSink :: Maybe OutputSink -> (FunPtr OutputSink -> IO a) -> IO a
+withOutputSink Nothing action = action nullFunPtr
+withOutputSink (Just sink) action = bracket (mkOutputSink sink) freeHaskellFunPtr action
+
+foreign import ccall "wrapper"
+  mkOutputSink :: OutputSink -> IO (FunPtr OutputSink)
 
 -- | Run a @hegel_run_start@-shaped call and read the handle it writes,
 -- throwing 'HegelError' when it fails.

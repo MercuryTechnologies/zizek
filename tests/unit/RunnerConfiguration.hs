@@ -77,6 +77,12 @@ spec = do
       hidden <- Runner.check defaultSettings {printBlob = Just False} failing
       fmap (isJust . (.failureReplayToken)) (allFailureOutcomes hidden.result) `shouldBe` [False]
 
+    it "collects the engine's output into the report" do
+      quiet <- Runner.check defaultSettings {testCases = Just 5} (pure ())
+      quiet.engineOutput `shouldBe` []
+      loud <- Runner.check defaultSettings {testCases = Just 5, verbosity = Just Debug} (pure ())
+      loud.engineOutput `shouldNotBe` []
+
     it "resolves every engine setting and keeps the overrides" do
       based <- Profile.resolve defaultSettings {profile = Just "base", testCases = Just 7, seed = Just (SeedFixed 5)}
       based.testCases `shouldBe` Just 7

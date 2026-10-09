@@ -79,7 +79,7 @@ render s = do
   report <- check s.settings s.property
   pref <- Style.preference stdout
   T.putStrLn (Style.cleanFor pref ("\n━━━━━ " <> s.name <> ": " <> s.title <> " ━━━━━"))
-  T.putStrLn =<< renderReportAuto True pref report
+  T.putStrLn =<< renderReportAuto True pref [] report
   when s.ascii do
     T.putStrLn "-- ascii --"
     T.putStrLn . Style.sevenBitClean =<< renderReportRichAnsiWith (defaultStyle Style.ascii) report

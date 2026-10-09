@@ -105,7 +105,10 @@ data Report = Report
     -- could run.
     stats :: Stats,
     -- | Where a failure from this run can be found again.
-    reproduction :: !Reproduction
+    reproduction :: !Reproduction,
+    -- | The lines @libhegel@ printed during the run, in order, such as its
+    -- statistics block or its verbose progress output.
+    engineOutput :: ![Text]
   }
   deriving stock (Show)
 
@@ -205,7 +208,7 @@ data Abort
 
 -- | A report for a run that stopped before any test case could run.
 aborted :: Abort -> Report
-aborted a = Report {result = Aborted a, stats = Stats {valid = 0, invalid = 0}, reproduction = Unstored}
+aborted a = Report {result = Aborted a, stats = Stats {valid = 0, invalid = 0}, reproduction = Unstored, engineOutput = []}
 
 -- | Throw on anything other than 'Ok': 'PropertyFailed' on a counterexample,
 -- the original exception on 'Errored', and 'fail' otherwise.
@@ -256,32 +259,34 @@ renderReportRichAnsi = renderReportRichAnsiWith (defaultStyle Style.unicode)
 -- | 'renderReportRich' with an explicit 'Style' (glyph table, phrase table,
 -- budgets).
 renderReportRichWith :: Style -> Report -> IO Text
-renderReportRichWith style = renderRichImpl style renderReport docToText
+renderReportRichWith style = renderRichImpl style [] docToText
 
 -- | 'renderReportRichAnsi' with an explicit 'Style'.
 renderReportRichAnsiWith :: Style -> Report -> IO Text
-renderReportRichAnsiWith style = renderRichImpl style renderReportAnsi docToAnsi
+renderReportRichAnsiWith style = renderRichImpl style [] docToAnsi
 
 -- | The renderer the framework integrations call: rich, ANSI per @useColor@,
 -- glyphs per the output 'Style.Preference', with the ascii preference's
 -- 7-bit-clean guarantee applied to the whole result. Keeps the
 -- render-then-clean invariant in one place instead of one per framework.
-renderReportAuto :: Bool -> Style.Preference -> Report -> IO Text
-renderReportAuto useColor pref report =
-  Style.cleanFor pref
-    <$> (if useColor then renderReportRichAnsiWith style else renderReportRichWith style) report
+--
+-- The @trailer@ lines print after the reproduction footer and before the
+-- engine output, for a runner's own replay instructions.
+renderReportAuto :: Bool -> Style.Preference -> [Text] -> Report -> IO Text
+renderReportAuto useColor pref trailer report =
+  Style.cleanFor pref <$> renderRichImpl style trailer (if useColor then docToAnsi else docToText) report
   where
     style = defaultStyle (Style.table pref)
 
 -- | Shared implementation of the rich renderers, parameterised over the
--- plain-text fallback and the final document renderer.
-renderRichImpl :: Style -> (Report -> Text) -> (Doc Ann -> Text) -> Report -> IO Text
-renderRichImpl style plain toText report = do
+-- trailer lines and the final document renderer.
+renderRichImpl :: Style -> [Text] -> (Doc Ann -> Text) -> Report -> IO Text
+renderRichImpl style trailer toText report = do
   mdoc <- richDoc style report
   pure case mdoc of
-    Nothing -> plain report
+    Nothing -> toText (reportDocWith trailer report)
     Just body ->
-      toText (withFooter style.phrases report.reproduction (PP.vsep [failureSummary report, body]))
+      toText (withEngineOutput report.engineOutput (withTrailer trailer (withFooter style.phrases report.reproduction (PP.vsep [failureSummary report, body]))))
 
 -- | Render every failure outcome with source-aware evidence where available.
 richDoc :: Style -> Report -> IO (Maybe (Doc Ann))
@@ -391,7 +396,25 @@ plainRichDoc message notes loc diff = do
 -- * Internal pure layout
 
 reportDoc :: Report -> Doc Ann
-reportDoc report = case report.result of
+reportDoc = reportDocWith []
+
+reportDocWith :: [Text] -> Report -> Doc Ann
+reportDocWith trailer report = withEngineOutput report.engineOutput (withTrailer trailer (reportBodyDoc report))
+
+-- | Follow a rendered report with a runner's trailer lines, if any.
+withTrailer :: [Text] -> Doc Ann -> Doc Ann
+withTrailer [] doc = doc
+withTrailer trailer doc =
+  doc <> PP.hardline <> PP.hardline <> PP.vsep (map PP.pretty trailer)
+
+-- | Follow a rendered report with the engine output its run printed, if any.
+withEngineOutput :: [Text] -> Doc Ann -> Doc Ann
+withEngineOutput [] doc = doc
+withEngineOutput output doc =
+  doc <> PP.hardline <> PP.hardline <> PP.vsep (map PP.pretty output)
+
+reportBodyDoc :: Report -> Doc Ann
+reportBodyDoc report = case report.result of
   Ok -> "OK, passed" <+> statsDoc report.stats
   GaveUp msg -> "gave up after" <+> statsDoc report.stats <> ":" <+> PP.pretty msg
   Aborted (Errored e) -> "aborted:" <+> PP.pretty (displayException e)

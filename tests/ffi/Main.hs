@@ -107,7 +107,7 @@ rawCApiSpec = describe "raw C API" $ do
   it "round-trips 50 boolean cases" $ runInBoundThread $ do
     withContext $ \ctx -> withSettings ctx $ \s -> do
       configure ctx s 50
-      withRun ctx s $ \run -> do
+      withRun ctx s Nothing $ \run -> do
         driveBooleanRun ctx run
         resultPtr <- runResult ctx run
         passed <- runPassed ctx resultPtr
@@ -134,7 +134,7 @@ rawCApiSpec = describe "raw C API" $ do
                   else do
                     hegel_mark_complete ctx tc HEGEL_STATUS_VALID nullPtr >>= throwOnError ctx
                     go run False
-      withRun ctx s $ \run -> go run True
+      withRun ctx s Nothing $ \run -> go run True
 
   it "drives a full integer failure+shrink cycle" $ runInBoundThread $ do
     let threshold = 10 :: Int64
@@ -158,7 +158,7 @@ rawCApiSpec = describe "raw C API" $ do
                           case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError ctx rc
                     | otherwise -> hegel_mark_complete ctx tc HEGEL_STATUS_VALID nullPtr >>= throwOnError ctx
                 shrinkLoop run
-      withRun ctx s $ \run -> do
+      withRun ctx s Nothing $ \run -> do
         shrinkLoop run
         resultPtr <- runResult ctx run
         passed <- runPassed ctx resultPtr
@@ -197,7 +197,7 @@ genMachinerySpec = describe "Gen machinery" $ do
                 n `shouldSatisfy` (\x -> x >= 0 && x <= 100)
                 TC.markComplete tc Valid
                 loop run
-      withRun ctx s loop
+      withRun ctx s Nothing loop
 
   it "draws, fails, and shrinks" $ runInBoundThread $ do
     let gen = Gen.integral @Int & Gen.min 0 & Gen.max 100 & Gen.build
@@ -221,7 +221,7 @@ genMachinerySpec = describe "Gen machinery" $ do
                         case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError ctx rc
                       else TC.markComplete tc Valid
                 loop run
-      withRun ctx s $ \run -> do
+      withRun ctx s Nothing $ \run -> do
         loop run
         resultPtr <- runResult ctx run
         passed <- runPassed ctx resultPtr
@@ -241,7 +241,7 @@ completionSpec = describe "completion semantics" $
     runInBoundThread $ do
       withContext $ \ctx -> withSettings ctx $ \s -> do
         configure ctx s 1
-        withRun ctx s $ \run -> do
+        withRun ctx s Nothing $ \run -> do
           tcPtr <- nextTestCase ctx run
           tcPtr `shouldNotBe` nullPtr
           tc <- mkTestCase Tick.Silent Handle {ctx, ptr = tcPtr}
@@ -277,7 +277,7 @@ asyncTeardownSpec = describe "async teardown" $ do
     runInBoundThread $
       withContext \ctx -> withSettings ctx \s -> do
         configure ctx s 50
-        r <- try @SomeException @() $ withRun ctx s \run -> do
+        r <- try @SomeException @() $ withRun ctx s Nothing \run -> do
           tc <- nextTestCase ctx run
           _ <- drawBooleanRaw ctx tc
           throwIO (userError "bail mid-case")
