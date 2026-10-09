@@ -30,8 +30,15 @@
 module Hegel.Supply
   ( Supply,
     withSupply,
+    withSupplyT,
     draw,
     split,
+
+    -- * Slots
+    Slot,
+    newSlot,
+    withSlot,
+    drawFrom,
   )
 where
 
@@ -63,6 +70,7 @@ import Hegel.Property.Internal
     tryProperty,
   )
 import Hegel.Report.Note (Note (..), NoteKind (..), renderValue)
+import UnliftIO (MonadUnliftIO, bracket, withRunInIO)
 import UnliftIO.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 
 -- | A source of generated values for code running in plain 'IO', valid only
@@ -99,32 +107,50 @@ data Family = Family
 withSupply :: (HasCallStack, MonadIO m) => (Supply -> IO r) -> PropertyT m r
 withSupply body = withFrozenCallStack do
   env <- askEnv
-  liftIO do
-    checkCloneDepth env
-    TestCase.withClone env.testCase \clone -> E.mask \restore -> do
-      family <- newFamily env
-      root <- newSupply family (env.cloneDepth + 1) clone
-      modifyMVar_ family.members (pure . (root :))
-      let settle = do
-            closeFamily family
-            -- Release every split newest first. The root, last in the list,
-            -- belongs to 'TestCase.withClone'.
-            splits <- drop 1 . reverse <$> readMVar family.members
-            for_ (reverse splits) \s -> TestCase.releaseClone s.testCase
-      result <- tryProperty (restore (body root)) `E.onException` settle
-      settle
-      supplies <- reverse <$> readMVar family.members
-      for_ (zip [1 :: Int ..] supplies) \(i, s) -> do
-        notes <- s.drainNotes
-        failureNotes <- case (s.journal, result) of
-          (Recording _, Left e) | i == 1 && isFailure e -> do
-            clock <- Tick.next clone.recording
-            let (msg, mloc, diff) = failureDetails e
-            pure [Note {kind = BranchFailure diff, text = msg, loc = mloc, depth = family.noteDepth, clock}]
-          _ -> pure []
-        foldForkNotes env "Supply" i (notes <> failureNotes)
-      readIORef family.poison >>= traverse_ E.throwIO
-      either E.throwIO pure result
+  liftIO (withSupplyIO env True body)
+
+-- | Run a property body with a fresh 'Supply' on its own cloned choice stream.
+--
+-- The body itself runs on the caller's stream, and only draws made through
+-- the 'Supply' go to the clone. Like 'withSupply', the 'Supply' must not
+-- be used after this returns.
+withSupplyT :: (HasCallStack, MonadUnliftIO m) => (Supply -> PropertyT m r) -> PropertyT m r
+withSupplyT body = withFrozenCallStack do
+  env <- askEnv
+  withRunInIO \run -> withSupplyIO env False (run . body)
+
+-- | The shared core of 'withSupply' and 'withSupplyT'.
+--
+-- @noteFailure@ says whether a failing body gets its own failure note under
+-- the supply's header. A 'withSupplyT' body runs in the caller's journal,
+-- which notes its failures already.
+withSupplyIO :: (HasCallStack) => Env -> Bool -> (Supply -> IO r) -> IO r
+withSupplyIO env noteFailure body = do
+  checkCloneDepth env
+  TestCase.withClone env.testCase \clone -> E.mask \restore -> do
+    family <- newFamily env
+    root <- newSupply family (env.cloneDepth + 1) clone
+    modifyMVar_ family.members (pure . (root :))
+    let settle = do
+          closeFamily family
+          -- Release every split newest first. The root, last in the list,
+          -- belongs to 'TestCase.withClone'.
+          splits <- drop 1 . reverse <$> readMVar family.members
+          for_ (reverse splits) \s -> TestCase.releaseClone s.testCase
+    result <- tryProperty (restore (body root)) `E.onException` settle
+    settle
+    supplies <- reverse <$> readMVar family.members
+    for_ (zip [1 :: Int ..] supplies) \(i, s) -> do
+      notes <- s.drainNotes
+      failureNotes <- case (s.journal, result) of
+        (Recording _, Left e) | noteFailure && i == 1 && isFailure e -> do
+          clock <- Tick.next clone.recording
+          let (msg, mloc, diff) = failureDetails e
+          pure [Note {kind = BranchFailure diff, text = msg, loc = mloc, depth = family.noteDepth, clock}]
+        _ -> pure []
+      foldForkNotes env "Supply" i (notes <> failureNotes)
+    readIORef family.poison >>= traverse_ E.throwIO
+    either E.throwIO pure result
 
 -- | Draw a value from the 'Supply', journaling it as @label=value@.
 --
@@ -176,6 +202,40 @@ split parent = withFrozenCallStack $ withMVar parent.lock \() -> E.mask_ do
     clone <- poisonOnError family (TestCase.acquireClone parent.testCase)
     child <- newSupply family (parent.cloneDepth + 1) clone `E.onException` TestCase.releaseClone clone
     pure (child : supplies, child)
+
+-- * Slots
+
+-- | A place a long-lived stub draws from, filled with a fresh 'Supply' for
+-- the duration of each 'withSlot' block.
+--
+-- A fixture built once can hold a 'Slot', while the property decides how long
+-- each choice stream behind it lives. Filling it once per stateful step
+-- keeps every step's stub draws attached to that step, so the engine can
+-- delete a step and its draws together while shrinking.
+newtype Slot = Slot (IORef (Maybe Supply))
+
+-- | An empty 'Slot'.
+newSlot :: (MonadIO m) => m Slot
+newSlot = Slot <$> newIORef Nothing
+
+-- | Run a property body with a fresh 'Supply' installed in the 'Slot',
+-- restoring whatever was installed before once the body returns.
+withSlot :: (HasCallStack, MonadUnliftIO m) => Slot -> PropertyT m r -> PropertyT m r
+withSlot (Slot ref) body = withFrozenCallStack $ withSupplyT \supply ->
+  bracket
+    (atomicModifyIORef' ref \previous -> (Just supply, previous))
+    (writeIORef ref)
+    (const body)
+
+-- | Draw a value from whichever 'Supply' the 'Slot' currently holds,
+-- journaling it as @label=value@.
+--
+-- Throws a malformed-test error when no 'withSlot' block is running.
+drawFrom :: (HasCallStack, Show a) => Slot -> Text -> Gen a -> IO a
+drawFrom (Slot ref) label gen = withFrozenCallStack do
+  readIORef ref >>= \case
+    Just supply -> draw supply label gen
+    Nothing -> E.throwIO (malformedTest "Hegel.Supply.drawFrom" "drew from a Slot with no Supply installed" [("label", label)])
 
 -- * Mechanics
 

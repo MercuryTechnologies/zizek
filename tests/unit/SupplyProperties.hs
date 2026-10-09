@@ -16,9 +16,10 @@ import Hegel (Gen)
 import Hegel.Gen qualified as Gen
 import Hegel.Internal.Control (AssumeRejected)
 import Hegel.Property (Property, assert, check, (===))
-import Hegel.Report (Abort (..), FailureEvidence (..), FailureOutcome (..), Note (..), Report (..), Result (..), isBranchHeader, isDrawn)
+import Hegel.Report (Abort (..), FailureEvidence (..), FailureOutcome (..), Note (..), Report (..), Result (..), isBranchFailure, isBranchHeader, isDrawn, isFailureNote)
 import Hegel.Runner (replay)
 import Hegel.Settings (Settings (..), defaultSettings)
+import Hegel.Stateful qualified as Stateful
 import Hegel.Supply (Supply)
 import Hegel.Supply qualified as Supply
 import Test.Hspec
@@ -48,6 +49,7 @@ spec :: Spec
 spec = describe "Hegel.Supply" do
   coreSpec
   splitSpec
+  slotSpec
 
 coreSpec :: Spec
 coreSpec = describe "withSupply and draw" do
@@ -203,3 +205,63 @@ splitSpec = describe "Supply.split" do
     case report.result of
       Aborted (Errored e) -> T.pack (E.displayException e) `shouldSatisfy` T.isInfixOf "maxCloneDepth"
       other -> expectationFailure ("expected Aborted Errored, got: " <> show other)
+
+-- * withSupplyT and slots
+
+slotSpec :: Spec
+slotSpec = describe "withSupplyT and slots" do
+  it "journals a withSupplyT body's failure once, in the caller's journal" do
+    let failing :: Stateful.Rule () IO
+        failing = Stateful.rule "fail" \() -> Supply.withSupplyT \supply -> do
+          n <- liftIO (Supply.draw supply "n" (intR (0, 10)))
+          assert (n > 100) "n is never that big"
+        machine = Stateful.Machine {initial = pure (), rules = [failing], invariants = [], stepCount = 3}
+    report <- check def (Stateful.run machine)
+    FailureEvidence {notes} <- expectCaptured report.result
+    length [n | n <- notes, isFailureNote n] `shouldBe` 1
+    length [n | n <- notes, isBranchFailure n] `shouldBe` 0
+
+  it "rethrows a swallowed discard from a withSupplyT body" do
+    report <- check def do
+      Supply.withSupplyT \supply -> do
+        n <- liftIO (swallow 0 (Supply.draw supply "x" sometimesDiscards))
+        assert (n /= 0) "the stub's fallback leaked into the property"
+    report.result `shouldSatisfy` \case
+      Ok -> True
+      _ -> False
+
+  it "rejects a draw from an empty slot" do
+    report <- check def do
+      slot <- Supply.newSlot
+      liftIO (() <$ Supply.drawFrom slot "x" (intR (0, 10)))
+    case report.result of
+      Aborted _ -> T.pack (show report.result) `shouldSatisfy` T.isInfixOf "no Supply installed"
+      other -> expectationFailure ("expected Aborted, got: " <> show other)
+
+  it "restores the outer supply when a nested withSlot ends" do
+    report <- check def do
+      slot <- Supply.newSlot
+      Supply.withSlot slot do
+        _ <- liftIO (Supply.drawFrom slot "outer1" (intR (0, 10)))
+        Supply.withSlot slot (() <$ liftIO (Supply.drawFrom slot "inner" (intR (0, 10))))
+        _ <- liftIO (Supply.drawFrom slot "outer2" (intR (0, 10)))
+        pure ()
+      assert False "force a counterexample so the journal renders"
+    FailureEvidence {notes} <- expectCaptured report.result
+    drawnTexts notes `shouldBe` ["inner=0", "outer1=0", "outer2=0"]
+
+  it "fills a slot per stateful step" do
+    slot <- Supply.newSlot
+    let add :: Stateful.Rule Int IO
+        add = Stateful.rule "add" \total -> Supply.withSlot slot do
+          n <- liftIO (Supply.drawFrom slot "n" (intR (0, 10)))
+          let total' = total + n
+          assert (total' < 25) "the total stays under 25"
+          pure total'
+        machine = Stateful.Machine {initial = pure 0, rules = [add], invariants = [], stepCount = 10}
+    report <- check def (Stateful.run machine)
+    FailureEvidence {notes} <- expectCaptured report.result
+    let supplyDraws = [n | n <- notes, isDrawn n.kind, "n=" `T.isPrefixOf` n.text]
+    supplyDraws `shouldSatisfy` (not . null)
+    all (\n -> n.depth > 0) supplyDraws `shouldBe` True
+    sum [read (T.unpack (T.drop 2 n.text)) :: Int | n <- supplyDraws] `shouldBe` 25
