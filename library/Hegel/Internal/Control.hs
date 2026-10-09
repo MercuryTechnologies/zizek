@@ -4,7 +4,7 @@
 --
 -- These are /control signals/, not errors: they carry the runner's verdict for
 -- the current test case out of the middle of a draw, up through the property
--- body, to 'Hegel.Runner.runTestCase', which classifies them.
+-- body, to the runner in "Hegel.Runner", which classifies them.
 --
 -- They are thrown as /asynchronous/ exceptions so a catch-all in the test body
 -- cannot silently swallow one and corrupt the run; 'isControlSignal'
@@ -151,10 +151,9 @@ instance Exception AttemptMispriced where
 --
 -- This exception carries the body exception from a failed property run, if one
 -- occurred at the time the finalizer was run, so the report retains its
--- diagnostic. When a database is enabled the engine has
--- already persisted that counterexample's reproduction blob (inside
--- @markComplete@, before the drain runs), so the next run replays it; under the
--- default settings (database disabled) the drawn values are not recoverable.
+-- diagnostic. The counterexample replays on a later run only if the engine
+-- filed it in the example database, which needs both a database and a
+-- 'Hegel.Settings.databaseKey'.
 data FinalizerFailed = FinalizerFailed (Maybe SomeException) [SomeException]
 
 instance Show FinalizerFailed where

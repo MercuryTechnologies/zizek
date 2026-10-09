@@ -11,7 +11,7 @@
 -- This module owns the output 'Preference' (the never-crash decision) and the
 -- text-cleaning pass, both independent of any glyph vocabulary. The stateful
 -- event log's richer cell glyphs extend 'baseTransliterations' via
--- 'sevenBitCleanWith'; see "Hegel.Report.Glyph".
+-- 'sevenBitCleanWith'; see "Hegel.Report.Style".
 --
 -- Designed for qualified import:
 --
@@ -88,7 +88,7 @@ sevenBitCleanWith transliterations = T.concatMap \c ->
 -- | The glyphs the base (non-log) renderers emit: source-splice borders,
 -- the in-band failure mark, prose typography, and subscript digits. A
 -- hand-maintained list (the one drift risk); the log's cell glyphs are
--- derived from its tables and unioned on top in "Hegel.Report.Glyph".
+-- derived from its tables and unioned on top in "Hegel.Report.Style".
 baseTransliterations :: Map Char Text
 baseTransliterations =
   Map.fromList

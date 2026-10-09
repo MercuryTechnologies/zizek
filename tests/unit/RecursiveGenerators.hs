@@ -1,7 +1,7 @@
 -- | Coverage for 'Gen.recursive': respecting 'Gen.maxDepth'\/'Gen.maxLeaves',
 -- the depth\/cap the branch function sees via 'Gen.RecursionContext',
 -- subtree-hoisting shrinking, and the leaf-budget retry path's span
--- discipline (see Note [Span discipline] in "Hegel.Gen.Recursive").
+-- discipline (see Note [span-discipline] in "Hegel.Gen.Recursive").
 module RecursiveGenerators (spec) where
 
 import Control.Exception (throwIO)

@@ -7,7 +7,7 @@
 -- the 'stringGen'\/'stringDraw' result to a name outside any 'Draw' lambda,
 -- so the handle still builds once, and runs the check from a 'Draw' with the
 -- same label that calls 'Hegel.Gen.Internal.drawInline' on that name.
--- Sequencing the check with @('>>=')@ instead adds a @FLAT_MAP@ span the
+-- Sequencing the check with @('>>=')@ instead adds a flat-map span the
 -- plain leaf doesn't have. See "Hegel.Gen.Text" or "Hegel.Gen.Domain" for the
 -- shape.
 module Hegel.Gen.Internal.String

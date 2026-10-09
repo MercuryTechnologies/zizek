@@ -21,10 +21,9 @@ import Hegel.Settings (TestLocation (..))
 -- | Build a database key from the call site, the ancestor describe path, and
 -- the leaf label.
 --
--- >>> propKey cs ["reverse"] "is involutive"   -- module "M"
--- "M:reverse/is involutive"
--- >>> propKey cs [] "is involutive"            -- module "M"
--- "M:is involutive"
+-- Called from module @M@ with path @["reverse"]@ and label @"is involutive"@,
+-- it gives @"M:reverse/is involutive"@, and with an empty path it gives
+-- @"M:is involutive"@.
 propKey :: CallStack -> [String] -> String -> Text
 propKey cs path label =
   moduleFromCallStack cs <> ":" <> joinPath (path <> [label])

@@ -1,8 +1,7 @@
--- | A monotonic per-test-case sequence stamp that can be used to reconstruct
--- a stateful test timeline after a failing counterexample has been found.
+-- | A monotonic per-test-case sequence stamp that orders a captured test
+-- case's journal notes and pool events into one timeline.
 --
--- A 'Tick' orders entries drawn from the user-facing note note journal and
--- the pool's event stream, so a renderer can zip them back into one history.
+-- A renderer zips the two streams back into one history by their ticks.
 --
 -- __NOTE__: This module is deliberately domain-agnostic: it knows nothing of
 -- pools, events, notes, or state machines.

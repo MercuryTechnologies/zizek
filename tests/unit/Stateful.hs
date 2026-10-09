@@ -355,7 +355,7 @@ statefulSpec = describe "Machine" do
     length (filter (== 1000) counts) `shouldSatisfy` (> length counts `div` 2)
 
   it "stepCount replaces the default cap" do
-    -- Analogue of the Rust reference's test_stateful_step_count_setting_bounds_steps.
+    -- Analogue of the Rust reference's test_runner_steps_bounds_steps.
     let n = 7 :: Int
     counts <- stepRecorder False n def {testCases = Just 30}
     counts `shouldSatisfy` all (\c -> c >= 1 && c <= n)

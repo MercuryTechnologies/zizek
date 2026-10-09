@@ -115,8 +115,8 @@ isEmpty pool = IntMap.null <$> readMVar pool.values
 -- | A generator over values in the pool that does not remove them.
 --
 -- The engine picks the variable id so the choice shrinks like any other draw.
--- Drawing from an empty pool skips the step it's drawn in without
--- discarding the case, the same as @assume False@ inside a rule body.
+-- Drawing from an empty pool is equivalent to @assume False@, as the module
+-- header describes.
 reuse :: Pool a -> Gen a
 reuse pool = Draw (spanLabel LabelPoolReuse) \tc ->
   withMVar pool.values \vals ->
@@ -132,15 +132,15 @@ reuse pool = Draw (spanLabel LabelPoolReuse) \tc ->
 -- | A generator that consumes values from the pool, removing each yielded
 -- value so it is never drawn again.
 --
--- Drawing from an empty pool skips the step it's drawn in without
--- discarding the case, the same as @assume False@ inside a rule body.
+-- Drawing from an empty pool is equivalent to @assume False@, as the module
+-- header describes.
 consume :: Pool a -> Gen a
 consume pool = Draw (spanLabel LabelPoolConsume) \tc -> snd <$> drawConsuming "consume" pool tc
 
 -- | The consuming draw shared by 'consume' and 'transfer': draw a
 -- vid from the engine (removing it there) and pop the mirrored value.
 --
--- Throws 'AssumeRejected' when the pool is empty, discarding the test case.
+-- Throws 'AssumeRejected' when the pool is empty.
 drawConsuming :: String -> Pool a -> TestCase -> IO (Int, a)
 drawConsuming caller pool tc =
   modifyMVar pool.values \m ->

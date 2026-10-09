@@ -9,7 +9,10 @@
 -- 'foreign import ccall' declaration together with phantom types representing
 -- handles to C constructs, error-code pattern synonyms, and bracket helpers.
 --
--- Not yet bound: @hegel_generate_ipv4@\/@_ipv6@.
+-- Not yet bound: @hegel_generate_ipv4@\/@_ipv6@, @hegel_note@,
+-- @hegel_test_case_block@, @hegel_test_case_set_worker@,
+-- @hegel_test_case_printer@, and the @hegel_printer_*@ and
+-- @hegel_reflow_options_*@ families.
 --
 -- __Calling convention__: every @libhegel@ entry point takes a
 -- @hegel_context_t*@ as its first argument and returns a @hegel_result_t@,
@@ -505,11 +508,11 @@ pattern HEGEL_E_RETRY = (#const HEGEL_E_RETRY)
 
 -- $statemachine
 --
--- The value 'hegel_state_machine_next_rule' writes into its @out_rule_index@
--- out-parameter to signal that a state machine has finished stepping, rather
--- than naming a rule to run. It shares that function's @int64_t@ domain
--- rather than the @hegel_result_t@ domain the error-code synonyms above cover,
--- since it is not a return code at all.
+-- 'HEGEL_STATE_MACHINE_DONE' is the value a state-machine call writes into its
+-- @int64_t@ out-parameter in place of a group or rule index. From
+-- 'hegel_state_machine_next_group' it means the machine has finished, and from
+-- 'hegel_state_machine_next_rule' it means the worker's round is over. It is
+-- not a @hegel_result_t@ return code.
 
 pattern HEGEL_STATE_MACHINE_DONE :: Int64
 pattern HEGEL_STATE_MACHINE_DONE = (#const HEGEL_STATE_MACHINE_DONE)
@@ -934,8 +937,7 @@ foreign import ccall safe "hegel_run_free"
 -- * marking the case complete
 -- * cloning onto an independent stream
 --
--- Nearly all are declared @unsafe@. Despite the request/reply framing, they
--- execute inline on the calling thread, never call back into Haskell, and
+-- Nearly all are declared @unsafe@. They execute inline on the calling thread, never call back into Haskell, and
 -- never touch disk. The engine does not run at all between
 -- 'hegel_next_test_case' calls, so per-case calls never contend with the
 -- database persistence and shrink bookkeeping those calls do. Each handle's
@@ -1138,12 +1140,13 @@ foreign import ccall unsafe "hegel_state_machine_next_group"
 -- run this round, honoring swarm-selected rule restrictions, or signal that
 -- the worker's round budget is exhausted.
 --
--- The engine owns the machine's step cap: once it decides to stop, this
--- writes 'HEGEL_STATE_MACHINE_DONE' into @*out_rule_index@ instead of a rule
--- index, rather than returning an error. Call this exactly once per loop
--- iteration, unconditionally, on generation and replay alike, since skipping
--- a call misaligns every later draw the same way skipping any other draw
--- would. Pass @worker_index = 0@ at concurrency 1.
+-- At the round's join point this writes 'HEGEL_STATE_MACHINE_DONE' into
+-- @*out_rule_index@ instead of a rule index. The machine's @step_count@ is
+-- enforced by 'hegel_state_machine_next_group' instead.
+--
+-- Call this exactly once per loop iteration, unconditionally, on generation
+-- and replay alike, since skipping a call misaligns every later draw the same
+-- way skipping any other draw would. Pass @worker_index = 0@ at concurrency 1.
 --
 -- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted, which is
 -- distinct from the machine finishing normally.
@@ -1157,7 +1160,9 @@ foreign import ccall unsafe "hegel_state_machine_next_rule"
     -> IO CInt
 
 -- | Report that the rule most recently handed to worker @worker_index@ was
--- rejected, so it does not count toward the engine's step budget.
+-- rejected. At concurrency 1 the rejected rule does not count toward the
+-- machine's @step_count@, and at higher concurrency the worker's slot is
+-- retried.
 --
 -- Returns 'HEGEL_E_INVALID_ARG' when the worker has no outstanding rule.
 foreign import ccall unsafe "hegel_state_machine_rule_rejected"
@@ -1567,7 +1572,9 @@ foreign import ccall unsafe "hegel_generate_string_result_free"
 
 -- | Record a numeric observation for the targeting phase to hill-climb toward.
 --
--- @label@ must be non-@NULL@ valid UTF-8.
+-- @label@ must be non-@NULL@ valid UTF-8, and each label may be recorded at
+-- most once per test case. The call has no effect unless the target phase is
+-- enabled.
 foreign import ccall unsafe "hegel_target"
   hegel_target :: Ptr HegelContext -> Ptr HegelTestCase -> CDouble -> CString -> IO CInt
 
@@ -1804,8 +1811,8 @@ withProfileSettings ctx profile action = mask $ \restore -> do
     Left e -> pure (Left e)
     Right s -> Right <$> (restore (action s) `finally` void (hegel_settings_free ctx s))
 
--- | Start a run with the given settings, run the action, then join the
--- worker thread and free the run handle.
+-- | Start a run with the given settings, run the action, then free the run
+-- handle, completing any in-flight test case.
 --
 -- The run's engine output goes to @sink@, or to stderr for 'Nothing'. Throws
 -- 'HegelError' if the engine fails to start.
@@ -1854,7 +1861,8 @@ startRun ctx start = alloca $ \out -> do
     else lastErrorMessage ctx >>= \msg -> throwIO HegelError {code = rc, message = msg}
 
 -- | Copy the reproduction blob for @f@ into a fresh 'ByteString', or return
--- 'Nothing' when the failure carries no blob (e.g. a health-check failure).
+-- 'Nothing' when the failure carries no blob, as for an unconfirmed
+-- nondeterministic failure or one found by a blob replay.
 --
 -- The underlying C pointer is borrowed from the failure snapshot and only valid
 -- until 'hegel_failure_free'; this function copies it immediately so the

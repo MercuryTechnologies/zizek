@@ -3,15 +3,8 @@
 
 -- | hspec integration.
 --
--- 'prop' is a drop-in for @it@ that derives a stable example-database key from
--- the test's path and persists failures for replay (the usual entry point):
---
--- @
--- describe "reverse" $ do
---   'prop' "is involutive" do
---     xs <- 'Hegel.Property.forAll' (Gen.list (Gen.int & Gen.build) & Gen.build)
---     reverse (reverse xs) 'Hegel.Property.===' xs
--- @
+-- 'prop', the usual entry point, is a drop-in for @it@ that derives a stable
+-- example-database key from the test's path and persists failures for replay.
 --
 -- Use 'propWith' for explicit 'Settings', which override the resolved settings
 -- profile. Persistence follows the profile's database, which the @ci@ profile

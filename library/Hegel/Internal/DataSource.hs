@@ -769,7 +769,8 @@ stateMachineNextRule tc sm workerIndex =
     pure $ if raw == HEGEL_STATE_MACHINE_DONE then Nothing else Just (fromIntegral raw)
 
 -- | Report that the rule most recently handed to worker @workerIndex@ was
--- rejected, so it does not count toward the engine's step budget.
+-- rejected. At concurrency 1 the rejected rule does not count toward the
+-- machine's step count, and at higher concurrency the worker's slot is retried.
 stateMachineRuleRejected :: TestCase -> Ptr HegelStateMachine -> Int -> IO ()
 stateMachineRuleRejected tc sm workerIndex = do
   result <- hegel_state_machine_rule_rejected tc.handle.ctx tc.handle.ptr sm (fromIntegral workerIndex)

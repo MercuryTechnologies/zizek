@@ -54,7 +54,7 @@ data Gen a where
   -- | 'fmap' over a source generator.
   Map :: Word64 -> (b -> a) -> Gen b -> Gen a
   -- | Applicative composition of independent draws. A spine of two or more
-  -- non-'Pure' leaves gets a @TUPLE@ span.
+  -- non-'Pure' leaves gets a tuple span.
   Ap :: Word64 -> Gen (b -> a) -> Gen b -> Gen a
   -- | Monadic composition of dependent draws.
   Bind :: Word64 -> Gen b -> (b -> Gen a) -> Gen a
@@ -83,9 +83,9 @@ instance Functor Gen where
 -- | @('<*>')@ and @('>>=')@ have deliberately different semantics:
 --
 -- * @('<*>')@ treats draws as independent: @hegel@ gets to shrink each
---   component separately, grouped in a @TUPLE@ span.
+--   component separately, grouped in a tuple span.
 -- * @('>>=')@ treats draws as dependent: the second draw may vary with the
---   first, so the two are grouped in a @FLAT_MAP@ span.
+--   first, so the two are grouped in a flat-map span.
 instance Applicative Gen where
   pure = Pure
   gf <*> ga = Ap (apLabel gf ga) gf ga
@@ -229,9 +229,9 @@ element xs = Draw (spanLabel LabelSampledFrom) \tc -> do
     -- generator rather than on every draw.
     values = Vector.fromList xs
 
--- | Wrap a generator so that schema expansion terminates when it appears
--- on a recursive edge.  Without 'defer', a self-referential generator causes
--- a @\<\<loop\>\>@ exception at construction time.
+-- | Wrap a generator so that computing its span label terminates when it
+-- appears on a recursive edge. Without 'defer', a self-referential generator
+-- causes a @\<\<loop\>\>@ exception when it is constructed.
 --
 -- Example: a binary tree whose branches recurse through 'defer'.
 --

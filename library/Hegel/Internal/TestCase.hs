@@ -46,9 +46,8 @@ import Witch qualified
 
 -- | Build the per-case environment around an engine 'Handle'.
 --
--- The test-case handle is caller-owned whatever its origin: one from
--- 'hegel_next_test_case' is freed once its 'markComplete' has run, and one
--- replayed from a blob is freed by its bracket.
+-- The test-case handle stays caller-owned, and the runner frees it with
+-- 'hegel_test_case_free' once the case finishes.
 --
 -- In 'IO' to allocate the case's reusable draw 'Slot' and its event buffer.
 mkTestCase :: Tick.Recording -> Handle -> IO TestCase
@@ -163,7 +162,7 @@ takeDraws tc = case tc.recording of
 -- a normal "continue" signal at any point during the run (not only after
 -- INTERESTING).
 --
--- Only called from the run loop ('Hegel.Runner.runTestCase').
+-- Call it exactly once per case, from the runner that pulled the case.
 markComplete :: TestCase -> Status -> IO ()
 markComplete tc status = do
   -- The status code is the 'Status' discriminant ('Witch.into'); only an
