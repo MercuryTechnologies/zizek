@@ -26,7 +26,7 @@ data Phase
     Target
   | -- | Shrink discovered failures.
     Shrink
-  deriving stock (Show, Eq)
+  deriving stock (Show, Eq, Enum, Bounded)
 
 -- | The @hegel_phase_t@ single-bit wire flag.
 --

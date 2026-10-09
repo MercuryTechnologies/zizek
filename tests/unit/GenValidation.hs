@@ -25,6 +25,7 @@ import Hegel.Property.Branch qualified as Branch
 import Hegel.Property.Fork qualified as Fork
 import Hegel.Report (Abort (..), FailureEvidence (..), FailureOutcome (..), PropertyFailed (..), Report (..), Result (..))
 import Hegel.Runner qualified as Runner
+import Hegel.Seed (Seed (..))
 import Hegel.Settings (Settings (..), defaultSettings)
 import Hegel.Settings qualified as Settings
 import Hegel.Stateful.Concurrent qualified as Concurrent
@@ -71,7 +72,7 @@ spec = do
           body = do
             n <- Property.forAll (Gen.int & Gen.min 0 & Gen.max 50 & Gen.build)
             void (Property.forAll (Gen.int & Gen.min n & Gen.max 0 & Gen.build))
-      report <- Property.check defaultSettings {seed = Just 42} body
+      report <- Property.check defaultSettings {seed = Just (SeedFixed 42)} body
       evidence <- expectCaptured report.result
       evidence.message `shouldSatisfy` T.isInfixOf "min = 1"
       fmap (.srcLocFile) evidence.loc `shouldBe` Just "tests/unit/GenValidation.hs"
@@ -131,17 +132,17 @@ spec = do
         readIORef cleaned `shouldReturn` True
 
     it "throws the original settings error from check_" do
-      Property.check_ defaultSettings {maxCloneDepth = -1} (pure ()) `shouldThrow` \SettingsError {} -> True
+      Property.check_ defaultSettings {maxCloneDepth = Just (-1)} (pure ()) `shouldThrow` \SettingsError {} -> True
 
     it "rejects a nonpositive branch cap as a malformed operation" do
       Property.check_ defaultSettings (void (Branch.replicateConcurrentlyBounded 0 1 (pure ()))) `shouldThrow` \(MalformedTest d) -> d.values == [("cap", "0")]
 
     it "permits zero clone depth for ordinary properties and rejects a fork at its call site" do
-      report <- Property.check defaultSettings {maxCloneDepth = 0} (pure ())
+      report <- Property.check defaultSettings {maxCloneDepth = Just 0} (pure ())
       show report.result `shouldBe` "Ok"
-      empty <- Property.check defaultSettings {maxCloneDepth = 0} (void (Branch.mapConcurrently pure ([] :: [Int])))
+      empty <- Property.check defaultSettings {maxCloneDepth = Just 0} (void (Branch.mapConcurrently pure ([] :: [Int])))
       show empty.result `shouldBe` "Ok"
-      forked <- Property.check defaultSettings {maxCloneDepth = 0} (void (Fork.spawn (pure ())))
+      forked <- Property.check defaultSettings {maxCloneDepth = Just 0} (void (Fork.spawn (pure ())))
       case forked.result of
         Aborted (Errored e) -> case fromException e of
           Just (MalformedTest d) -> case getCallStack d.callStack of
@@ -157,7 +158,7 @@ spec = do
       token <- case allFailureOutcomes baseline.result of
         [outcome] -> expectToken outcome
         other -> fail (show other)
-      for_ [defaultSettings {testCases = -1}, defaultSettings {maxCloneDepth = -1}] \settings -> do
+      for_ [defaultSettings {testCases = Just (-1)}, defaultSettings {maxCloneDepth = Just (-1)}] \settings -> do
         ran <- newIORef False
         let body = liftIO (writeIORef ran True)
         for_ [Property.check settings body, Runner.checkWithProgress (\_ -> writeIORef ran True) settings body, Runner.replay settings token body] \run -> do
@@ -169,14 +170,14 @@ spec = do
         readIORef ran `shouldReturn` False
 
     it "allows zero test cases and reports no valid examples" do
-      report <- Property.check defaultSettings {testCases = 0} (Property.failure "must not run")
+      report <- Property.check defaultSettings {testCases = Just 0} (Property.failure "must not run")
       case report.result of
         GaveUp _ -> pure ()
         other -> expectationFailure (show other)
 
     it "rejects settings before executing the property" do
       ran <- newIORef False
-      report <- Property.check defaultSettings {testCases = -1} (liftIO (writeIORef ran True))
+      report <- Property.check defaultSettings {testCases = Just (-1)} (liftIO (writeIORef ran True))
       case report.result of
         Aborted (Errored e) -> case fromException e of
           Just (SettingsError d) -> d.values `shouldBe` [("testCases", "-1")]
@@ -184,10 +185,10 @@ spec = do
         other -> expectationFailure (show other)
       readIORef ran `shouldReturn` False
     it "accepts the numeric limits without starting an engine" do
-      Settings.validate defaultSettings {testCases = 0, maxCloneDepth = 0} `shouldSatisfy` either (const False) (const True)
-      Settings.validate defaultSettings {testCases = maxBound, maxCloneDepth = maxBound} `shouldSatisfy` either (const False) (const True)
+      Settings.validate defaultSettings {testCases = Just 0, maxCloneDepth = Just 0} `shouldSatisfy` either (const False) (const True)
+      Settings.validate defaultSettings {testCases = Just maxBound, maxCloneDepth = Just maxBound} `shouldSatisfy` either (const False) (const True)
     it "validates the effective sample count" do
-      Runner.samples defaultSettings {testCases = -1} 0 (pure True) `shouldReturn` []
+      Runner.samples defaultSettings {testCases = Just (-1)} 0 (pure True) `shouldReturn` []
       Runner.samples defaultSettings (-1) (pure True) `shouldThrow` \SettingsError {} -> True
 
   describe "Gen.frequency validation" $ do

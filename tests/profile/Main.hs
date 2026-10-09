@@ -33,6 +33,7 @@ import Hegel.Phase (Phase (..))
 import Hegel.Property (Property, forAll, forAllSilent)
 import Hegel.Report (Abort (..), Report (..), Result (..), Stats (..), renderReport, renderReportRichAnsi)
 import Hegel.Runner (check)
+import Hegel.Seed (Seed (..))
 import Hegel.Settings (Settings (..), defaultSettings)
 import Hegel.Stateful qualified as Stateful
 import Hegel.Stateful.Concurrent qualified as Concurrent
@@ -106,28 +107,33 @@ usageError err = do
 
 runScenario :: Scenario -> Opts -> IO ()
 runScenario scenario opts = do
-  let settings =
+  let cases = fromMaybe scenario.defaultCases opts.cases
+      settings =
         defaultSettings
-          { testCases = fromMaybe scenario.defaultCases opts.cases,
-            seed = Just opts.seed,
+          { -- The base profile keeps a CI environment or a hegel.toml from changing
+            -- the workload.
+            profile = Just "base",
+            testCases = Just cases,
+            seed = Just (SeedFixed opts.seed),
             phases =
-              if opts.shrink
-                then defaultSettings.phases
-                else List.filter (/= Shrink) defaultSettings.phases,
+              Just
+                if opts.shrink
+                  then [minBound .. maxBound]
+                  else List.filter (/= Shrink) [minBound .. maxBound],
             -- Profiling workloads are deliberately extreme; the health
             -- checks would reject exactly the pathological cases (e.g.
             -- gen-hoard's 10k draws per case) we are here to measure.
             suppressHealthCheck =
-              [FilterTooMuch, TooSlow, TestCasesTooLarge, LargeInitialTestCase]
+              Just [FilterTooMuch, TooSlow, TestCasesTooLarge, LargeInitialTestCase]
           }
   case scenario.work of
     Check prop -> do
       report <- check settings prop
-      T.putStrLn (summary scenario settings.testCases report)
+      T.putStrLn (summary scenario cases report)
     RenderLoop findCases findProp render -> do
       -- Fixed find run (full shrink) so every capture renders the identical
       -- counterexample; only the render loop below is the workload.
-      report <- check settings {testCases = findCases} findProp
+      report <- check settings {testCases = Just findCases} findProp
       let iterations = fromMaybe scenario.defaultCases opts.cases
       replicateM_ iterations do
         rendered <- render report

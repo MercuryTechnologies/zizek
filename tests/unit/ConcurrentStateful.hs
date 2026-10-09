@@ -119,7 +119,7 @@ behaviorSpec = describe "run (behavior)" do
     let noop :: Concurrent.Rule Counter IO
         noop = Concurrent.rule "noop" \_ -> pure ()
         machine = Concurrent.Machine {initial = pure (Counter 0), rules = [noop], invariants = [], stepCount = Concurrent.defaultStepCount}
-    report <- check def {testCases = 10} (Concurrent.run (Concurrent.upTo 2) machine)
+    report <- check def {testCases = Just 10} (Concurrent.run (Concurrent.upTo 2) machine)
     report.result `shouldSatisfy` isOk
     report.stats.invalid `shouldBe` 0
     report.stats.valid `shouldSatisfy` (>= 1)
@@ -131,7 +131,7 @@ behaviorSpec = describe "run (behavior)" do
             n <- forAll intGen
             assert (n /= 42) "n is not 42"
         machine = Concurrent.Machine {initial = pure (Counter 0), rules = [failing], invariants = [], stepCount = Concurrent.defaultStepCount}
-    report <- check def {testCases = 200} (Concurrent.run (Concurrent.fixed 1) machine)
+    report <- check def {testCases = Just 200} (Concurrent.run (Concurrent.fixed 1) machine)
     evidence <- expectCaptured report.result
     evidence.message `shouldBe` "n is not 42"
     report.stats.invalid `shouldBe` 0
@@ -190,7 +190,7 @@ behaviorSpec = describe "run (behavior)" do
             assume (n `mod` 5 /= 0)
             liftIO (modifyIORef' ref (+ 1))
         machine = Concurrent.Machine {initial = liftIO (newIORef 0), rules = [sometimesRejects], invariants = [], stepCount = Concurrent.defaultStepCount}
-    report <- check def {testCases = 20} (Concurrent.run (Concurrent.fixed 1) machine)
+    report <- check def {testCases = Just 20} (Concurrent.run (Concurrent.fixed 1) machine)
     report.result `shouldSatisfy` isOk
 
   it "notes why a rejected step ended, once a later step fails" do
@@ -204,7 +204,7 @@ behaviorSpec = describe "run (behavior)" do
             assume (n /= 1)
             assert (n < 2) "fails on the second attempt"
         machine = Concurrent.Machine {initial = liftIO (newIORef 0), rules = [flaky], invariants = [], stepCount = 5}
-    report <- check def {testCases = 1} (Concurrent.run (Concurrent.fixed 1) machine)
+    report <- check def {testCases = Just 1} (Concurrent.run (Concurrent.fixed 1) machine)
     case singleCapturedEvidence report.result of
       Just FailureEvidence {notes} -> do
         let rejectionNotes =
@@ -233,7 +233,7 @@ behaviorSpec = describe "run (behavior)" do
     -- abandons another fork, and the default budget (50) would let a single
     -- case churn through far more fork spawn\/cancel cycles than this test
     -- needs to exercise the fix.
-    report <- check def {testCases = 10} (Concurrent.run (Concurrent.fixed 3) machine)
+    report <- check def {testCases = Just 10} (Concurrent.run (Concurrent.fixed 3) machine)
     report.result `shouldSatisfy` isOk
     let waitForSettled = do
           a <- readIORef active
@@ -268,7 +268,7 @@ behaviorSpec = describe "run (behavior)" do
               stepCount = 15,
               invariants = [oneGroupPerRound]
             }
-    report <- check def {testCases = 5} (Concurrent.run (Concurrent.upTo 4) machine)
+    report <- check def {testCases = Just 5} (Concurrent.run (Concurrent.upTo 4) machine)
     report.result `shouldSatisfy` isOk
     v <- readIORef violated
     v `shouldBe` False
@@ -294,7 +294,7 @@ behaviorSpec = describe "run (behavior)" do
               stepCount = 30,
               invariants = [noLostUpdates]
             }
-    report <- check def {testCases = 20} (Concurrent.run (Concurrent.fixed 4) machine)
+    report <- check def {testCases = Just 20} (Concurrent.run (Concurrent.fixed 4) machine)
     -- Whether the race fails deterministically or flakily, the engine's
     -- stamped replays capture the failing case with its step trace.
     evidence <- expectCaptured report.result
@@ -312,8 +312,8 @@ behaviorSpec = describe "run (behavior)" do
           machine = Concurrent.Machine {initial = pure (Counter 0), rules = [failing], invariants = [], stepCount = Concurrent.defaultStepCount}
           settings =
             def
-              { testCases = 5,
-                database = DatabaseDirectory dbDir,
+              { testCases = Just 5,
+                database = Just (DatabaseDirectory dbDir),
                 databaseKey = Just "concurrent-stateful-origin-spec"
               }
       report <- check settings (Concurrent.run (Concurrent.upTo 2) machine)
@@ -329,7 +329,7 @@ behaviorSpec = describe "run (behavior)" do
     let failing :: Concurrent.Rule Counter IO
         failing = Concurrent.rule "boom" \_ -> assert False "always fails"
         machine = Concurrent.Machine {initial = pure (Counter 0), rules = [failing], invariants = [], stepCount = Concurrent.defaultStepCount}
-    report <- check def {testCases = 5} (Concurrent.run (Concurrent.fixed 2) machine)
+    report <- check def {testCases = Just 5} (Concurrent.run (Concurrent.fixed 2) machine)
     case singleCapturedEvidence report.result of
       Just FailureEvidence {notes} -> do
         let isBoomStep :: Note -> Bool

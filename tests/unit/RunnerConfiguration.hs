@@ -11,14 +11,16 @@ import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Data.Word (Word64)
 import Hegel.Database (Database (..))
+import Hegel.Exception (Diagnostic (..), SettingsError (..))
 import Hegel.Gen qualified as Gen
 import Hegel.Hspec qualified as Hspec
 import Hegel.Internal.RunnerConfig qualified as Config
 import Hegel.Phase (Phase (..))
-import Hegel.Property (Property, assert, forAll, registerFinalizer)
+import Hegel.Property (Property, assert, assume, forAll, registerFinalizer)
 import Hegel.Replay (encodeReplayToken)
-import Hegel.Report (Report (..), Result (..))
+import Hegel.Report (Abort (..), FailureOutcome (..), Report (..), Result (..))
 import Hegel.Runner qualified as Runner
+import Hegel.Seed (Seed (..))
 import Hegel.Settings (Settings (..), defaultSettings)
 import Hegel.Tasty qualified as Native
 import Test.Hspec
@@ -38,41 +40,77 @@ import UnliftIO.Temporary (withSystemTempDirectory)
 
 spec :: Spec
 spec = do
+  describe "settings profiles" do
+    it "keeps every field the right-hand settings set" do
+      let combined = defaultSettings {testCases = Just 1, seed = Just (SeedFixed 1)} <> defaultSettings {seed = Just SeedFresh}
+      combined.testCases `shouldBe` Just 1
+      combined.seed `shouldBe` Just SeedFresh
+
+    it "starts from the named profile and lets an override win over it" do
+      let rejecting = draw >> assume False
+      developed <- Runner.check defaultSettings {profile = Just "development"} rejecting
+      developed.result `shouldSatisfy` unhealthy
+      -- The workload profile suppresses every health check.
+      worked <- Runner.check defaultSettings {profile = Just "workload"} rejecting
+      worked.result `shouldNotSatisfy` unhealthy
+      overridden <- Runner.check defaultSettings {profile = Just "workload", suppressHealthCheck = Just []} rejecting
+      overridden.result `shouldSatisfy` unhealthy
+
+    it "aborts with a SettingsError naming an unknown profile" do
+      report <- Runner.check defaultSettings {profile = Just "no-such-profile"} draw
+      case report.result of
+        Aborted (Errored e) | Just (SettingsError d) <- fromException e -> do
+          d.context `shouldBe` "Hegel.Settings.profile"
+          lookup "profile" d.values `shouldBe` Just "no-such-profile"
+        other -> expectationFailure (show other)
+
+    it "omits replay tokens when printBlob is off" do
+      printed <- Runner.check defaultSettings failing
+      fmap (isJust . (.failureReplayToken)) (allFailureOutcomes printed.result) `shouldBe` [True]
+      hidden <- Runner.check defaultSettings {printBlob = Just False} failing
+      fmap (isJust . (.failureReplayToken)) (allFailureOutcomes hidden.result) `shouldBe` [False]
+
   describe "runner configuration" do
     it "validates effective programmatic settings after overrides" do
-      let invalid = defaultSettings {testCases = -1}
-      Config.resolve invalid Config.emptyOverrides `shouldSatisfy` isLeft
+      let invalid = defaultSettings {testCases = Just (-1)}
+      Config.resolve invalid mempty `shouldSatisfy` isLeft
       override <- parsed [("test-cases", "1")]
       resolved <- either fail pure (Config.resolve invalid override)
-      resolved.testCases `shouldBe` 1
-      for_ [defaultSettings {maxCloneDepth = -1}] \settings ->
-        Config.resolve settings Config.emptyOverrides `shouldSatisfy` isLeft
+      resolved.testCases `shouldBe` Just 1
+      for_ [defaultSettings {maxCloneDepth = Just (-1)}] \settings ->
+        Config.resolve settings mempty `shouldSatisfy` isLeft
 
     it "renders invalid programmatic settings consistently in Hspec and Tasty" do
-      ran <- newIORef False
-      let settings = defaultSettings {maxCloneDepth = -1}
-          body = liftIO (writeIORef ran True)
-      native <- runTree mempty (Native.testPropertyWith settings "bad settings" body)
-      Tree.resultSuccessful native `shouldBe` False
-      Tree.resultDescription native `shouldContain` "SettingsError"
-      Tree.resultDescription native `shouldContain` "tests/unit/RunnerConfiguration.hs"
-      hspecResult <- evalFixture () (Hspec.propForWith settings "bad settings" (const body))
-      reason hspecResult `shouldContain` "SettingsError"
-      reason hspecResult `shouldContain` "tests/unit/RunnerConfiguration.hs"
-      readIORef ran `shouldReturn` False
+      -- The engine rejects an unknown profile, so its error is raised inside
+      -- the runner, after this library's own validation has passed.
+      for_ [defaultSettings {maxCloneDepth = Just (-1)}, defaultSettings {profile = Just "no-such-profile"}] \settings -> do
+        ran <- newIORef False
+        let body = liftIO (writeIORef ran True)
+        native <- runTree mempty (Native.testPropertyWith settings "bad settings" body)
+        Tree.resultSuccessful native `shouldBe` False
+        Tree.resultDescription native `shouldContain` "SettingsError"
+        Tree.resultDescription native `shouldContain` "tests/unit/RunnerConfiguration.hs"
+        hspecResult <- evalFixture () (Hspec.propForWith settings "bad settings" (const body))
+        reason hspecResult `shouldContain` "SettingsError"
+        reason hspecResult `shouldContain` "tests/unit/RunnerConfiguration.hs"
+        readIORef ran `shouldReturn` False
 
     it "preserves absent values and overlays only supplied settings" do
-      low <- parsed [("test-cases", "7"), ("seed", "11"), ("database", "off")]
+      low <- parsed [("test-cases", "7"), ("seed", "11"), ("database", "disabled")]
       high <- parsed [("seed", "12")]
-      resolved <- either fail pure (Config.resolve defaultSettings (Config.overlay low high))
-      resolved.testCases `shouldBe` 7
-      resolved.seed `shouldBe` Just 12
-      unchanged <- either fail pure (Config.resolve resolved Config.emptyOverrides)
+      resolved <- either fail pure (Config.resolve defaultSettings (low <> high))
+      resolved.testCases `shouldBe` Just 7
+      resolved.seed `shouldBe` Just (SeedFixed 12)
+      resolved.database `shouldBe` Just DatabaseDisabled
+      fresh <- parsed [("seed", "none"), ("database", "some/dir")]
+      fresh.settings.seed `shouldBe` Just SeedFresh
+      fresh.settings.database `shouldBe` Just (DatabaseDirectory "some/dir")
+      unchanged <- either fail pure (Config.resolve resolved mempty)
       show unchanged `shouldBe` show resolved
 
     it "accepts numeric bounds and rejects malformed and overflowing inputs" do
       for_ [("test-cases", "0"), ("test-cases", show (maxBound :: Int)), ("seed", show (maxBound :: Word64))] \entry -> void (parsed [entry])
-      for_ [("test-cases", "-1"), ("test-cases", "1.0"), ("test-cases", " 2"), ("test-cases", "+2"), ("test-cases", show (toInteger (maxBound :: Int) + 1)), ("seed", "18446744073709551616"), ("seed", ""), ("database", "directory:"), ("database", "somewhere")] \entry@(name, _) ->
+      for_ [("test-cases", "-1"), ("test-cases", "1.0"), ("test-cases", " 2"), ("test-cases", "+2"), ("test-cases", show (toInteger (maxBound :: Int) + 1)), ("seed", "18446744073709551616"), ("seed", ""), ("seed", "None"), ("database", "")] \entry@(name, _) ->
         case Config.parseOverrides (`lookup` [entry]) of
           Left message -> message `shouldContain` name
           Right value -> expectationFailure (show value)
@@ -81,11 +119,9 @@ spec = do
       for_ [[("replay", "bad")], [("replay-key", "id")], [("replay", "bad"), ("replay-key", "id")], [("replay", "bad"), ("replay-key", "")]] \values ->
         Config.parseOverrides (`lookup` values) `shouldSatisfy` isLeft
 
-    it "rejects persistence with missing or empty keys but permits a key alone" do
-      for_ [Nothing, Just ""] \key ->
-        Config.resolve defaultSettings {database = DatabaseDefault, databaseKey = key} Config.emptyOverrides `shouldSatisfy` isLeft
-      resolved <- either fail pure (Config.resolve defaultSettings {databaseKey = Just "id"} Config.emptyOverrides)
-      show resolved.database `shouldBe` "DatabaseDisabled"
+    it "leaves the database to the settings profile unless a source overrides it" do
+      resolved <- either fail pure (Config.resolve defaultSettings {databaseKey = Just "id"} mempty)
+      resolved.database `shouldBe` Nothing
 
     it "applies native options before executing and rejects invalid configuration without a body" do
       count <- newIORef (0 :: Int)
@@ -94,9 +130,9 @@ spec = do
       Tree.resultSuccessful result `shouldBe` True
       readIORef count `shouldReturn` 3
       writeIORef count 0
-      bad <- runTree (singleOption (Native.HegelDatabase (Just "default"))) (Native.testProperty "missing key" body)
+      bad <- runTree (singleOption (Native.HegelDatabase (Just ""))) (Native.testProperty "empty database" body)
       Tree.resultSuccessful bad `shouldBe` False
-      Tree.resultDescription bad `shouldContain` "databaseKey"
+      Tree.resultDescription bad `shouldContain` "hegel-database"
       readIORef count `shouldReturn` 0
       invalid <- runTree (singleOption (Native.HegelTestCases (Just "no"))) (Native.testProperty "invalid" body)
       Tree.resultSuccessful invalid `shouldBe` False
@@ -110,11 +146,11 @@ spec = do
       overrides <- parsed [("replay", T.unpack (encodeReplayToken token)), ("replay-key", "target")]
       count <- newIORef (0 :: Int)
       let body = liftIO (modifyIORef' count (+ 1)) >> failing
-      report <- Config.execute (\_ -> pure ()) defaultSettings {databaseKey = Just "target", phases = []} overrides body
+      report <- Config.execute (\_ -> pure ()) defaultSettings {databaseKey = Just "target", phases = Just []} overrides body
       allFailureOutcomes report.result `shouldSatisfy` (not . null)
       readIORef count `shouldReturn` 1
       writeIORef count 0
-      ordinary <- Config.execute (\_ -> pure ()) defaultSettings {databaseKey = Just "other", testCases = 3} overrides (draw >> liftIO (modifyIORef' count (+ 1)))
+      ordinary <- Config.execute (\_ -> pure ()) defaultSettings {databaseKey = Just "other", testCases = Just 3} overrides (draw >> liftIO (modifyIORef' count (+ 1)))
       show ordinary.result `shouldBe` show Ok
       readIORef count `shouldReturn` 3
       divergent <- Config.execute (\_ -> pure ()) defaultSettings {databaseKey = Just "target"} overrides draw
@@ -150,12 +186,12 @@ spec = do
       withSystemTempDirectory "hegel-fixture" \directory -> do
         let mk phases =
               describe "fixture group" $
-                Hspec.propForModify (\s -> s {database = DatabaseDirectory directory, phases}) "fixture" (\() -> failing)
-        first <- evalFixture () (mk defaultSettings.phases)
+                Hspec.propForModify (\s -> s {database = Just (DatabaseDirectory directory), phases = Just phases}) "fixture" (\() -> failing)
+        first <- evalFixture () (mk [minBound .. maxBound])
         reason first `shouldContain` "RunnerConfiguration:fixture group/fixture"
         second <- evalFixture () (mk [Reuse])
         reason second `shouldContain` "runner failure"
-        disabled <- evalFixture () (Hspec.propForWith defaultSettings {phases = [Reuse]} "fixture" (\() -> failing))
+        disabled <- evalFixture () (Hspec.propForWith defaultSettings {phases = Just [Reuse]} "fixture" (\() -> failing))
         reason disabled `shouldContain` "gave up"
 
     it "keeps one fixture around all cases and drains per-case finalizers" do
@@ -195,12 +231,12 @@ spec = do
 
     it "same-named native leaves persist independently with explicit keys" $
       withSystemTempDirectory "hegel-native" \directory -> do
-        let tree key phases = Native.testPropertyWith defaultSettings {database = DatabaseDirectory directory, databaseKey = Just key, phases} "same" failing
-        first <- runTree mempty (tree "first" defaultSettings.phases)
+        let tree key phases = Native.testPropertyWith defaultSettings {database = Just (DatabaseDirectory directory), databaseKey = Just key, phases = Just phases} "same" failing
+        first <- runTree mempty (tree "first" [minBound .. maxBound])
         Tree.resultDescription first `shouldContain` "runner failure"
         empty <- runTree mempty (tree "second" [Reuse])
         Tree.resultDescription empty `shouldContain` "gave up"
-        void (runTree mempty (tree "second" defaultSettings.phases))
+        void (runTree mempty (tree "second" [minBound .. maxBound]))
         for_ ["first", "second"] \key -> do
           stored <- runTree mempty (tree key [Reuse])
           Tree.resultDescription stored `shouldContain` "runner failure"
@@ -210,8 +246,8 @@ spec = do
         let make phases =
               testSpec "outer Tasty group" $
                 describe "inner" $
-                  Hspec.propModify (\s -> s {database = DatabaseDirectory directory, phases}) "adapted" failing
-        generated <- make defaultSettings.phases >>= runTree mempty
+                  Hspec.propModify (\s -> s {database = Just (DatabaseDirectory directory), phases = Just phases}) "adapted" failing
+        generated <- make [minBound .. maxBound] >>= runTree mempty
         Tree.resultDescription generated `shouldContain` "RunnerConfiguration:inner/adapted"
         stored <- make [Reuse] >>= runTree mempty
         Tree.resultDescription stored `shouldContain` "runner failure"
@@ -265,3 +301,9 @@ evalAround aroundAction specification = do
 reason :: Core.Result -> String
 reason (Core.Result _ (Core.Failure _ (Core.Reason message))) = message
 reason other = show other
+
+-- | Whether a run aborted on a failed health check.
+unhealthy :: Result -> Bool
+unhealthy = \case
+  Aborted (UnhealthyInput _) -> True
+  _ -> False

@@ -148,7 +148,7 @@ fanOutSpec = describe "runRound (real engine, several workers)" do
     dispatches <- newIORef (0 :: Int)
     seenWorkers <- newMVar Set.empty
     let n = 3 :: Int64
-    report <- check def {testCases = 5} do
+    report <- check def {testCases = Just 5} do
       env <- askEnv
       let tc = env.testCase
       (sm, _concurrency) <- liftIO (newConcurrentStateMachine tc ["increment"] [0] [] n n 300)
@@ -193,7 +193,7 @@ fanOutSpec = describe "runRound (real engine, several workers)" do
     -- waiting for every one of @n@ workers to reach 'dispatch' is not a
     -- precondition this round can guarantee. One worker mid-dispatch is
     -- enough to exercise cancellation.
-    report <- check def {testCases = 1} do
+    report <- check def {testCases = Just 1} do
       env <- askEnv
       let tc = env.testCase
       (sm, _concurrency) <- liftIO (newConcurrentStateMachine tc ["stall"] [0] [] n n n)

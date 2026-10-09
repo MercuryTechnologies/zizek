@@ -356,7 +356,7 @@ spec = describe "concurrent combinators" do
     it "a discarding branch discards the whole case" do
       -- Every case discards unconditionally, which would otherwise trip the
       -- engine's FilterTooMuch health check before GaveUp classification.
-      let settings = defaultSettings {suppressHealthCheck = [FilterTooMuch]}
+      let settings = defaultSettings {suppressHealthCheck = Just [FilterTooMuch]}
       report <- check settings do
         _ <- Branch.concurrently discard (pure ())
         pure ()

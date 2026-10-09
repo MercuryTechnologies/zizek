@@ -33,7 +33,7 @@ scenario =
       title = "sequential stateful: a stale reservation cache",
       settings =
         seeded
-          { database = DatabaseDirectory databaseDirectory,
+          { database = Just (DatabaseDirectory databaseDirectory),
             databaseKey = Just "gallery/warehouse"
           },
       property = Stateful.run machine,

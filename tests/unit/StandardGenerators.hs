@@ -35,7 +35,7 @@ spec :: Spec
 spec = do
   describe "Gen.bool" $ do
     it "draws Bool values" $ do
-      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.bool & Gen.build) $ \_ -> pure ()
+      check_ (defaultSettings {testCases = Just 1}) $ forEach (Gen.bool & Gen.build) $ \_ -> pure ()
 
     it "weighted 1.0 always draws True, 0.0 always False" $ do
       prop (Gen.bool & Gen.weighted 1.0 & Gen.build) $ \b ->
@@ -45,7 +45,7 @@ spec = do
 
   describe "Gen.binary" $ do
     it "draws ByteStrings" $ do
-      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.binary & Gen.build) $ \_ -> pure ()
+      check_ (defaultSettings {testCases = Just 1}) $ forEach (Gen.binary & Gen.build) $ \_ -> pure ()
 
     it "respects lower bound" $ do
       prop (Gen.binary & Gen.minSize 5 & Gen.maxSize 100 & Gen.build) $ \bs ->
@@ -62,7 +62,7 @@ spec = do
 
   describe "Gen.double" $ do
     it "draws Double values" $ do
-      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.double & Gen.build) $ \_ -> pure ()
+      check_ (defaultSettings {testCases = Just 1}) $ forEach (Gen.double & Gen.build) $ \_ -> pure ()
 
     it "respects min and max bounds" $ do
       prop (Gen.double & Gen.min (-2.0) & Gen.max 3.0 & Gen.build) $ \x ->
@@ -82,7 +82,7 @@ spec = do
 
   describe "Gen.float" $ do
     it "draws Float values" $ do
-      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.float & Gen.build) $ \_ -> pure ()
+      check_ (defaultSettings {testCases = Just 1}) $ forEach (Gen.float & Gen.build) $ \_ -> pure ()
 
   describe "Gen.element" $ do
     it "only emits values from the given list" $ do
@@ -111,7 +111,7 @@ spec = do
       map (`Internal.prefixSelect` [(2, 'a'), (1, 'b')]) [0, 1, 2] `shouldBe` "aab"
     it "accepts totals larger than a machine word" $ do
       traverse_
-        ( \n -> check_ (defaultSettings {testCases = 20}) $
+        ( \n -> check_ (defaultSettings {testCases = Just 20}) $
             forEach (Gen.frequency [(maxBound, pure i) | i <- [1 .. n :: Int]]) $
               \i -> i `shouldSatisfy` (\x -> x >= 1 && x <= n)
         )
@@ -120,7 +120,7 @@ spec = do
     it "covers all branches across many draws" $ do
       seen <- newIORef ([] :: [Int])
       check_
-        (defaultSettings {testCases = 200})
+        (defaultSettings {testCases = Just 200})
         $ forEach (Gen.frequency @Int [(1, pure 1), (1, pure 2), (1, pure 3)])
         $ \n -> modifyIORef' seen (n :)
       vs <- readIORef seen
@@ -130,7 +130,7 @@ spec = do
     it "emits both Nothing and Just" $ do
       seen <- newIORef ([] :: [Bool])
       check_
-        (defaultSettings {testCases = 200})
+        (defaultSettings {testCases = Just 200})
         $ forEach (Gen.maybe (Gen.bool & Gen.build))
         $ \m -> modifyIORef' seen (maybe False (const True) m :)
       vs <- readIORef seen
@@ -140,7 +140,7 @@ spec = do
     it "emits both Left and Right" $ do
       seen <- newIORef ([] :: [Bool])
       check_
-        (defaultSettings {testCases = 200})
+        (defaultSettings {testCases = Just 200})
         $ forEach (Gen.either (Gen.bool & Gen.build) (Gen.bool & Gen.build))
         $ \e -> modifyIORef' seen (either (const False) (const True) e :)
       vs <- readIORef seen
@@ -158,7 +158,7 @@ spec = do
     -- satisfiable case just because the retries missed the one match.
     it "does not discard when the source is finite" $ do
       report <-
-        check (defaultSettings {testCases = 200}) $
+        check (defaultSettings {testCases = Just 200}) $
           forEach (Gen.mapMaybe (\n -> if n == 10 then Just n else Nothing) (Gen.element [1 .. 10 :: Int])) $
             \n -> n `shouldBe` 10
       report.stats.invalid `shouldBe` 0
@@ -170,7 +170,7 @@ spec = do
 
     it "does not discard when the source is finite" $ do
       report <-
-        check (defaultSettings {testCases = 200}) $
+        check (defaultSettings {testCases = Just 200}) $
           forEach (Gen.just (Gen.element [Nothing, Nothing, Just (42 :: Int)])) $
             \n -> n `shouldBe` 42
       report.stats.invalid `shouldBe` 0
@@ -178,7 +178,7 @@ spec = do
   describe "Gen.enumBounded" $ do
     it "covers all constructors of a bounded enum" $ do
       seen <- newIORef ([] :: [Ordering])
-      check_ (defaultSettings {testCases = 200}) $
+      check_ (defaultSettings {testCases = Just 200}) $
         forEach Gen.enumBounded $
           \o -> modifyIORef' seen (o :)
       vs <- readIORef seen
@@ -191,7 +191,7 @@ spec = do
 
   describe "Gen.text" $ do
     it "draws Text values" $ do
-      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.text & Gen.build) $ \_ -> pure ()
+      check_ (defaultSettings {testCases = Just 1}) $ forEach (Gen.text & Gen.build) $ \_ -> pure ()
 
     it "respects minSize bound" $ do
       prop (Gen.text & Gen.minSize 5 & Gen.maxSize 100 & Gen.build) $ \t ->
@@ -218,11 +218,11 @@ spec = do
 
   describe "Gen.char" $ do
     it "draws Char values" $ do
-      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.char & Gen.build) $ \_ -> pure ()
+      check_ (defaultSettings {testCases = Just 1}) $ forEach (Gen.char & Gen.build) $ \_ -> pure ()
 
   describe "Gen.regex" $ do
     it "draws Text values" $ do
-      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.regex "[a-z]+" & Gen.build) $ \_ -> pure ()
+      check_ (defaultSettings {testCases = Just 1}) $ forEach (Gen.regex "[a-z]+" & Gen.build) $ \_ -> pure ()
 
     it "respects the pattern with fullMatch" $ do
       prop (Gen.regex "[0-9]+" & Gen.fullMatch & Gen.build) $ \t ->
@@ -239,10 +239,10 @@ spec = do
 
   describe "Gen.uuid" $ do
     it "draws UUID values" $ do
-      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.uuid & Gen.build) $ \_ -> pure ()
+      check_ (defaultSettings {testCases = Just 1}) $ forEach (Gen.uuid & Gen.build) $ \_ -> pure ()
 
     it "draws version-4 UUIDs" $ do
-      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.uuid & Gen.version 4 & Gen.build) $ \_ -> pure ()
+      check_ (defaultSettings {testCases = Just 1}) $ forEach (Gen.uuid & Gen.version 4 & Gen.build) $ \_ -> pure ()
 
   describe "Gen.uri" $ do
     it "draws URI values with http or https scheme" $ do
@@ -279,7 +279,7 @@ spec = do
 
   describe "Gen.date" $ do
     it "draws Day values" $ do
-      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.date & Gen.build) $ \_ -> pure ()
+      check_ (defaultSettings {testCases = Just 1}) $ forEach (Gen.date & Gen.build) $ \_ -> pure ()
 
     it "respects lower bound" $ do
       prop (Gen.date & Gen.min (fromGregorian 2000 1 1) & Gen.build) $ \d ->
@@ -309,7 +309,7 @@ spec = do
 
   describe "Gen.time" $ do
     it "draws TimeOfDay values" $ do
-      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.time & Gen.build) $ \_ -> pure ()
+      check_ (defaultSettings {testCases = Just 1}) $ forEach (Gen.time & Gen.build) $ \_ -> pure ()
 
     it "respects lower bound" $ do
       prop (Gen.time & Gen.min (TimeOfDay 12 0 0) & Gen.build) $ \t ->
@@ -334,7 +334,7 @@ spec = do
 
   describe "Gen.datetime" $ do
     it "draws LocalTime values" $ do
-      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.datetime & Gen.build) $ \_ -> pure ()
+      check_ (defaultSettings {testCases = Just 1}) $ forEach (Gen.datetime & Gen.build) $ \_ -> pure ()
 
     it "respects lower bound" $ do
       let lo = LocalTime (fromGregorian 2000 1 1) midnight
@@ -367,7 +367,7 @@ spec = do
 
   describe "Gen.duration" $ do
     it "draws NominalDiffTime values" $ do
-      check_ (defaultSettings {testCases = 1}) $ forEach (Gen.duration & Gen.build) $ \_ -> pure ()
+      check_ (defaultSettings {testCases = Just 1}) $ forEach (Gen.duration & Gen.build) $ \_ -> pure ()
 
     it "never negative" $ do
       prop (Gen.duration & Gen.build) $ \d ->
@@ -409,7 +409,7 @@ spec = do
     -- A true condition is a no-op, so every case stays valid.
     it "keeps every case valid when the condition holds" $ do
       report <-
-        check (defaultSettings {testCases = 50}) $
+        check (defaultSettings {testCases = Just 50}) $
           forEach (Gen.assume True >> pure (1 :: Int)) $
             \n -> n `shouldBe` 1
       report.stats.invalid `shouldBe` 0
@@ -421,7 +421,7 @@ spec = do
             x <- Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
             Gen.assume (x < 50)
             pure x
-      report <- check (defaultSettings {testCases = 200}) $ forEach bounded $ \x -> x `shouldSatisfy` (< 50)
+      report <- check (defaultSettings {testCases = Just 200}) $ forEach bounded $ \x -> x `shouldSatisfy` (< 50)
       case report.result of
         Ok -> report.stats.invalid `shouldSatisfy` (> 0)
         other -> expectationFailure ("expected Ok, got: " <> show other)
@@ -433,7 +433,7 @@ spec = do
       let bounded = do
             x <- Gen.int & Gen.min 0 & Gen.max 100 & Gen.build
             if x < 50 then pure x else Gen.discard
-      report <- check (defaultSettings {testCases = 200}) $ forEach bounded $ \x -> x `shouldSatisfy` (< 50)
+      report <- check (defaultSettings {testCases = Just 200}) $ forEach bounded $ \x -> x `shouldSatisfy` (< 50)
       case report.result of
         Ok -> report.stats.invalid `shouldSatisfy` (> 0)
         other -> expectationFailure ("expected Ok, got: " <> show other)
@@ -442,7 +442,7 @@ spec = do
     -- run gives up with every case counted invalid.
     it "gives up when every case discards" $ do
       report <-
-        check (defaultSettings {testCases = 50, suppressHealthCheck = [FilterTooMuch]}) $
+        check (defaultSettings {testCases = Just 50, suppressHealthCheck = Just [FilterTooMuch]}) $
           forEach (Gen.discard :: Gen Int) $
             \_ -> pure ()
       case report.result of
@@ -456,7 +456,7 @@ spec = do
     -- applies to the enumerated values directly, so no case is discarded.
     it "never discards over a finite satisfiable source" $ do
       report <-
-        check (defaultSettings {testCases = 200}) $
+        check (defaultSettings {testCases = Just 200}) $
           forEach (Gen.filtered even $ Gen.element [1 .. 10 :: Int]) $
             \n -> n `shouldSatisfy` even
       report.stats.invalid `shouldBe` 0
@@ -465,7 +465,7 @@ spec = do
     -- every case, so the run gives up.
     it "gives up over a finite unsatisfiable source" $ do
       report <-
-        check (defaultSettings {testCases = 50, suppressHealthCheck = [FilterTooMuch]}) $
+        check (defaultSettings {testCases = Just 50, suppressHealthCheck = Just [FilterTooMuch]}) $
           forEach (Gen.filtered (const False) $ Gen.element [1 .. 10 :: Int]) $
             \_ -> pure ()
       case report.result of
@@ -484,7 +484,7 @@ spec = do
     -- exhausts the retry budget on every case, so the run gives up.
     it "gives up over a non-enumerable unsatisfiable source" $ do
       report <-
-        check (defaultSettings {testCases = 50, suppressHealthCheck = [FilterTooMuch]}) $
+        check (defaultSettings {testCases = Just 50, suppressHealthCheck = Just [FilterTooMuch]}) $
           forEach (Gen.filtered (const False) $ Gen.int & Gen.build) $
             \_ -> pure ()
       case report.result of
@@ -498,7 +498,7 @@ spec = do
     -- the base and the recursive shape.
     it "lets a recursive generator terminate and branch" $ do
       seen <- newIORef ([] :: [Tree])
-      check_ (defaultSettings {testCases = 200}) $
+      check_ (defaultSettings {testCases = Just 200}) $
         forEach treeGen $
           \t -> modifyIORef' seen (t :)
       ts <- readIORef seen

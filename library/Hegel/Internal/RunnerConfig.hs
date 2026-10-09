@@ -4,7 +4,6 @@ module Hegel.Internal.RunnerConfig where
 import Control.Applicative ((<|>))
 import Control.Exception (displayException)
 import Data.Char (isDigit)
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Word (Word64)
@@ -14,33 +13,39 @@ import Hegel.Property.Internal (Property)
 import Hegel.Replay (ReplayToken, decodeReplayToken)
 import Hegel.Report (Report)
 import Hegel.Runner qualified as Runner
+import Hegel.Seed (Seed (..))
 import Hegel.Settings (Settings (..))
 import Hegel.Settings qualified as Settings
 import System.Environment (lookupEnv)
 import Text.Read (readMaybe)
 
--- | Optional values supplied by one configuration source.
+-- | Values supplied by one configuration source: settings overrides plus a
+-- request to replay one identity.
 data Overrides = Overrides
-  { testCases :: Maybe Int,
-    seed :: Maybe Word64,
-    database :: Maybe Database,
+  { settings :: Settings,
     replay :: Maybe (Text, ReplayToken)
   }
   deriving stock (Show)
 
--- | Preserve every lower-priority setting.
-emptyOverrides :: Overrides
-emptyOverrides = Overrides Nothing Nothing Nothing Nothing
+-- | Keeps everything the right-hand side supplies.
+instance Semigroup Overrides where
+  low <> high = Overrides (low.settings <> high.settings) (high.replay <|> low.replay)
+
+instance Monoid Overrides where
+  mempty = Overrides mempty Nothing
 
 -- | Names accepted by both runner integrations.
 settingNames :: [String]
 settingNames = ["test-cases", "seed", "database", "replay", "replay-key"]
 
 -- | Parse one source, requiring replay identity and token together.
+--
+-- Seeds and databases use the vocabulary of the engine's own @HEGEL_SEED@ and
+-- @HEGEL_DATABASE@ variables.
 parseOverrides :: (String -> Maybe String) -> Either String Overrides
 parseOverrides get = do
-  cases <- optional "test-cases" (settingInteger "test-cases" (\n -> Settings.defaultSettings {Settings.testCases = n}))
-  seed <- optional "seed" (natural "seed" 0)
+  testCases <- optional "test-cases" (settingInteger "test-cases" (\n -> Settings.defaultSettings {Settings.testCases = Just n}))
+  seed <- optional "seed" parseSeed
   database <- optional "database" parseDatabase
   replay <- case (get "replay", get "replay-key") of
     (Nothing, Nothing) -> Right Nothing
@@ -49,7 +54,7 @@ parseOverrides get = do
         Left err -> Left ("hegel-replay: " <> show err)
         Right decoded -> Right (Just (T.pack key, decoded))
     _ -> Left "hegel-replay and hegel-replay-key: supply a token and nonempty exact identity together in one source"
-  pure (Overrides cases seed database replay)
+  pure (Overrides Settings.defaultSettings {testCases, seed, database} replay)
   where
     optional :: String -> (String -> Either String a) -> Either String (Maybe a)
     optional name parser = traverse parser (get name)
@@ -67,62 +72,42 @@ settingInteger name configure input = case readMaybe input :: Maybe Integer of
          in either (Left . (("hegel-" <> name <> ": ") <>) . displayException) (const (Right n)) (Settings.validate (configure n))
   _ -> Left ("hegel-" <> name <> ": expected a decimal Int")
 
--- | Parse decimal digits within the supplied lower bound and target type maximum.
-natural :: forall a. (Integral a, Bounded a) => String -> Integer -> String -> Either String a
-natural name lowerBound input = case readMaybe input :: Maybe Integer of
+-- | Parse @none@ for a fresh seed, or a fixed seed's decimal digits.
+parseSeed :: String -> Either String Seed
+parseSeed "none" = Right SeedFresh
+parseSeed input = case readMaybe input :: Maybe Integer of
   Just value
     | not (null input),
       all (\c -> isDigit c && c <= '9') input,
-      value >= lowerBound,
-      value <= toInteger (maxBound :: a) ->
-        Right (fromInteger value)
-  _ -> Left ("hegel-" <> name <> ": expected an integer in [" <> show lowerBound <> ", " <> show (toInteger (maxBound :: a)) <> "]")
+      value <= toInteger (maxBound :: Word64) ->
+        Right (SeedFixed (fromInteger value))
+  _ -> Left ("hegel-seed: expected none or an integer in [0, " <> show (toInteger (maxBound :: Word64)) <> "]")
 
--- | Parse a disabled, default, or directory-backed store.
+-- | Parse @disabled@ for no persistence, or the root directory of a store.
 parseDatabase :: String -> Either String Database
-parseDatabase "off" = Right DatabaseDisabled
-parseDatabase "default" = Right DatabaseDefault
-parseDatabase value
-  | Just path <- T.stripPrefix "directory:" (T.pack value), not (T.null path) = Right (DatabaseDirectory (T.unpack path))
-  | otherwise = Left "hegel-database: expected off, default, or directory:PATH with a nonempty path"
+parseDatabase "disabled" = Right DatabaseDisabled
+parseDatabase "" = Left "hegel-database: expected disabled or a nonempty directory path"
+parseDatabase path = Right (DatabaseDirectory path)
 
--- | Read shared environment overrides at example execution time.
+-- | Read the replay request from @HEGEL_REPLAY@ and @HEGEL_REPLAY_KEY@ at
+-- example execution time.
+--
+-- The engine reads its own @HEGEL_*@ settings variables when it resolves a
+-- run's profile, so they are not read here.
 readOverrides :: IO (Either String Overrides)
 readOverrides = do
-  values <- traverse (lookupEnv . environmentName) settingNames
-  pure (parseOverrides (\name -> lookup name (zip settingNames values) >>= id))
-  where
-    environmentName :: String -> String
-    environmentName name = "HEGEL_" <> fmap convert name
-    convert '-' = '_'
-    convert c = toEnum (fromEnum c - fromEnum 'a' + fromEnum 'A')
+  replay <- lookupEnv "HEGEL_REPLAY"
+  replayKey <- lookupEnv "HEGEL_REPLAY_KEY"
+  pure (parseOverrides (`lookup` [(name, value) | (name, Just value) <- [("replay", replay), ("replay-key", replayKey)]]))
 
--- | Higher-priority values replace supplied lower-priority values.
-overlay :: Overrides -> Overrides -> Overrides
-overlay low high =
-  Overrides
-    (high.testCases <|> low.testCases)
-    (high.seed <|> low.seed)
-    (high.database <|> low.database)
-    (high.replay <|> low.replay)
-
--- | Resolve settings and reject persistence without an identity.
+-- | Apply a source's overrides over the settings given in code.
 resolve :: (HasCallStack) => Settings -> Overrides -> Either String Settings
 resolve settings overrides =
-  let resolved =
-        settings
-          { Settings.testCases = fromMaybe settings.testCases overrides.testCases,
-            Settings.seed = overrides.seed <|> settings.seed,
-            Settings.database = fromMaybe settings.database overrides.database
-          }
-   in either (Left . displayException) Right (withFrozenCallStack (Settings.validate resolved)) >> case resolved.database of
-        DatabaseDisabled -> Right resolved
-        _
-          | Just key <- resolved.databaseKey, not (T.null key) -> Right resolved
-          | otherwise -> Left "hegel-database: persistence requires a nonempty explicit databaseKey or a named Hspec helper"
+  let resolved = settings <> overrides.settings
+   in either (Left . displayException) (const (Right resolved)) (withFrozenCallStack (Settings.validate resolved))
 
 -- | Replay the exact matching identity once, or run ordinary exploration.
-execute :: (Int -> IO ()) -> Settings -> Overrides -> Property () -> IO Report
+execute :: (HasCallStack) => (Int -> IO ()) -> Settings -> Overrides -> Property () -> IO Report
 execute progress settings overrides body = case overrides.replay of
   Just (key, token) | settings.databaseKey == Just key -> Runner.replay settings token body
   _ -> Runner.checkWithProgress progress settings body

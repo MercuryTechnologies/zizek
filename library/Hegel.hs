@@ -54,6 +54,7 @@ module Hegel
     module Hegel.Verbosity,
     module Hegel.Nondeterminism,
     module Hegel.Database,
+    module Hegel.Seed,
     module Hegel.HealthCheck,
     module Hegel.Report,
     module Hegel.Replay,
@@ -109,6 +110,7 @@ import Hegel.Property
 import Hegel.Replay
 import Hegel.Report
 import Hegel.Runner (replay, sample, samples)
+import Hegel.Seed
 import Hegel.Settings
 import Hegel.Verbosity
 

@@ -96,7 +96,7 @@ spec = describe "TestCase.withClone" do
     withSystemTempDirectory "zizek-clone-replay" \dbDir -> do
       let settings =
             defaultSettings
-              { database = DatabaseDirectory dbDir,
+              { database = Just (DatabaseDirectory dbDir),
                 databaseKey = Just "test-case-clone-replay-spec"
               }
           failing :: Property ()
@@ -114,5 +114,5 @@ spec = describe "TestCase.withClone" do
       -- against r1's own value directly, rather than a second hardcoded
       -- "42", is the sharper claim: replay must reproduce THIS run's value,
       -- not merely land on the same boundary independently.
-      r2 <- check settings {phases = [Explicit, Reuse, Shrink]} failing
+      r2 <- check settings {phases = Just [Explicit, Reuse, Shrink]} failing
       annotatedValues r2.result `shouldBe` annotatedValues r1.result

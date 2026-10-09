@@ -208,7 +208,7 @@ spec = describe "Hegel.Property.Fork" do
 
   describe "clone-depth guard" do
     it "fails the case when Fork.spawn nests past maxCloneDepth" do
-      let settings = defaultSettings {maxCloneDepth = 2}
+      let settings = defaultSettings {maxCloneDepth = Just 2}
           recurse :: Int -> Property ()
           recurse 0 = pure ()
           recurse n = do
@@ -220,7 +220,7 @@ spec = describe "Hegel.Property.Fork" do
         other -> expectationFailure ("expected Aborted Errored, got: " <> show other)
 
     it "succeeds when nesting stays within maxCloneDepth" do
-      let settings = defaultSettings {maxCloneDepth = 8}
+      let settings = defaultSettings {maxCloneDepth = Just 8}
           recurse :: Int -> Property ()
           recurse 0 = pure ()
           recurse n = do
@@ -230,7 +230,7 @@ spec = describe "Hegel.Property.Fork" do
       report.result `shouldSatisfy` isOk
 
     it "trips the same guard for deeply nested Branch.concurrently" do
-      let settings = defaultSettings {maxCloneDepth = 2}
+      let settings = defaultSettings {maxCloneDepth = Just 2}
           recurse :: Int -> Property ()
           recurse 0 = pure ()
           recurse n = Branch.concurrently_ (recurse (n - 1)) (pure ())

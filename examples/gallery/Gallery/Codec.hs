@@ -25,7 +25,7 @@ scenario =
   Scenario
     { name = "codec",
       title = "plain property: two failures, one ambiguous codec",
-      settings = seeded {reportMultipleFailures = True},
+      settings = seeded {reportMultipleFailures = Just True},
       property = roundTrip,
       ascii = False,
       attempts = 1,

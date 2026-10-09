@@ -130,6 +130,7 @@ module Hegel.Internal.Foreign.Raw
     -- * Settings lifecycle
     -- $settings
     hegel_settings_new,
+    hegel_settings_new_for_profile,
     hegel_settings_free,
     hegel_settings_set_backend,
     hegel_settings_set_test_cases,
@@ -142,6 +143,10 @@ module Hegel.Internal.Foreign.Raw
     hegel_settings_set_phases,
     hegel_settings_set_suppress_health_check,
     hegel_settings_set_nondeterminism_strictness,
+    hegel_settings_set_print_blob,
+    hegel_settings_get_verbosity,
+    hegel_settings_get_database,
+    hegel_settings_get_print_blob,
 
     -- * Run lifecycle
     -- $run
@@ -231,6 +236,7 @@ module Hegel.Internal.Foreign.Raw
     peekUtf8,
     withContext,
     withSettings,
+    withProfileSettings,
     withRun,
     withBlobRun,
     Slot,
@@ -646,10 +652,22 @@ foreign import ccall unsafe "hegel_context_last_error"
 --
 -- Prefer 'withSettings'.
 
--- | Allocate a settings handle initialized with @libhegel@ defaults, writing
+-- | Allocate a settings handle resolved from the default profile, with the
+-- engine's @HEGEL_*@ settings environment variables applied over it, writing
 -- it into @*out_settings@.
+--
+-- Returns 'HEGEL_E_INVALID_ARG' when a @hegel.toml@ or one of those variables
+-- is malformed.
 foreign import ccall unsafe "hegel_settings_new"
   hegel_settings_new :: Ptr HegelContext -> Ptr (Ptr HegelSettings) -> IO CInt
+
+-- | Allocate a settings handle resolved from the named profile, as
+-- 'hegel_settings_new' does for the default one.
+--
+-- Returns 'HEGEL_E_INVALID_ARG' when the profile is unknown or resolution
+-- fails as it can for 'hegel_settings_new'.
+foreign import ccall unsafe "hegel_settings_new_for_profile"
+  hegel_settings_new_for_profile :: Ptr HegelContext -> CString -> Ptr (Ptr HegelSettings) -> IO CInt
 
 -- | Free a settings handle; safe to call with @NULL@.
 foreign import ccall unsafe "hegel_settings_free"
@@ -683,7 +701,7 @@ foreign import ccall unsafe "hegel_settings_set_report_multiple_failures"
 
 -- | Configure the on-disk example database.
 --
--- Pass @\"\"@ to disable, @nullPtr@ to leave at the current value.
+-- Pass @\"\"@ to disable, or @nullPtr@ for the default store under @.hegel/@.
 foreign import ccall unsafe "hegel_settings_set_database"
   hegel_settings_set_database :: Ptr HegelContext -> Ptr HegelSettings -> CString -> IO CInt
 
@@ -703,6 +721,28 @@ foreign import ccall unsafe "hegel_settings_set_suppress_health_check"
 -- @HEGEL_NONDETERMINISM_*@ values).
 foreign import ccall unsafe "hegel_settings_set_nondeterminism_strictness"
   hegel_settings_set_nondeterminism_strictness :: Ptr HegelContext -> Ptr HegelSettings -> Word32 -> IO CInt
+
+-- | Record whether a failure should be reported with its reproduction line.
+--
+-- The engine never acts on this itself; the caller decides what to print.
+foreign import ccall unsafe "hegel_settings_set_print_blob"
+  hegel_settings_set_print_blob :: Ptr HegelContext -> Ptr HegelSettings -> CBool -> IO CInt
+
+-- | Read the database a handle resolved to: @NULL@ for the default store,
+-- @\"\"@ for disabled, else the root directory.
+--
+-- The string borrows the handle and is valid until its next
+-- 'hegel_settings_set_database' or 'hegel_settings_free'.
+foreign import ccall unsafe "hegel_settings_get_database"
+  hegel_settings_get_database :: Ptr HegelContext -> Ptr HegelSettings -> Ptr CString -> IO CInt
+
+-- | Read whether a handle asks for failures to carry a reproduction line.
+foreign import ccall unsafe "hegel_settings_get_print_blob"
+  hegel_settings_get_print_blob :: Ptr HegelContext -> Ptr HegelSettings -> Ptr CBool -> IO CInt
+
+-- | Read a handle's @HEGEL_VERBOSITY_*@ value.
+foreign import ccall unsafe "hegel_settings_get_verbosity"
+  hegel_settings_get_verbosity :: Ptr HegelContext -> Ptr HegelSettings -> Ptr Word32 -> IO CInt
 
 -- $run
 --
@@ -1639,6 +1679,27 @@ withSettings ctx = bracket acquire release
       throwOnError ctx =<< hegel_settings_new ctx out
       peek out
     release s = void (hegel_settings_free ctx s)
+
+-- | Acquire a settings handle resolved from the named profile, or from the
+-- default profile when @profile@ is 'nullPtr', pass it to the action, and free
+-- it on exit.
+--
+-- Returns the engine's 'HegelError' without running the action when resolution
+-- fails, as it does with 'HEGEL_E_INVALID_ARG' for an unknown profile or a
+-- malformed @hegel.toml@ or environment variable.
+withProfileSettings :: Ptr HegelContext -> CString -> (Ptr HegelSettings -> IO a) -> IO (Either HegelError a)
+withProfileSettings ctx profile action = mask $ \restore -> do
+  acquired <- alloca \out -> do
+    rc <-
+      if profile == nullPtr
+        then hegel_settings_new ctx out
+        else hegel_settings_new_for_profile ctx profile out
+    if rc == HEGEL_OK
+      then Right <$> peek out
+      else lastErrorMessage ctx >>= \msg -> pure (Left HegelError {code = rc, message = msg})
+  case acquired of
+    Left e -> pure (Left e)
+    Right s -> Right <$> (restore (action s) `finally` void (hegel_settings_free ctx s))
 
 -- | Start a run with the given settings, run the action, then join the
 -- worker thread and free the run handle.

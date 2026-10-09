@@ -10,16 +10,17 @@
 --   ]
 -- @
 --
--- Native properties default to no persistence or identity. An explicit key
--- must distinguish properties sharing a database; a key alone enables no store.
--- To reuse legacy examples, enable the same store and supply the old
--- @Module:leaf label@ key explicitly. Existing database contents are preserved.
+-- Native properties have no identity, so nothing persists until a key is
+-- supplied. An explicit key must distinguish properties sharing a database,
+-- which the resolved settings profile provides unless the settings override it.
+-- To reuse legacy examples, supply the old @Module:leaf label@ key explicitly.
+-- Existing database contents are preserved.
 --
--- Source settings are overridden by shared @HEGEL_*@ environment variables,
--- then by Tasty's effective options, including @TASTY_HEGEL_*@ variables and
--- @localOption@. Missing overrides preserve earlier values. Counts must fit
--- a nonnegative 'Int', step limits must be positive, and seeds must fit Word64.
--- Database values are @off@, @default@, and @directory:PATH@.
+-- The engine's @HEGEL_*@ settings variables apply beneath the source settings,
+-- and Tasty's effective options, including @TASTY_HEGEL_*@ variables and
+-- @localOption@, apply over them. Missing overrides preserve earlier values.
+-- Counts must fit a nonnegative 'Int', and seeds are @none@ or must fit
+-- Word64. Database values are @disabled@ or a directory path.
 --
 -- Supply @--hegel-replay@ and @--hegel-replay-key@ together to replay the exact
 -- matching explicit identity once, bypassing phases and database access.
@@ -78,7 +79,7 @@ instance IsTest HegelTest where
           let configuration = do
                 low <- environment
                 high <- optionOverrides opts
-                let combined = Config.overlay low high
+                let combined = low <> high
                 resolved <- withFrozenCallStack (Config.resolve settings combined)
                 pure (resolved, combined)
           case configuration of
@@ -114,7 +115,7 @@ resolveColor Auto = do
     then pure False
     else hIsTerminalDevice stderr
 
--- | Run a native Tasty property with persistence disabled.
+-- | Run a native Tasty property with no database key, so nothing persists.
 -- Use 'testPropertyWith' with a unique explicit database key to persist failures.
 -- For automatic Hspec identities inside Tasty, convert Hspec specs with tasty-hspec.
 testProperty :: (HasCallStack) => TestName -> Property () -> TestTree
@@ -122,11 +123,10 @@ testProperty = withFrozenCallStack $ testPropertyWith defaultSettings
 
 -- | Run with explicit settings. Persistence requires a nonempty database key
 -- that distinguishes this property from every other property sharing its database.
--- A key alone leaves persistence disabled.
 testPropertyWith :: (HasCallStack) => Settings -> TestName -> Property () -> TestTree
 testPropertyWith settings name prop = singleTest name (HegelTest callStack settings prop)
 
--- | Customize native Tasty defaults, which disable persistence.
+-- | Customize native Tasty defaults, which have no database key.
 testPropertyModify :: (HasCallStack) => (Settings -> Settings) -> TestName -> Property () -> TestTree
 testPropertyModify modify = withFrozenCallStack $ testPropertyWith (modify defaultSettings)
 
@@ -148,7 +148,7 @@ instance IsOption HegelSeed where
   defaultValue = HegelSeed Nothing
   parseValue = Just . HegelSeed . Just
   optionName = pure "hegel-seed"
-  optionHelp = pure "Unsigned 64-bit seed; also accepts TASTY_HEGEL_SEED"
+  optionHelp = pure "Unsigned 64-bit seed, or none for a fresh one; also accepts TASTY_HEGEL_SEED"
 
 -- | Optional native Tasty override for @--hegel-database@.
 newtype HegelDatabase = HegelDatabase (Maybe String)
@@ -158,7 +158,7 @@ instance IsOption HegelDatabase where
   defaultValue = HegelDatabase Nothing
   parseValue = Just . HegelDatabase . Just
   optionName = pure "hegel-database"
-  optionHelp = pure "Store: off, default, or directory:PATH; persistence requires a key; also accepts TASTY_HEGEL_DATABASE"
+  optionHelp = pure "Store: disabled, or a directory path; persistence requires a key; also accepts TASTY_HEGEL_DATABASE"
 
 -- | Optional native Tasty override for @--hegel-replay@.
 newtype HegelReplay = HegelReplay (Maybe String)

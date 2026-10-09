@@ -38,7 +38,7 @@ Minimum supported GHC version is 9.10 (enforced in CI and `zizek.cabal`). If you
 - `library/Hegel/Diff.hs` — structural and line-level diffs backing `(===)` failures
 - `library/Hegel/Assertion.hs` — `assert`/`failure` (`MonadIO`-polymorphic, call-stack-aware), failure-origin formatting
 - `library/Hegel/Hspec.hs`, `library/Hegel/Tasty.hs` — framework integrations with automatic database keying (see Framework Integrations below)
-- `library/Hegel/Settings.hs` (with `Backend`, `Database`, `HealthCheck`, `Phase`, `Verbosity`) — run configuration
+- `library/Hegel/Settings.hs` (with `Backend`, `Database`, `HealthCheck`, `Nondeterminism`, `Phase`, `Seed`, `Verbosity`) — run configuration as a right-biased `Monoid` of `Maybe` overrides. `libhegel` resolves each run's settings profile (`development`, `ci`, `workload`, `hegel.toml`, and its own `HEGEL_*` variables), and `Hegel.Runner` applies only the fields a `Settings` sets on top, so code wins over the environment. `profile` selects a named profile. zizek reads only `HEGEL_REPLAY`/`HEGEL_REPLAY_KEY` itself
 - `library/Hegel/Runner.hs` — `check`: drives the `libhegel` engine, applies `Settings`, pumps test cases, replays reproduction blobs. A run the engine declared nondeterministic carries no reproduce blob and never replays, so `runTestCase` polls `hegel_test_case_is_nondeterministic` per case and, once flagged, runs it under a live `Recording` journal (`Hegel.Property.Internal.newRecordingJournal`) instead of `Silent`; a case classified `Interesting` stashes its exception together with whatever it recorded as one `LiveFailure`, written only on that classification and read back only if the run concludes `RunNondeterministic`, so the reported message, location, diff, and journal always come from the one case that actually failed rather than a bare dedup key or a different, unrelated case's capture
 - `library/Hegel/Gen.hs` — Umbrella re-export; designed for `import Hegel.Gen qualified as Gen`
 - `library/Hegel/Gen/Internal.hs` — `Gen` GADT, combinators (`oneOf`, `filtered`, `assume`, `draw`), `enumerate`
@@ -164,7 +164,7 @@ Spans (`start_span`/`stop_span`) group related generation calls so the engine ca
 
 ### Framework Integrations
 
-`Hegel.Hspec.prop` and `Hegel.Tasty.testProperty` derive a stable example-database key from the module plus the test's describe/name path, and enable database persistence (plain `defaultSettings`/`def` leave it off). Renaming a test or its group orphans its stored failures. Caveat: a tasty leaf cannot see its enclosing `testGroup`, so identically-named `testProperty` leaves in one module collide on the same key. Stored replays only reproduce against deterministic fixtures.
+`Hegel.Hspec.prop` and `Hegel.Tasty.testProperty` derive a stable example-database key from the module plus the test's describe/name path, and persist failures wherever the resolved profile's database points: `.hegel/` under `development`, nowhere under `ci`. Renaming a test or its group orphans its stored failures. Caveat: a tasty leaf cannot see its enclosing `testGroup`, so identically-named `testProperty` leaves in one module collide on the same key. Stored replays only reproduce against deterministic fixtures.
 
 ### Test Suites
 

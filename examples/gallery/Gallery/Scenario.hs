@@ -26,6 +26,7 @@ import Hegel.Report.Layout qualified as Layout
 import Hegel.Report.Style (Cell (..), defaultStyle)
 import Hegel.Report.Style qualified as Style
 import Hegel.Report.Trace qualified as Trace
+import Hegel.Seed (Seed (..))
 import Hegel.Settings (Settings (..), defaultSettings)
 
 -- | One deliberately failing property and the report shape it pins.
@@ -53,7 +54,7 @@ gallerySeed = 20261008
 
 -- | 'defaultSettings' pinned to 'gallerySeed'.
 seeded :: Settings
-seeded = defaultSettings {seed = Just gallerySeed}
+seeded = defaultSettings {seed = Just (SeedFixed gallerySeed)}
 
 -- | A mismatch when the condition fails.
 ensure :: Bool -> Text -> [Text]

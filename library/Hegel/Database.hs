@@ -7,9 +7,7 @@ where
 -- | The example database: a key\/value store of failing choice sequences,
 -- replayed by the 'Hegel.Phase.Reuse' phase on subsequent runs.
 --
--- A database is only useful together with a stable
--- 'Hegel.Settings.databaseKey'; without one there is nothing to file failures
--- under, which is why 'Hegel.Settings.defaultSettings' disables persistence.
+-- A run files and replays failures only under a 'Hegel.Settings.databaseKey'.
 data Database
   = -- | Use the engine's default store: @.hegel/@ relative to the working
     -- directory.
@@ -18,4 +16,4 @@ data Database
     DatabaseDisabled
   | -- | A directory-backed store at the given path.
     DatabaseDirectory !FilePath
-  deriving stock (Show)
+  deriving stock (Show, Eq)

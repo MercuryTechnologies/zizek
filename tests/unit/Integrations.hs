@@ -85,7 +85,7 @@ tastyTree =
     assert (x <= 10) "upper bound holds"
 
 multipleSettings :: Settings
-multipleSettings = def {reportMultipleFailures = True, testCases = 200, derandomize = True, databaseKey = Just "integration-multiple"}
+multipleSettings = def {reportMultipleFailures = Just True, testCases = Just 200, derandomize = Just True, databaseKey = Just "integration-multiple"}
 
 multipleProperty :: Property ()
 multipleProperty = do

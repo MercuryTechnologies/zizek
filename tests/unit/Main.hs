@@ -23,6 +23,7 @@ import SourceRendering qualified
 import StandardGenerators qualified
 import Stateful qualified
 import StatefulRoundInternal qualified
+import System.Environment (setEnv)
 import Test.Tasty (defaultMain, testGroup)
 import Test.Tasty.Hspec (testSpec)
 import TestCaseClone qualified
@@ -30,6 +31,9 @@ import TraceModel qualified
 
 main :: IO ()
 main = do
+  -- Tests that persist failures override the database with a temporary
+  -- directory, so every other keyed run stays out of the working directory.
+  setEnv "HEGEL_DATABASE" "disabled"
   alphabet <- testSpec "Hegel.Alphabet" Alphabet.spec
   controlSignals <- testSpec "control signals" ControlSignals.spec
   rendering <- testSpec "report rendering" ReportRendering.spec

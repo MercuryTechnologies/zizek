@@ -7,6 +7,7 @@ import Data.Function ((&))
 import Data.List (nub)
 import Hegel (Gen, defaultSettings, sample, samples)
 import Hegel.Gen qualified as Gen
+import Hegel.Seed (Seed (..))
 import Hegel.Settings (Settings (..))
 import Test.Hspec
 
@@ -21,7 +22,7 @@ spec = do
       n `shouldSatisfy` \x -> x >= 0 && x <= 100
 
     it "reproduces the same value under the same seed" do
-      let settings = defaultSettings {seed = Just 42}
+      let settings = defaultSettings {seed = Just (SeedFixed 42)}
           gen = intR (0, 1000000)
       a <- sample settings gen
       b <- sample settings gen
@@ -29,12 +30,19 @@ spec = do
 
     it "generally differs under a different seed" do
       let gen = intR (0, 1000000)
-      a <- sample defaultSettings {seed = Just 1} gen
-      b <- sample defaultSettings {seed = Just 2} gen
+      a <- sample defaultSettings {seed = Just (SeedFixed 1)} gen
+      b <- sample defaultSettings {seed = Just (SeedFixed 2)} gen
       a `shouldNotBe` b
 
     it "throws on a generator that always discards" do
       sample def Gen.discard `shouldThrow` anyIOException
+
+    -- The ci profile derandomizes, which would pin every keyless call to one seed.
+    it "draws a fresh seed per call under the ci profile" do
+      let gen = Gen.list (Gen.int & Gen.build) & Gen.minSize 8 & Gen.build
+      a <- sample defaultSettings {profile = Just "ci"} gen
+      b <- sample defaultSettings {profile = Just "ci"} gen
+      a `shouldNotBe` b
 
   describe "samples" do
     it "returns at most n values" do

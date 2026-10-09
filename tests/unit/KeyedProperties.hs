@@ -47,11 +47,11 @@ spec = do
     it "sets the key without changing the store" $ do
       let s = withDatabaseKey "k" def
       s.databaseKey `shouldBe` Just "k"
-      s.database `shouldSatisfy` isDisabled
+      s.database `shouldBe` Nothing
 
     it "leaves an explicitly chosen store untouched" $ do
-      let s = withDatabaseKey "k" defaultSettings {database = DatabaseDirectory "/tmp/x"}
-      s.database `shouldSatisfy` isDirectory
+      let s = withDatabaseKey "k" defaultSettings {database = Just (DatabaseDirectory "/tmp/x")}
+      s.database `shouldBe` Just (DatabaseDirectory "/tmp/x")
 
   describe "hspec prop" $ do
     it "persists a failure and replays it under the path-derived key" $
@@ -59,12 +59,12 @@ spec = do
         let mk ph label =
               describe "group" $
                 propWith
-                  defaultSettings {database = DatabaseDirectory dbDir, phases = ph}
+                  defaultSettings {database = Just (DatabaseDirectory dbDir), phases = Just ph}
                   label
                   failing
             replayOnly = [Explicit, Reuse, Shrink]
         -- Record a counterexample into the store under "group/label".
-        r1 <- evalOnly (mk defaultSettings.phases "label")
+        r1 <- evalOnly (mk [minBound .. maxBound] "label")
         r1 `shouldSatisfy` reproduced
         -- With generation disabled, only the stored example can fail it again;
         -- it does, so the path-derived key filed and refetched it.
@@ -81,14 +81,14 @@ spec = do
       -- the run path is covered by the temp-directory cases above and below.
       countExamples (describe "group" $ prop "passes" passing) `shouldReturn` 1
 
-    it "propWith def runs without persisting" $ do
+    it "propWith with the database disabled runs without persisting" $ do
       -- Generation finds the counterexample but never stores it, so a
       -- replay-only rerun has nothing to reproduce and gives up.
-      r1 <- evalOnly (describe "group" $ propWith def "label" failing)
+      r1 <- evalOnly (describe "group" $ propWith def {database = Just DatabaseDisabled} "label" failing)
       r1 `shouldSatisfy` reproduced
       r2 <-
         evalOnly
-          (describe "group" $ propWith defaultSettings {phases = [Explicit, Reuse, Shrink]} "label" failing)
+          (describe "group" $ propWith defaultSettings {database = Just DatabaseDisabled, phases = Just [Explicit, Reuse, Shrink]} "label" failing)
       r2 `shouldSatisfy` gaveUp
 
   describe "hspec propT" $ do
@@ -97,13 +97,13 @@ spec = do
         let mk ph =
               describe "group" $
                 propWithT
-                  defaultSettings {database = DatabaseDirectory dbDir, phases = ph}
+                  defaultSettings {database = Just (DatabaseDirectory dbDir), phases = Just ph}
                   (\env m -> runReaderT m env)
                   "under the limit"
                   prop_overEnv
         -- The env (an in-memory upper bound) is deterministic, so the stored
         -- counterexample reproduces on a replay-only rerun with the same env.
-        r1 <- evalWith (100 :: Int) (mk defaultSettings.phases)
+        r1 <- evalWith (100 :: Int) (mk [minBound .. maxBound])
         r1 `shouldSatisfy` reproduced
         r2 <- evalWith (100 :: Int) (mk [Explicit, Reuse, Shrink])
         r2 `shouldSatisfy` reproduced
@@ -177,14 +177,6 @@ reproduced r = maybe False (not . isInfixOf "gave up") (failureReason r)
 -- | The engine gave up without reproducing a counterexample.
 gaveUp :: Core.Result -> Bool
 gaveUp r = maybe False (isInfixOf "gave up") (failureReason r)
-
-isDisabled :: Database -> Bool
-isDisabled DatabaseDisabled = True
-isDisabled _ = False
-
-isDirectory :: Database -> Bool
-isDirectory (DatabaseDirectory _) = True
-isDirectory _ = False
 
 -- | Native Tasty leaves with default settings and an explicit key.
 tastyTree :: TestTree

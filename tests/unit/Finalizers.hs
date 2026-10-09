@@ -75,7 +75,7 @@ spec = describe "registerFinalizer" do
 
   it "runs finalizers LIFO (last registered, first run)" do
     order <- newIORef ([] :: [Text])
-    _ <- check (defaultSettings {testCases = 1}) do
+    _ <- check (defaultSettings {testCases = Just 1}) do
       registerFinalizer (modifyIORef' order (++ ["a"]))
       registerFinalizer (modifyIORef' order (++ ["b"]))
       pure ()
@@ -87,7 +87,7 @@ spec = describe "registerFinalizer" do
     -- registrations.
     counter <- newIORef (0 :: Int)
     let n = 2000 :: Int
-    report <- check (defaultSettings {testCases = 1}) do
+    report <- check (defaultSettings {testCases = Just 1}) do
       replicateConcurrently_
         n
         (registerFinalizer (atomicModifyIORef' counter \x -> (x + 1, ())))

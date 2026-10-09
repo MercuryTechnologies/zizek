@@ -160,6 +160,7 @@ library
     Hegel.Report.Style
     Hegel.Report.Trace
     Hegel.Runner
+    Hegel.Seed
     Hegel.Settings
     Hegel.Stateful
     Hegel.Stateful.Concurrent

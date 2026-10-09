@@ -292,7 +292,7 @@ statefulSpec = describe "Machine" do
             }
     report <-
       check
-        def {testCases = 5, suppressHealthCheck = [LargeInitialTestCase]}
+        def {testCases = Just 5, suppressHealthCheck = Just [LargeInitialTestCase]}
         (Stateful.run machine)
     case report.result of
       Aborted (UnhealthyInput msg) -> T.unpack msg `shouldContain` "TestCasesTooLarge"
@@ -300,7 +300,7 @@ statefulSpec = describe "Machine" do
 
   it "the default stepCount bounds steps, and most cases hit it exactly" do
     -- Analogue of the Rust reference's test_step_cap_is_50_most_of_the_time.
-    counts <- stepRecorder False Stateful.defaultStepCount def {testCases = 30}
+    counts <- stepRecorder False Stateful.defaultStepCount def {testCases = Just 30}
     counts `shouldSatisfy` all (\c -> c >= 1 && c <= 50)
     length (filter (== 50) counts) `shouldSatisfy` (> length counts `div` 2)
 
@@ -310,14 +310,14 @@ statefulSpec = describe "Machine" do
     -- the machine's stepCount, so a machine whose rule never gets
     -- past its precondition is bounded by the engine's separate 1000-attempt
     -- cap on a case with no successful rule, rather than the step cap.
-    counts <- stepRecorder True Stateful.defaultStepCount def {testCases = 10}
+    counts <- stepRecorder True Stateful.defaultStepCount def {testCases = Just 10}
     counts `shouldSatisfy` all (\c -> c >= 1 && c <= 1000)
     length (filter (== 1000) counts) `shouldSatisfy` (> length counts `div` 2)
 
   it "stepCount replaces the default cap" do
     -- Analogue of the Rust reference's test_stateful_step_count_setting_bounds_steps.
     let n = 7 :: Int
-    counts <- stepRecorder False n def {testCases = 30}
+    counts <- stepRecorder False n def {testCases = Just 30}
     counts `shouldSatisfy` all (\c -> c >= 1 && c <= n)
     length (filter (== n) counts) `shouldSatisfy` (> length counts `div` 2)
 
@@ -416,7 +416,7 @@ invariantCadence = do
                 Stateful.invariant "sampled" \_ -> liftIO (bump \c -> c {sampled = c.sampled + 1})
               ]
           }
-  report <- check def {testCases = 50} (Stateful.run machine)
+  report <- check def {testCases = Just 50} (Stateful.run machine)
   report.result `shouldSatisfy` \case
     Ok -> True
     _ -> False

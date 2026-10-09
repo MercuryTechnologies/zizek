@@ -1,17 +1,25 @@
 -- | Configuration for a single property run.
+--
+-- Every run starts from a settings profile that @libhegel@ resolves: the
+-- shipped @development@, @ci@, and @workload@ profiles, any defined in a
+-- @hegel.toml@ in the working directory or an ancestor, and the engine's
+-- @HEGEL_*@ settings environment variables applied over the profile. A
+-- 'Settings' value holds overrides on top of that profile, and every field
+-- left 'Nothing' keeps the profile's value.
 module Hegel.Settings
   ( Settings (..),
     defaultSettings,
+    defaultMaxCloneDepth,
     validate,
     SettingsError (..),
     withDatabaseKey,
   )
 where
 
+import Control.Applicative ((<|>))
 import Data.Default.Class (Default (..))
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Word (Word64)
 import GHC.Stack (HasCallStack, callStack)
 import Hegel.Backend (Backend (..))
 import Hegel.Database (Database (..))
@@ -19,82 +27,123 @@ import Hegel.Exception (Diagnostic (..), SettingsError (..))
 import Hegel.HealthCheck (HealthCheck)
 import Hegel.Nondeterminism (Nondeterminism (..))
 import Hegel.Phase (Phase (..))
+import Hegel.Seed (Seed (..))
 import Hegel.Verbosity (Verbosity (..))
 
--- | Configuration for a single property run.
+-- | Overrides for a single property run, layered over the resolved profile.
+--
+-- Combining two values with '<>' keeps every field the right-hand side sets
+-- and falls back to the left-hand side for the rest.
 data Settings = Settings
-  { -- | Nonnegative number of test cases to attempt.
-    testCases :: !Int,
-    -- | RNG seed. 'Nothing' picks a fresh seed each run.
-    seed :: !(Maybe Word64),
-    -- | Derive the seed from a hash of 'databaseKey' so runs are
-    -- deterministic without an explicit seed.
-    --
-    -- Ignored when 'seed' is set; only meaningful when 'databaseKey' is set.
-    derandomize :: !Bool,
+  { -- | The profile to start from. 'Nothing' selects the default profile,
+    -- which is @ci@ on a CI server, @workload@ inside Antithesis, and
+    -- @development@ otherwise, unless a @hegel.toml@ or
+    -- @HEGEL_DEFAULT_PROFILE@ names another.
+    profile :: !(Maybe Text),
+    -- | Nonnegative number of valid test cases to run.
+    testCases :: !(Maybe Int),
+    -- | The seed random generation starts from.
+    seed :: !(Maybe Seed),
+    -- | Derive a 'SeedFresh' seed from a hash of 'databaseKey' so runs are
+    -- deterministic without a 'SeedFixed' one.
+    derandomize :: !(Maybe Bool),
     -- | Where failing examples are persisted for replay.
-    database :: !Database,
-    -- | Stable per-test identity inside the 'database'; replay only works
-    -- when the same key is supplied on every run.
+    database :: !(Maybe Database),
+    -- | Stable per-test identity inside the 'database'. Nothing is persisted
+    -- or replayed without one, and replay only works when the same key is
+    -- supplied on every run.
     databaseKey :: !(Maybe Text),
     -- | Phases the engine should execute, in order.
-    phases :: ![Phase],
+    phases :: !(Maybe [Phase]),
     -- | The engine's source of randomness.
-    backend :: !Backend,
-    -- | How much diagnostic output the engine emits during a run.
-    verbosity :: !Verbosity,
+    backend :: !(Maybe Backend),
+    -- | How much diagnostic output the engine emits during a run. 'Nothing'
+    -- keeps the engine quiet unless the profile asks for 'Verbose' or 'Debug'
+    -- output.
+    verbosity :: !(Maybe Verbosity),
     -- | When 'True', the engine collects every distinct failure instead of
     -- stopping at the first.
-    reportMultipleFailures :: !Bool,
+    reportMultipleFailures :: !(Maybe Bool),
     -- | Health checks to skip.
-    suppressHealthCheck :: ![HealthCheck],
+    suppressHealthCheck :: !(Maybe [HealthCheck]),
     -- | How the run reacts to a test that behaves differently when the same
     -- choices are replayed.
-    nondeterminism :: !Nondeterminism,
+    nondeterminism :: !(Maybe Nondeterminism),
+    -- | Whether a failure's report carries the replay token that reproduces
+    -- it.
+    printBlob :: !(Maybe Bool),
     -- | Ceiling on how deeply 'Hegel.Property.Fork.spawn' and the
     -- @Branch.concurrently@ family may nest clone streams within one test
-    -- case. This must be nonnegative; zero permits properties that create no clones.
-    maxCloneDepth :: !Int
+    -- case, 'defaultMaxCloneDepth' when unset. This must be nonnegative; zero
+    -- permits properties that create no clones.
+    maxCloneDepth :: !(Maybe Int)
   }
   deriving stock (Show)
 
--- | Defaults for a property run: 100 test cases, a fresh seed each run, all
--- phases enabled, the seeded default backend, quiet output, tolerated
--- nondeterminism, and persistence disabled.
+-- | Keeps every field the right-hand side sets.
+instance Semigroup Settings where
+  a <> b =
+    Settings
+      { profile = b.profile <|> a.profile,
+        testCases = b.testCases <|> a.testCases,
+        seed = b.seed <|> a.seed,
+        derandomize = b.derandomize <|> a.derandomize,
+        database = b.database <|> a.database,
+        databaseKey = b.databaseKey <|> a.databaseKey,
+        phases = b.phases <|> a.phases,
+        backend = b.backend <|> a.backend,
+        verbosity = b.verbosity <|> a.verbosity,
+        reportMultipleFailures = b.reportMultipleFailures <|> a.reportMultipleFailures,
+        suppressHealthCheck = b.suppressHealthCheck <|> a.suppressHealthCheck,
+        nondeterminism = b.nondeterminism <|> a.nondeterminism,
+        printBlob = b.printBlob <|> a.printBlob,
+        maxCloneDepth = b.maxCloneDepth <|> a.maxCloneDepth
+      }
+
+-- | 'defaultSettings', which overrides nothing.
+instance Monoid Settings where
+  mempty = defaultSettings
+
+-- | Run under the default profile exactly as it resolves, with no key.
 defaultSettings :: Settings
 defaultSettings =
   Settings
-    { testCases = 100,
+    { profile = Nothing,
+      testCases = Nothing,
       seed = Nothing,
-      derandomize = False,
-      database = DatabaseDisabled,
+      derandomize = Nothing,
+      database = Nothing,
       databaseKey = Nothing,
-      phases = [Explicit, Reuse, Generate, Target, Shrink],
-      backend = Default,
-      verbosity = Quiet,
-      reportMultipleFailures = False,
-      suppressHealthCheck = [],
-      nondeterminism = Tolerate,
-      maxCloneDepth = 32
+      phases = Nothing,
+      backend = Nothing,
+      verbosity = Nothing,
+      reportMultipleFailures = Nothing,
+      suppressHealthCheck = Nothing,
+      nondeterminism = Nothing,
+      printBlob = Nothing,
+      maxCloneDepth = Nothing
     }
 
 -- | Alias for 'defaultSettings'.
 instance Default Settings where
   def = defaultSettings
 
+-- | The clone nesting ceiling used when 'maxCloneDepth' is unset.
+defaultMaxCloneDepth :: Int
+defaultMaxCloneDepth = 32
+
 -- | Set the stable 'databaseKey' used to file and replay failures, leaving the
 -- 'database' (where, or whether, they are persisted) untouched.
 --
--- Keys must distinguish properties sharing a database; persistence itself
--- is chosen by 'database'.
+-- Keys must distinguish properties sharing a database.
 withDatabaseKey :: Text -> Settings -> Settings
 withDatabaseKey key s = s {databaseKey = Just key}
 
 -- | Require nonnegative case and clone counts.
 validate :: (HasCallStack) => Settings -> Either SettingsError ()
 validate s
-  | s.testCases < 0 = invalid "testCases" s.testCases "must be nonnegative"
-  | s.maxCloneDepth < 0 = invalid "maxCloneDepth" s.maxCloneDepth "must be nonnegative"
+  | Just n <- s.testCases, n < 0 = invalid "testCases" n "must be nonnegative"
+  | Just n <- s.maxCloneDepth, n < 0 = invalid "maxCloneDepth" n "must be nonnegative"
   | otherwise = Right ()
   where
     invalid :: Text -> Int -> Text -> Either SettingsError ()

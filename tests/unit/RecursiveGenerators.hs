@@ -105,7 +105,7 @@ spec = describe "Gen.recursive" $ do
 
   it "generates both leaves and branches" $ do
     seen <- newIORef ([] :: [Tree])
-    check_ def {testCases = 200} $
+    check_ def {testCases = Just 200} $
       forEach (trees & Gen.build) $
         \t -> modifyIORef' seen (t :)
     ts <- readIORef seen

@@ -189,7 +189,7 @@ spec = describe "resource" do
 
   it "drains multiple resource acquisitions LIFO" do
     order <- newIORef ([] :: [Text])
-    _ <- check (defaultSettings {testCases = 1}) do
+    _ <- check (defaultSettings {testCases = Just 1}) do
       _ <- resource (modifyIORef' order (++ ["a-open"])) (const (modifyIORef' order (++ ["a-close"])))
       _ <- resource (modifyIORef' order (++ ["b-open"])) (const (modifyIORef' order (++ ["b-close"])))
       pure ()

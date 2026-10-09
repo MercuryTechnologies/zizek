@@ -34,7 +34,7 @@ scenario =
   Scenario
     { name = "bank",
       title = "concurrent stateful: tellers race, an auditor notices",
-      settings = defaultSettings {testCases = 20},
+      settings = defaultSettings {testCases = Just 20},
       property = Concurrent.run (Concurrent.fixed 3) machine,
       ascii = False,
       attempts = 3,

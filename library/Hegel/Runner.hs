@@ -11,7 +11,7 @@ where
 import Control.Concurrent.Async (wait, withAsyncBound)
 import Control.Exception (SomeException, bracket, finally, mask, toException, try)
 import Control.Exception qualified as E
-import Control.Monad (unless, void)
+import Control.Monad (unless, void, when)
 import Data.Bits ((.|.))
 import Data.ByteString (ByteString)
 import Data.Foldable (for_, traverse_)
@@ -20,15 +20,16 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Word (Word32)
-import Foreign (Ptr, Storable, alloca, fromBool, nullPtr, peek)
-import Foreign.C.Types (CBool (..), CInt, CSize)
-import GHC.Stack (HasCallStack, withFrozenCallStack)
+import Foreign (Ptr, Storable, alloca, castPtr, fromBool, nullPtr, peek)
+import Foreign.C.Types (CBool (..), CChar, CInt, CSize)
+import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Assertion (originOf)
 import Hegel.Database (Database (..))
+import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Internal (Gen, draw)
 import Hegel.HealthCheck (HealthCheck)
 import Hegel.Internal.Control (ControlSignal (..), FinalizerFailed (..), NoBacktrace (..), catchControl, isAborting)
@@ -69,8 +70,10 @@ import Hegel.Report
     Stats (..),
     aborted,
   )
+import Hegel.Seed (Seed (..))
 import Hegel.Settings (Settings (..))
 import Hegel.Settings qualified as Settings
+import Hegel.Verbosity (Verbosity (..))
 import UnliftIO.Exception (catchAny, throwIO)
 import UnliftIO.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Witch qualified
@@ -88,10 +91,9 @@ checkWithProgress progress settings prop =
   where
     go = either throwIO pure (withFrozenCallStack (Settings.validate settings)) *> execute
     execute
-      | settings.testCases == 0, DatabaseDisabled <- settings.database = pure (Report (GaveUp "no valid examples found") (Stats 0 0) Unstored)
+      | Just 0 <- settings.testCases, Just DatabaseDisabled <- settings.database = pure (Report (GaveUp "no valid examples found") (Stats 0 0) Unstored)
       | otherwise = withContext \ctx ->
-          withSettings ctx \s -> do
-            applySettings ctx settings s
+          withResolvedSettings ctx settings \resolved s -> do
             captures <- newIORef Map.empty
             -- Read and copy everything out of the run handle before withRun frees
             -- it on bracket exit (see 'readRunOutcome').
@@ -105,21 +107,21 @@ checkWithProgress progress settings prop =
                 failure : failures -> do
                   version <- engineVersion ctx
                   captured <- readIORef captures
-                  pure (Failures (fmap (capturedOutcome version captured) (failure :| failures)))
+                  pure (Failures (fmap (capturedOutcome resolved.printBlob version captured) (failure :| failures)))
               RunErrored -> pure (runErrored outcome)
             pure
               Report
                 { result,
                   stats = Stats nValid nInvalid,
                   reproduction = case result of
-                    Failures {} -> failureReproduction outcome.failures settings
+                    Failures {} -> failureReproduction outcome.failures resolved settings.databaseKey
                     _ -> Unstored
                 }
 
 -- | Pump every case out of a started run, then copy its outcome.
 driveRun :: Ptr HegelContext -> Settings -> Property () -> IORef (Map Text Capture) -> (Int -> IO ()) -> Ptr HegelRun -> IO (Int, Int, RunOutcome)
 driveRun ctx settings prop captures progress run = do
-  (nValid, nInvalid) <- driveLoop ctx (\journal -> propertyAction journal settings.maxCloneDepth prop) captures run progress
+  (nValid, nInvalid) <- driveLoop ctx (\journal -> propertyAction journal (fromMaybe Settings.defaultMaxCloneDepth settings.maxCloneDepth) prop) captures run progress
   outcome <- readRunOutcome ctx run
   pure (nValid, nInvalid, outcome)
 
@@ -142,23 +144,27 @@ runErrored outcome
 isUnsatisfiable :: Text -> Bool
 isUnsatisfiable = T.isInfixOf "Unsatisfiable"
 
--- | Pair an engine failure with the capture recorded for its origin.
-capturedOutcome :: Text -> Map Text Capture -> Failure -> FailureOutcome
-capturedOutcome version captured failure =
+-- | Pair an engine failure with the capture recorded for its origin, and with
+-- its replay token when @printBlob@ asks for one.
+capturedOutcome :: Bool -> Text -> Map Text Capture -> Failure -> FailureOutcome
+capturedOutcome printBlob version captured failure =
   FailureOutcome
     { failureOrigin = failure.origin,
-      failureReplayToken = Replay.makeReplayToken version failure.origin <$> failure.reproductionBlob,
+      failureReplayToken =
+        if printBlob
+          then Replay.makeReplayToken version failure.origin <$> failure.reproductionBlob
+          else Nothing,
       failureCaveat = failure.caveat,
       failureEvidence = maybe Uncaptured (Captured . captureEvidence) (Map.lookup failure.origin captured)
     }
 
 -- | Where a failing run's counterexample can be found again. A primary
--- failure without a reproduce blob has nothing to replay.
-failureReproduction :: [Failure] -> Settings -> Reproduction
-failureReproduction failures settings = case (failures, settings.database, settings.databaseKey) of
-  (Failure {reproductionBlob = Nothing} : _, _, _) -> Unreproducible
-  (_, DatabaseDisabled, _) -> Unstored
-  (_, _, Just key) -> Stored key
+-- failure without a reproduce blob has nothing to replay, and nothing is filed
+-- without both a database and a key.
+failureReproduction :: [Failure] -> Resolved -> Maybe Text -> Reproduction
+failureReproduction failures resolved databaseKey = case (failures, databaseKey) of
+  (Failure {reproductionBlob = Nothing} : _, _) -> Unreproducible
+  (_, Just key) | resolved.persists -> Stored key
   _ -> Unstored
 
 -- | Replay one failure token against a property without using the example
@@ -173,8 +179,7 @@ replay settings token prop =
     expected = Replay.tokenOriginOf token
     go =
       either throwIO pure (withFrozenCallStack (Settings.validate settings)) *> withContext \ctx ->
-        withSettings ctx \s -> do
-          applySettings ctx settings {database = DatabaseDisabled, databaseKey = Nothing} s
+        withResolvedSettings ctx settings {database = Just DatabaseDisabled, databaseKey = Nothing} \_ s -> do
           version <- engineVersion ctx
           if version /= Replay.tokenVersionOf token
             then pure (diverged (Stats 0 0) (IncompatibleVersions (Replay.tokenVersionOf token) version))
@@ -242,9 +247,21 @@ sample settings gen =
   where
     go =
       either throwIO pure (withFrozenCallStack (Settings.validate settings)) *> withContext \ctx ->
-        withSettings ctx \s -> do
-          applySettings ctx settings {testCases = 1, phases = [Generate], database = DatabaseDisabled, databaseKey = Nothing} s
+        withResolvedSettings ctx (sampling 1 settings) \_ s ->
           withRun ctx s (drawOneCase ctx gen)
+
+-- | Settings for a 'sample' or 'samples' run of @n@ generated cases, which
+-- persists nothing and draws from a fresh seed per call unless @settings@
+-- derandomizes.
+sampling :: Int -> Settings -> Settings
+sampling n settings =
+  settings
+    { testCases = Just n,
+      phases = Just [Generate],
+      database = Just DatabaseDisabled,
+      databaseKey = Nothing,
+      derandomize = Just (fromMaybe False settings.derandomize)
+    }
 
 -- | Pull the first test case a one-case run offers, draw @gen@
 -- against it, and report the outcome.
@@ -282,12 +299,11 @@ samples :: (HasCallStack) => Settings -> Int -> Gen a -> IO [a]
 samples settings n gen =
   withAsyncBound go wait
   where
-    go = either throwIO pure (withFrozenCallStack (Settings.validate settings {testCases = n})) *> execute
+    go = either throwIO pure (withFrozenCallStack (Settings.validate settings {testCases = Just n})) *> execute
     execute
       | n == 0 = pure []
       | otherwise = withContext \ctx ->
-          withSettings ctx \s -> do
-            applySettings ctx settings {testCases = n, phases = [Generate], database = DatabaseDisabled, databaseKey = Nothing} s
+          withResolvedSettings ctx (sampling n settings) \_ s -> do
             acc <- newIORef []
             outcome <- withRun ctx s \run -> do
               collectCases ctx gen acc run
@@ -322,32 +338,90 @@ collectCases ctx gen acc run = loop
 
 -- * Settings
 
--- | Map a 'Settings' value onto the corresponding @libhegel@ settings
--- setters.
+-- | What a settings handle resolved to, read back once its overrides are
+-- applied.
+data Resolved = Resolved
+  { -- | Whether the run has a database to file failures in.
+    persists :: !Bool,
+    -- | Whether a failure's report carries its replay token.
+    printBlob :: !Bool
+  }
+
+-- | Resolve the profile @settings@ selects, apply its overrides, and pass the
+-- action what the handle resolved to along with the handle itself.
+--
+-- Throws 'Settings.SettingsError' when the profile is unknown, or when a
+-- @hegel.toml@ or one of the engine's @HEGEL_*@ settings environment variables
+-- is malformed.
+withResolvedSettings :: (HasCallStack) => Ptr HegelContext -> Settings -> (Resolved -> Ptr HegelSettings -> IO a) -> IO a
+withResolvedSettings ctx settings action =
+  maybe ($ nullPtr) CString.withText settings.profile \name ->
+    withProfileSettings ctx name configured >>= \case
+      Right a -> pure a
+      Left e
+        | e.code == HEGEL_E_INVALID_ARG -> throwIO (profileError e)
+        | otherwise -> throwIO e
+  where
+    configured s = do
+      applySettings ctx settings s
+      quietByDefault ctx settings s
+      resolved <- readResolved ctx s
+      action resolved s
+    profileError e =
+      Settings.SettingsError
+        Diagnostic
+          { context = "Hegel.Settings.profile",
+            detail = fromMaybe "the settings profile could not be resolved" e.message,
+            values = [("profile", fromMaybe "default" settings.profile)],
+            callStack = callStack
+          }
+
+-- | Quiet the engine unless @settings@ sets a 'verbosity' or the profile asks
+-- for 'Verbose' or 'Debug' output.
+--
+-- A profile's 'Normal' looks the same as the engine default, so only an
+-- explicit override keeps it.
+quietByDefault :: Ptr HegelContext -> Settings -> Ptr HegelSettings -> IO ()
+quietByDefault ctx settings s = when (isNothing settings.verbosity) do
+  level <- alloca \out -> do
+    throwOnError ctx =<< hegel_settings_get_verbosity ctx s out
+    peek out
+  when (level == Witch.into @Word32 Normal) do
+    throwOnError ctx =<< hegel_settings_set_verbosity ctx s (Witch.into @Word32 Quiet)
+
+-- | Read back the resolved fields the runner acts on itself.
+readResolved :: Ptr HegelContext -> Ptr HegelSettings -> IO Resolved
+readResolved ctx s = do
+  database <- alloca \out -> do
+    throwOnError ctx =<< hegel_settings_get_database ctx s out
+    peek out
+  -- NULL is the default store and "" is a disabled one.
+  persists <- if database == nullPtr then pure True else (/= 0) <$> peek (castPtr database :: Ptr CChar)
+  CBool printBlob <- alloca \out -> do
+    throwOnError ctx =<< hegel_settings_get_print_blob ctx s out
+    peek out
+  pure Resolved {persists, printBlob = printBlob /= 0}
+
+-- | Apply every override a 'Settings' value sets to a resolved handle, leaving
+-- the profile's value for every field it leaves unset.
 applySettings :: Ptr HegelContext -> Settings -> Ptr HegelSettings -> IO ()
 applySettings ctx s ptr = do
-  chk $ hegel_settings_set_backend ctx ptr (Witch.into @Word32 s.backend)
-  chk $ hegel_settings_set_test_cases ctx ptr (fromIntegral s.testCases)
-  chk $ hegel_settings_set_verbosity ctx ptr (Witch.into @Word32 s.verbosity)
-
-  case s.seed of
-    Nothing -> chk $ hegel_settings_set_seed ctx ptr 0 (CBool 0)
-    Just seed ->
-      chk $ hegel_settings_set_seed ctx ptr seed (CBool 1)
-
-  chk $ hegel_settings_set_derandomize ctx ptr (fromBool s.derandomize)
-  chk $ hegel_settings_set_report_multiple_failures ctx ptr (fromBool s.reportMultipleFailures)
-  chk $ hegel_settings_set_phases ctx ptr (phasesBitmask s.phases)
-  chk $ hegel_settings_set_suppress_health_check ctx ptr (hcBitmask s.suppressHealthCheck)
-  chk $ hegel_settings_set_nondeterminism_strictness ctx ptr (Witch.into @Word32 s.nondeterminism)
-
-  -- "" disables the store; skipping the call leaves the engine default
-  -- (.hegel/ under the cwd).
-  case s.database of
-    DatabaseDefault -> pure ()
+  for_ s.backend \b -> chk $ hegel_settings_set_backend ctx ptr (Witch.into @Word32 b)
+  for_ s.testCases \n -> chk $ hegel_settings_set_test_cases ctx ptr (fromIntegral n)
+  for_ s.verbosity \v -> chk $ hegel_settings_set_verbosity ctx ptr (Witch.into @Word32 v)
+  for_ s.seed \case
+    SeedFresh -> chk $ hegel_settings_set_seed ctx ptr 0 (CBool 0)
+    SeedFixed seed -> chk $ hegel_settings_set_seed ctx ptr seed (CBool 1)
+  for_ s.derandomize \b -> chk $ hegel_settings_set_derandomize ctx ptr (fromBool b)
+  for_ s.reportMultipleFailures \b -> chk $ hegel_settings_set_report_multiple_failures ctx ptr (fromBool b)
+  for_ s.phases \ps -> chk $ hegel_settings_set_phases ctx ptr (phasesBitmask ps)
+  for_ s.suppressHealthCheck \hcs -> chk $ hegel_settings_set_suppress_health_check ctx ptr (hcBitmask hcs)
+  for_ s.nondeterminism \n -> chk $ hegel_settings_set_nondeterminism_strictness ctx ptr (Witch.into @Word32 n)
+  for_ s.printBlob \b -> chk $ hegel_settings_set_print_blob ctx ptr (fromBool b)
+  for_ s.database \case
+    DatabaseDefault -> chk $ hegel_settings_set_database ctx ptr nullPtr
     DatabaseDisabled -> CString.withFilePath "" \p -> chk $ hegel_settings_set_database ctx ptr p
     DatabaseDirectory dir -> CString.withFilePath dir \p -> chk $ hegel_settings_set_database ctx ptr p
-
   for_ s.databaseKey \key ->
     CString.withText key \p -> chk $ hegel_settings_set_database_key ctx ptr p
   where

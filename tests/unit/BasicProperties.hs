@@ -27,5 +27,5 @@ spec = do
     fmap noteText (filter (isDrawn . noteKind) (failureNotes report.result)) `shouldBe` ["42"]
 
   it "honors phases = [Generate]" $ do
-    check_ (defaultSettings {phases = [Generate]}) $ forEach (intR (0, 100)) $ \n ->
+    check_ (defaultSettings {phases = Just [Generate]}) $ forEach (intR (0, 100)) $ \n ->
       n `shouldSatisfy` (\x -> x >= 0 && x <= 100)

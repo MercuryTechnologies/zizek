@@ -42,7 +42,7 @@ oneFailure = assert False "one failure"
 spec :: Spec
 spec = do
   it "reports and replays multiple distinct deterministic failures" $ do
-    let settings = defaultSettings {reportMultipleFailures = True, testCases = 200}
+    let settings = defaultSettings {reportMultipleFailures = Just True, testCases = Just 200}
         failing :: Property ()
         failing = do
           x <- forAll (intR (0, 1))
@@ -131,7 +131,7 @@ spec = do
     withSystemTempDirectory "zizek-replay" \dbDir -> do
       let settings =
             defaultSettings
-              { database = DatabaseDirectory dbDir,
+              { database = Just (DatabaseDirectory dbDir),
                 databaseKey = Just "database-replay-spec"
               }
           failing :: Property ()
@@ -141,7 +141,7 @@ spec = do
       r1 <- check settings failing
       void (expectCaptured r1.result)
       -- With generation disabled, only the stored example can fail it again.
-      r2 <- check settings {phases = [Explicit, Reuse, Shrink]} failing
+      r2 <- check settings {phases = Just [Explicit, Reuse, Shrink]} failing
       void (expectCaptured r2.result)
 
   it "reports a fail-once flake with a caveat and no reproducer" $ do
@@ -157,7 +157,7 @@ spec = do
             else do
               writeIORef flag True
               assert False "fails exactly once (nondeterministic)"
-    r <- check defaultSettings {phases = [Generate]} nondeterministic
+    r <- check defaultSettings {phases = Just [Generate]} nondeterministic
     evidence <- expectCaptured r.result
     evidence.message `shouldBe` "fails exactly once (nondeterministic)"
     case allFailureOutcomes r.result of
@@ -179,7 +179,7 @@ spec = do
             else do
               writeIORef flag True
               assert False "fails exactly once (nondeterministic)"
-    r <- check defaultSettings {phases = [Generate], nondeterminism = Forbid} nondeterministic
+    r <- check defaultSettings {phases = Just [Generate], nondeterminism = Just Forbid} nondeterministic
     case r.result of
       Aborted (UnhealthyInput _) -> pure ()
       other -> expectationFailure (show other)
@@ -202,7 +202,7 @@ spec = do
     withSystemTempDirectory "zizek-replay-passing" \dbDir -> do
       let settings =
             defaultSettings
-              { database = DatabaseDirectory dbDir,
+              { database = Just (DatabaseDirectory dbDir),
                 databaseKey = Just "database-replay-passing-spec"
               }
           passing :: Property ()
@@ -216,7 +216,7 @@ spec = do
   it "derandomize makes keyed runs deterministic" $ do
     let settings =
           defaultSettings
-            { derandomize = True,
+            { derandomize = Just True,
               databaseKey = Just "derandomize-spec"
             }
         go = check settings do
@@ -239,14 +239,14 @@ spec = do
 
   it "explicit replay ignores populated and unusable database paths" $
     withSystemTempDirectory "replay-persistence" \dir -> do
-      let settings = defaultSettings {database = DatabaseDirectory dir, databaseKey = Just "persisted"}
+      let settings = defaultSettings {database = Just (DatabaseDirectory dir), databaseKey = Just "persisted"}
       void (check settings zeroFailure)
       contentsBefore <- databaseContents dir
       contentsBefore `shouldNotSatisfy` null
       token <- singletonToken =<< check defaultSettings oneFailure
       for_ [dir, dir </> "blocked"] \path -> do
         when (path /= dir) (writeFile path "a file cannot contain a database")
-        report <- replay settings {database = DatabaseDirectory path} token oneFailure
+        report <- replay settings {database = Just (DatabaseDirectory path)} token oneFailure
         evidence <- expectCaptured report.result
         evidence.message `shouldBe` "one failure"
         report.reproduction `shouldBe` Unstored
