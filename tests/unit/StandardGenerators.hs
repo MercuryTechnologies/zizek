@@ -152,28 +152,10 @@ spec = do
         (Gen.mapMaybe (\n -> if even n then Just n else Nothing) (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build))
         $ \n -> n `shouldSatisfy` even
 
-    -- A highly selective mapMaybe over a *finite* source (Gen.element is
-    -- enumerable) collapses to the pre-mapped list statically, so it never
-    -- falls back to the 3-try retry loop — and therefore never discards a
-    -- satisfiable case just because the retries missed the one match.
-    it "does not discard when the source is finite" $ do
-      report <-
-        check (defaultSettings {testCases = Just 200}) $
-          forEach (Gen.mapMaybe (\n -> if n == 10 then Just n else Nothing) (Gen.element [1 .. 10 :: Int])) $
-            \n -> n `shouldBe` 10
-      report.stats.invalid `shouldBe` 0
-
   describe "Gen.just" $ do
     it "unwraps Just values" $ do
       prop (Gen.just (Gen.maybe (Gen.bool & Gen.build))) $ \b ->
         b `shouldSatisfy` (\x -> x == True || x == False)
-
-    it "does not discard when the source is finite" $ do
-      report <-
-        check (defaultSettings {testCases = Just 200}) $
-          forEach (Gen.just (Gen.element [Nothing, Nothing, Just (42 :: Int)])) $
-            \n -> n `shouldBe` 42
-      report.stats.invalid `shouldBe` 0
 
   describe "Gen.enumBounded" $ do
     it "covers all constructors of a bounded enum" $ do
@@ -452,16 +434,13 @@ spec = do
         other -> expectationFailure ("expected GaveUp, got: " <> show other)
 
   describe "Gen.filtered" $ do
-    -- A finite, satisfiable source takes the static fast path: the predicate
-    -- applies to the enumerated values directly, so no case is discarded.
-    it "never discards over a finite satisfiable source" $ do
-      report <-
-        check (defaultSettings {testCases = Just 200}) $
-          forEach (Gen.filtered even $ Gen.element [1 .. 10 :: Int]) $
-            \n -> n `shouldSatisfy` even
-      report.stats.invalid `shouldBe` 0
+    -- A finite source goes through the same retry loop as any other, so
+    -- every emitted value respects the predicate.
+    it "emits only satisfying values over a finite source" $ do
+      prop (Gen.filtered even $ Gen.element [1 .. 10 :: Int]) $ \n ->
+        n `shouldSatisfy` even
 
-    -- A finite source with no satisfying value collapses to a discard on
+    -- A finite source with no satisfying value exhausts the retry budget on
     -- every case, so the run gives up.
     it "gives up over a finite unsatisfiable source" $ do
       report <-
@@ -474,15 +453,14 @@ spec = do
           report.stats.invalid `shouldSatisfy` (> 0)
         other -> expectationFailure ("expected GaveUp, got: " <> show other)
 
-    -- A non-enumerable source falls back to the bounded retry loop. Every
-    -- emitted value still respects the predicate.
-    it "emits only satisfying values over a non-enumerable source" $ do
+    -- Every value emitted over an open integer range respects the predicate.
+    it "emits only satisfying values over an open source" $ do
       prop (Gen.filtered even $ Gen.int & Gen.min 0 & Gen.max 100 & Gen.build) $ \n ->
         n `shouldSatisfy` even
 
-    -- A non-enumerable source whose values never satisfy the predicate
-    -- exhausts the retry budget on every case, so the run gives up.
-    it "gives up over a non-enumerable unsatisfiable source" $ do
+    -- An open source whose values never satisfy the predicate exhausts the
+    -- retry budget on every case, so the run gives up.
+    it "gives up over an open unsatisfiable source" $ do
       report <-
         check (defaultSettings {testCases = Just 50, suppressHealthCheck = Just [FilterTooMuch]}) $
           forEach (Gen.filtered (const False) $ Gen.int & Gen.build) $
@@ -504,38 +482,3 @@ spec = do
       ts <- readIORef seen
       ts `shouldSatisfy` elem Leaf
       ts `shouldSatisfy` any isBranch
-
-    -- 'defer' turns its argument into an opaque draw, so a deferred generator
-    -- is not enumerable even when its underlying generator is.
-    it "is opaque to enumerate" $ do
-      Gen.enumerate (Gen.defer (pure (1 :: Int))) `shouldBe` Nothing
-      Gen.enumerate (pure (1 :: Int)) `shouldBe` Just [1]
-
-  describe "Gen.enumerate" $ do
-    it "enumerates a Pure value" $ do
-      Gen.enumerate (pure (5 :: Int)) `shouldBe` Just [5]
-
-    it "maps over an enumerable source" $ do
-      Gen.enumerate ((+ 1) <$> Gen.element [1, 2, 3 :: Int]) `shouldBe` Just [2, 3, 4]
-
-    it "takes the cartesian product when both sides enumerate" $ do
-      Gen.enumerate ((,) <$> Gen.element [1, 2 :: Int] <*> Gen.element ['a', 'b'])
-        `shouldBe` Just [(1, 'a'), (1, 'b'), (2, 'a'), (2, 'b')]
-
-    it "concatenates enumerable branches of a choice" $ do
-      Gen.enumerate (Gen.oneOf [pure 1, pure 2, pure 3] :: Gen Int)
-        `shouldBe` Just [1, 2, 3]
-
-    it "does not enumerate a draw leaf" $ do
-      Gen.enumerate (Gen.int & Gen.build) `shouldBe` Nothing
-
-    it "does not enumerate a monadic bind" $ do
-      Gen.enumerate (Gen.element [1, 2 :: Int] >>= pure) `shouldBe` Nothing
-
-    it "does not enumerate a product with a non-enumerable side" $ do
-      Gen.enumerate ((,) <$> Gen.element [1, 2 :: Int] <*> (Gen.int & Gen.build))
-        `shouldBe` Nothing
-
-    it "does not enumerate a choice with a non-enumerable branch" $ do
-      Gen.enumerate (Gen.oneOf [pure 1, Gen.int & Gen.build] :: Gen Int)
-        `shouldBe` Nothing

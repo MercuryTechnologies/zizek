@@ -19,7 +19,6 @@ module Hegel.Gen.Internal
     frequency,
     maybe,
     either,
-    enumerate,
     prefixSelect,
 
     -- * Exceptions
@@ -153,17 +152,8 @@ discard = Draw \_ -> throwIO AssumeRejected
 -- | Apply a function to values drawn from a generator, making up to 3 attempts
 -- when the function returns 'Nothing'. Discards the test case when all attempts
 -- are exhausted.
---
--- When the source generator is finite (i.e. 'enumerate' returns @Just xs@), the
--- function is applied statically and the result is drawn from the pre-mapped
--- list in a single round-trip — no retry loop, and no risk of discarding a
--- satisfiable case just because the retries happened to miss.
 mapMaybe :: (a -> Prelude.Maybe b) -> Gen a -> Gen b
-mapMaybe f g = case enumerate g of
-  Just xs -> case [b | a <- xs, Prelude.Just b <- [f a]] of
-    [] -> discard
-    ys -> element ys
-  Nothing -> Draw \tc -> go tc (3 :: Int)
+mapMaybe f g = Draw \tc -> go tc (3 :: Int)
   where
     go tc n = do
       startSpan tc LabelFilter
@@ -183,11 +173,6 @@ just = mapMaybe Prelude.id
 
 -- | Filter values drawn from a generator, making up to 3 attempts before
 -- discarding the test case. Exhaustion is treated as 'assume' 'False'.
---
--- Defined in terms of 'mapMaybe', so it inherits the static fast path: when
--- the source generator is finite (i.e. 'enumerate' returns @Just xs@), the
--- predicate is applied statically and the result is drawn from the
--- pre-filtered list in a single round-trip — no retry loop needed.
 filtered :: (a -> Bool) -> Gen a -> Gen a
 filtered p = mapMaybe \a -> if p a then Prelude.Just a else Prelude.Nothing
 
@@ -232,21 +217,6 @@ element xs = withFrozenCallStack $ oneOf (fmap pure xs)
 -- normally, so shrinking still works).
 defer :: Gen a -> Gen a
 defer g = Draw \tc -> runGenerator tc g
-
--- | Return the finite set of values a generator can produce, or 'Nothing'
--- if the set is infinite or cannot be statically determined.
---
--- Useful as an optimization signal: 'filtered' uses this to pre-filter
--- finite generators instead of retrying at runtime.
-enumerate :: Gen a -> Maybe [a]
-enumerate (Pure a) = Just [a]
-enumerate (Map f g) = fmap f <$> enumerate g
-enumerate (Ap gf ga) = do
-  fs <- enumerate gf
-  as <- enumerate ga
-  pure [f a | f <- fs, a <- as]
-enumerate (OneOf gs) = concat <$> traverse enumerate gs
-enumerate _ = Nothing
 
 -- | Choose one of the given generators, weighted by the accompanying 'Int'.
 --

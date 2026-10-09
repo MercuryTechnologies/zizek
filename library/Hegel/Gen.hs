@@ -187,7 +187,6 @@ module Hegel.Gen
     filtered,
     mapMaybe,
     just,
-    enumerate,
 
     -- * Exceptions
     AssumeRejected (..),
@@ -253,7 +252,6 @@ import Hegel.Gen.Internal
     draw,
     either,
     element,
-    enumerate,
     filtered,
     frequency,
     just,

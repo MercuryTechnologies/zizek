@@ -43,7 +43,7 @@ Minimum supported GHC version is 9.10 (enforced in CI and `zizek.cabal`). If you
 - `library/Hegel/Internal/Settings.hs` — settings handles: `withResolvedSettings` resolves a profile, applies a `Settings`' overrides, and reads back what the runner acts on (`Resolved`). An unknown profile or a malformed `hegel.toml`/env var becomes a `SettingsError`
 - `library/Hegel/Runner.hs` — `check`: drives the `libhegel` engine, applies `Settings`, pumps test cases, replays reproduction blobs. `runTestCase` reads `hegel_test_case_should_capture` once at the start of each case, and runs a case the engine stamped under a live `Recording` journal (`Hegel.Property.Internal.newRecordingJournal`) and pool-event stream instead of `Silent`. A failing case files a `Capture` holding its exception, notes, and events under the failure's origin. A stamped capture always replaces an unstamped one, and otherwise the newer capture wins, so the engine's final replay supplies the report. Each engine `Failure` is paired with the capture for its own origin, so a report's message, location, diff, and journal come from a case that failed with that origin. A run whose primary failure has no reproduce blob reports `Unreproducible`
 - `library/Hegel/Gen.hs` — Umbrella re-export; designed for `import Hegel.Gen qualified as Gen`
-- `library/Hegel/Gen/Internal.hs` — `Gen` GADT, combinators (`oneOf`, `filtered`, `assume`, `draw`), `enumerate`
+- `library/Hegel/Gen/Internal.hs` — `Gen` GADT, combinators (`oneOf`, `filtered`, `assume`, `draw`)
 - `library/Hegel/Gen/Builder.hs` — `Build`, `HasMin`, `HasMax`, `HasSize` typeclasses
 - `library/Hegel/Gen/*.hs` — per-category builders (bool, integer, float, binary, char, text, regex, uri, uuid, list, set, map, …); `Hegel.Gen.Recursive` builds recursively defined data over an engine-owned depth cap, leaf budget, and retry protocol instead of a client-side loop
 - `library/Hegel/Collection.hs` — `libhegel`-managed variable-length collection handle, used by the list/set/map generators
@@ -144,7 +144,7 @@ All of these are FFI calls into `libhegel` via `Hegel.Internal.Foreign.Raw`, wra
 
 The GADT structure is interpreted, not just executed: `runInteractive` walks the constructors to decide span nesting for shrinking — `Map` opens MAPPED, `Ap` opens TUPLE (only with ≥2 non-`Pure` leaves), `Bind` opens FLAT_MAP, `OneOf` opens ONE_OF.
 
-`enumerate :: Gen a -> Maybe [a]` walks `Pure`/`Map`/`Ap`/`OneOf` to return a generator's finite value set when statically knowable (`Nothing` at any `Draw` or `Bind`). `filtered`/`mapMaybe` use it as a single-round-trip fast path over finite sources, falling back to a bounded retry loop otherwise.
+`filtered`/`mapMaybe` make up to three attempts, each in its own discardable span, and discard the case once all three miss; an exhausted filter surfaces as the engine's `FilterTooMuch` health check or an unsatisfiable run.
 
 ### Span System
 

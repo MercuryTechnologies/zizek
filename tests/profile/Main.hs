@@ -205,6 +205,7 @@ scenarios :: [Scenario]
 scenarios =
   [ Scenario "baseline" 10000 "one full-range int draw per case; per-case round-trip floor" (Check baselineProperty),
     Scenario "draws" 1000 "100 small int draws per case; per-draw round-trip cost" (Check drawsProperty),
+    Scenario "filter" 1000 "two filtered draws per case over finite sources; filter retry cost" (Check filterProperty),
     Scenario "payloads" 500 "one list-of-text + one map draw per case; per-element collection cost" (Check payloadsProperty),
     Scenario "steps" 2000 "passing one-rule counter machine; per-step overhead" (Check (Stateful.run counterMachine)),
     Scenario "mixed" 1000 "passing warehouse machine; realistic mixed stateful workload" (Check (Stateful.run (Warehouse.machine Warehouse.Fixed))),
@@ -283,6 +284,17 @@ baselineProperty = void (forAllSilent (Gen.int & Gen.build))
 -- of the measurement.
 drawsProperty :: Property ()
 drawsProperty = replicateM_ 100 (forAllSilent smallInt)
+
+-- | Filtered draws over finite sources, where a half or a third of the values
+-- satisfy the predicate, so the profile shows what the filter retry loop and
+-- its discards cost.
+filterProperty :: Property ()
+filterProperty = do
+  void (forAllSilent (Gen.filtered even (Gen.element [1 .. 10 :: Int])))
+  void (forAllSilent (Gen.mapMaybe thirds (Gen.element [1 .. 30 :: Int])))
+  where
+    thirds :: Int -> Maybe Int
+    thirds n = if n `mod` 3 == 0 then Just n else Nothing
 
 -- | One composite draw per case, each element its own typed FFI call: the
 -- per-element 'Hegel.Collection' span machinery, in contrast to the per-call
