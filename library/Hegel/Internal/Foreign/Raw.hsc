@@ -138,6 +138,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_settings_set_seed,
     hegel_settings_set_derandomize,
     hegel_settings_set_report_multiple_failures,
+    hegel_settings_set_unbounded_choices,
     hegel_settings_set_database,
     hegel_settings_set_database_key,
     hegel_settings_set_phases,
@@ -154,6 +155,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_settings_get_phases,
     hegel_settings_get_suppress_health_check,
     hegel_settings_get_report_multiple_failures,
+    hegel_settings_get_unbounded_choices,
     hegel_settings_get_print_blob,
     hegel_settings_get_backend,
     hegel_settings_get_nondeterminism_strictness,
@@ -709,6 +711,11 @@ foreign import ccall unsafe "hegel_settings_set_derandomize"
 foreign import ccall unsafe "hegel_settings_set_report_multiple_failures"
   hegel_settings_set_report_multiple_failures :: Ptr HegelContext -> Ptr HegelSettings -> CBool -> IO CInt
 
+-- | Let a test case make any number of choices instead of concluding it as an
+-- overrun at 2^20.
+foreign import ccall unsafe "hegel_settings_set_unbounded_choices"
+  hegel_settings_set_unbounded_choices :: Ptr HegelContext -> Ptr HegelSettings -> CBool -> IO CInt
+
 -- | Configure the on-disk example database.
 --
 -- Pass @\"\"@ to disable, or @nullPtr@ for the default store under @.hegel/@.
@@ -777,6 +784,10 @@ foreign import ccall unsafe "hegel_settings_get_suppress_health_check"
 -- | Read whether a handle collects every distinct failure.
 foreign import ccall unsafe "hegel_settings_get_report_multiple_failures"
   hegel_settings_get_report_multiple_failures :: Ptr HegelContext -> Ptr HegelSettings -> Ptr CBool -> IO CInt
+
+-- | Read whether a handle lifts the per-test-case choice limit.
+foreign import ccall unsafe "hegel_settings_get_unbounded_choices"
+  hegel_settings_get_unbounded_choices :: Ptr HegelContext -> Ptr HegelSettings -> Ptr CBool -> IO CInt
 
 -- | Read a handle's @HEGEL_BACKEND_*@ value.
 foreign import ccall unsafe "hegel_settings_get_backend"

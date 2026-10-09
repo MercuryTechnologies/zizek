@@ -87,11 +87,14 @@ spec = do
       based.backend `shouldBe` Just Default
       based.suppressHealthCheck `shouldBe` Just []
       based.printBlob `shouldBe` Just True
+      based.unboundedChoices `shouldBe` Just False
       based.maxCloneDepth `shouldBe` Just Settings.defaultMaxCloneDepth
       -- The suite's HEGEL_DATABASE sits over the profile, and code sits over both.
       based.database `shouldBe` Just DatabaseDisabled
       directed <- Profile.resolve defaultSettings {database = Just (DatabaseDirectory "some/dir")}
       directed.database `shouldBe` Just (DatabaseDirectory "some/dir")
+      unbounded <- Profile.resolve defaultSettings {unboundedChoices = Just True}
+      unbounded.unboundedChoices `shouldBe` Just True
       worked <- Profile.resolve defaultSettings {profile = Just "workload"}
       worked.suppressHealthCheck `shouldBe` Just [minBound .. maxBound]
       for_ [minBound .. maxBound] \level -> do

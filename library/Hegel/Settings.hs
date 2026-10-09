@@ -66,6 +66,13 @@ data Settings = Settings
     reportMultipleFailures :: !(Maybe Bool),
     -- | Health checks to skip.
     suppressHealthCheck :: !(Maybe [HealthCheck]),
+    -- | Let a test case make any number of choices. By default the engine
+    -- concludes a test case as an overrun once it makes 2^20 of them, which
+    -- bounds the memory a run spends recording choices.
+    --
+    -- A test case meant to run for a long time, such as a concurrent state
+    -- machine driven for hours, needs this on.
+    unboundedChoices :: !(Maybe Bool),
     -- | How the run reacts to a test that behaves differently when the same
     -- choices are replayed.
     nondeterminism :: !(Maybe Nondeterminism),
@@ -95,6 +102,7 @@ instance Semigroup Settings where
         verbosity = b.verbosity <|> a.verbosity,
         reportMultipleFailures = b.reportMultipleFailures <|> a.reportMultipleFailures,
         suppressHealthCheck = b.suppressHealthCheck <|> a.suppressHealthCheck,
+        unboundedChoices = b.unboundedChoices <|> a.unboundedChoices,
         nondeterminism = b.nondeterminism <|> a.nondeterminism,
         printBlob = b.printBlob <|> a.printBlob,
         maxCloneDepth = b.maxCloneDepth <|> a.maxCloneDepth
@@ -119,6 +127,7 @@ defaultSettings =
       verbosity = Nothing,
       reportMultipleFailures = Nothing,
       suppressHealthCheck = Nothing,
+      unboundedChoices = Nothing,
       nondeterminism = Nothing,
       printBlob = Nothing,
       maxCloneDepth = Nothing
