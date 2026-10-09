@@ -4,6 +4,7 @@ module KeyedProperties (spec, tastyTree) where
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
 import Data.Default.Class (def)
+import Data.Either (isLeft, isRight)
 import Data.Function ((&))
 import Data.List (isInfixOf)
 import Data.Text (Text)
@@ -12,10 +13,13 @@ import Hegel (Gen)
 import Hegel.Database (Database (..))
 import Hegel.Gen qualified as Gen
 import Hegel.Hspec (prop, propT, propWith, propWithT)
-import Hegel.Internal.DatabaseKey (joinPath, moduleFromCallStack, propKey)
+import Hegel.Internal.DatabaseKey (joinPath, moduleFromCallStack, propKey, testLocationOf)
 import Hegel.Phase (Phase (..))
 import Hegel.Property (Property, PropertyT, assert, forAll)
-import Hegel.Settings (Settings (..), defaultSettings, withDatabaseKey)
+import Hegel.Report (Report (..), Result (..))
+import Hegel.Runner qualified as Runner
+import Hegel.Settings (Settings (..), TestLocation (..), defaultSettings, withDatabaseKey)
+import Hegel.Settings qualified as Settings
 import Hegel.Tasty qualified
 import Test.Hspec
 import Test.Hspec.Core.Spec qualified as Core
@@ -42,6 +46,29 @@ spec = do
   describe "moduleFromCallStack" $
     it "falls back to a sentinel when the stack is empty" $
       moduleFromCallStack emptyCallStack `shouldBe` "<unknown-module>"
+
+  describe "testLocationOf" $ do
+    it "locates the call site and names the test by its describe path" $ do
+      let loc = deriveLocation ["reverse"] "is involutive"
+      fmap (.file) loc `shouldBe` Just "tests/unit/KeyedProperties.hs"
+      fmap (.scope) loc `shouldBe` Just "KeyedProperties"
+      fmap (.function) loc `shouldBe` Just "reverse/is involutive"
+      fmap (.line) loc `shouldSatisfy` maybe False (> 0)
+
+    it "has no location for an empty stack" $
+      testLocationOf emptyCallStack [] "standalone" `shouldBe` Nothing
+
+    it "rejects a line outside the unsigned 32-bit range" $ do
+      let at line = defaultSettings {testLocation = Just TestLocation {file = "F.hs", line, scope = "F", function = "f"}}
+      Settings.validate (at (-1)) `shouldSatisfy` isLeft
+      Settings.validate (at 4294967296) `shouldSatisfy` isLeft
+      Settings.validate (at 4294967295) `shouldSatisfy` isRight
+
+    it "runs a property with a location applied" $ do
+      report <- Runner.check defaultSettings {testCases = Just 5, testLocation = deriveLocation [] "located"} passing
+      case report.result of
+        Ok -> pure ()
+        other -> expectationFailure ("expected Ok, got: " <> show other)
 
   describe "withDatabaseKey" $ do
     it "sets the key without changing the store" $ do
@@ -189,3 +216,7 @@ tastyTree =
         "explicit key respected"
         passing
     ]
+
+-- | Derive a test location as if called from this module.
+deriveLocation :: (HasCallStack) => [String] -> String -> Maybe TestLocation
+deriveLocation = testLocationOf callStack

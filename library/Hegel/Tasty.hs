@@ -42,16 +42,18 @@ module Hegel.Tasty
   )
 where
 
+import Control.Applicative ((<|>))
 import Data.Maybe (isJust)
 import Data.Proxy (Proxy (..))
 import Data.Text qualified as T
 import GHC.Clock (getMonotonicTimeNSec)
 import GHC.Stack (CallStack, HasCallStack, callStack, withFrozenCallStack)
+import Hegel.Internal.DatabaseKey (testLocationOf)
 import Hegel.Internal.RunnerConfig qualified as Config
 import Hegel.Property.Internal (Property)
 import Hegel.Report (Report (..), Result (..), renderReportAuto)
 import Hegel.Report.Style qualified as Style
-import Hegel.Settings (Settings, defaultSettings)
+import Hegel.Settings (Settings (..), defaultSettings)
 import System.Environment (lookupEnv)
 import System.IO (hIsTerminalDevice, stderr, stdout)
 import Test.Tasty (TestName, TestTree)
@@ -123,7 +125,8 @@ testProperty = withFrozenCallStack $ testPropertyWith defaultSettings
 -- | Run with explicit settings. Persistence requires a nonempty database key
 -- that distinguishes this property from every other property sharing its database.
 testPropertyWith :: (HasCallStack) => Settings -> TestName -> Property () -> TestTree
-testPropertyWith settings name prop = singleTest name (HegelTest callStack settings prop)
+testPropertyWith settings name prop =
+  singleTest name (HegelTest callStack settings {testLocation = settings.testLocation <|> testLocationOf callStack [] name} prop)
 
 -- | Customize native Tasty defaults, which have no database key.
 testPropertyModify :: (HasCallStack) => (Settings -> Settings) -> TestName -> Property () -> TestTree

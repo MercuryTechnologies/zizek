@@ -166,7 +166,7 @@ Spans (`start_span`/`stop_span`) group related generation calls so the engine ca
 
 ### Framework Integrations
 
-`Hegel.Hspec.prop` and `Hegel.Tasty.testProperty` derive a stable example-database key from the module plus the test's describe/name path, and persist failures wherever the resolved profile's database points: `.hegel/` under `development`, nowhere under `ci`. Renaming a test or its group orphans its stored failures. Caveat: a tasty leaf cannot see its enclosing `testGroup`, so identically-named `testProperty` leaves in one module collide on the same key. Stored replays only reproduce against deterministic fixtures.
+`Hegel.Hspec.prop` and `Hegel.Tasty.testProperty` derive a stable example-database key from the module plus the test's describe/name path, and persist failures wherever the resolved profile's database points: `.hegel/` under `development`, nowhere under `ci`. Both also fill in `Settings.testLocation` from the call site (file, line, module, and describe/name path), which the engine uses to report each run's verdict inside Antithesis. Renaming a test or its group orphans its stored failures. Caveat: a tasty leaf cannot see its enclosing `testGroup`, so identically-named `testProperty` leaves in one module collide on the same key. Stored replays only reproduce against deterministic fixtures.
 
 ### Test Suites
 

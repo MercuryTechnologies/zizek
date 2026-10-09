@@ -1,4 +1,5 @@
--- | Deriving stable example-database keys from a test's identity.
+-- | Deriving a test's example-database key and source location from its
+-- identity.
 --
 -- A key is @"\<module\>:\<a/b/c\>/\<label\>"@: the call-site module (salt that
 -- removes cross-module collisions and survives line edits), then the ancestor
@@ -8,12 +9,14 @@ module Hegel.Internal.DatabaseKey
   ( propKey,
     moduleFromCallStack,
     joinPath,
+    testLocationOf,
   )
 where
 
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Stack (CallStack, SrcLoc (..), getCallStack)
+import Hegel.Settings (TestLocation (..))
 
 -- | Build a database key from the call site, the ancestor describe path, and
 -- the leaf label.
@@ -37,3 +40,18 @@ moduleFromCallStack cs = case getCallStack cs of
 -- | Join path segments with @\/@, the separator hspec uses for test paths.
 joinPath :: [String] -> Text
 joinPath = T.intercalate "/" . map T.pack
+
+-- | The location of the test defined at the nearest call frame, named by its
+-- describe path and leaf label joined as in 'propKey', or 'Nothing' when the
+-- stack has no frames.
+testLocationOf :: CallStack -> [String] -> String -> Maybe TestLocation
+testLocationOf cs path label = case getCallStack cs of
+  (_, loc) : _ ->
+    Just
+      TestLocation
+        { file = T.pack loc.srcLocFile,
+          line = loc.srcLocStartLine,
+          scope = T.pack loc.srcLocModule,
+          function = joinPath (path <> [label])
+        }
+  [] -> Nothing

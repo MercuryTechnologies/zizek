@@ -8,6 +8,7 @@
 -- left 'Nothing' keeps the profile's value.
 module Hegel.Settings
   ( Settings (..),
+    TestLocation (..),
     defaultSettings,
     defaultMaxCloneDepth,
     validate,
@@ -20,6 +21,7 @@ import Control.Applicative ((<|>))
 import Data.Default.Class (Default (..))
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Word (Word32)
 import GHC.Stack (HasCallStack, callStack)
 import Hegel.Backend (Backend (..))
 import Hegel.Database (Database (..))
@@ -53,6 +55,11 @@ data Settings = Settings
     -- or replayed without one, and replay only works when the same key is
     -- supplied on every run.
     databaseKey :: !(Maybe Text),
+    -- | Where the test is defined. Inside Antithesis the engine reports the
+    -- verdict of every run as an assertion located here, and elsewhere the
+    -- location is unused. Like the key, it is per-test identity, so a
+    -- registered profile does not keep it.
+    testLocation :: !(Maybe TestLocation),
     -- | Phases the engine should execute, in order.
     phases :: !(Maybe [Phase]),
     -- | The engine's source of randomness.
@@ -94,6 +101,21 @@ data Settings = Settings
   }
   deriving stock (Show)
 
+-- | Where a test is defined, for the engine's Antithesis reporting, which
+-- names the property @'scope'::'function' passes properties@.
+data TestLocation = TestLocation
+  { -- | The source file that defines the test.
+    file :: !Text,
+    -- | The line in 'file' where the test's definition begins, which must
+    -- fit in an unsigned 32-bit integer.
+    line :: !Int,
+    -- | The module enclosing the test.
+    scope :: !Text,
+    -- | The test's name.
+    function :: !Text
+  }
+  deriving stock (Eq, Show)
+
 -- | Keeps every field the right-hand side sets.
 instance Semigroup Settings where
   a <> b =
@@ -104,6 +126,7 @@ instance Semigroup Settings where
         derandomize = b.derandomize <|> a.derandomize,
         database = b.database <|> a.database,
         databaseKey = b.databaseKey <|> a.databaseKey,
+        testLocation = b.testLocation <|> a.testLocation,
         phases = b.phases <|> a.phases,
         backend = b.backend <|> a.backend,
         verbosity = b.verbosity <|> a.verbosity,
@@ -130,6 +153,7 @@ defaultSettings =
       derandomize = Nothing,
       database = Nothing,
       databaseKey = Nothing,
+      testLocation = Nothing,
       phases = Nothing,
       backend = Nothing,
       verbosity = Nothing,
@@ -157,11 +181,13 @@ defaultMaxCloneDepth = 32
 withDatabaseKey :: Text -> Settings -> Settings
 withDatabaseKey key s = s {databaseKey = Just key}
 
--- | Require nonnegative case and clone counts.
+-- | Require nonnegative case and clone counts, and a test location line that
+-- fits in an unsigned 32-bit integer.
 validate :: (HasCallStack) => Settings -> Either SettingsError ()
 validate s
   | Just n <- s.testCases, n < 0 = invalid "testCases" n "must be nonnegative"
   | Just n <- s.maxCloneDepth, n < 0 = invalid "maxCloneDepth" n "must be nonnegative"
+  | Just loc <- s.testLocation, loc.line < 0 || toInteger loc.line > toInteger (maxBound :: Word32) = invalid "testLocation" loc.line "line must fit in an unsigned 32-bit integer"
   | otherwise = Right ()
   where
     invalid :: Text -> Int -> Text -> Either SettingsError ()

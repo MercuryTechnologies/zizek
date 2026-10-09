@@ -84,7 +84,8 @@ readResolved ctx s = do
   pure Resolved {persists = database /= DatabaseDisabled, printBlob}
 
 -- | Read every engine-owned field of a resolved handle, keeping the
--- 'profile', 'databaseKey', and 'maxCloneDepth' that @settings@ supplied.
+-- 'profile', 'databaseKey', 'testLocation', and 'maxCloneDepth' that @settings@
+-- supplied.
 readSettings :: Ptr HegelContext -> Settings -> Ptr HegelSettings -> IO Settings
 readSettings ctx settings s = do
   testCases <- out (hegel_settings_get_test_cases ctx s)
@@ -111,6 +112,7 @@ readSettings ctx settings s = do
         derandomize = Just derandomize,
         database = Just database,
         databaseKey = settings.databaseKey,
+        testLocation = settings.testLocation,
         phases = Just phases,
         backend = Just backend,
         verbosity = Just verbosity,
@@ -168,6 +170,9 @@ applySettings ctx s ptr = do
   for_ s.suppressHealthCheck \hcs -> chk $ hegel_settings_set_suppress_health_check ctx ptr (hcBitmask hcs)
   for_ s.unboundedChoices \b -> chk $ hegel_settings_set_unbounded_choices ctx ptr (fromBool b)
   for_ s.showStatistics \b -> chk $ hegel_settings_set_show_statistics ctx ptr (fromBool b)
+  for_ s.testLocation \loc ->
+    CString.withText loc.file \file -> CString.withText loc.scope \scope -> CString.withText loc.function \function ->
+      chk $ hegel_settings_set_test_location ctx ptr file (fromIntegral loc.line) scope function
   for_ s.nondeterminism \n -> chk $ hegel_settings_set_nondeterminism_strictness ctx ptr (Witch.into @Word32 n)
   for_ s.printBlob \b -> chk $ hegel_settings_set_print_blob ctx ptr (fromBool b)
   for_ s.database \case

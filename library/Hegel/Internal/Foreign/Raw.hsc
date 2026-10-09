@@ -140,6 +140,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_settings_set_report_multiple_failures,
     hegel_settings_set_unbounded_choices,
     hegel_settings_set_show_statistics,
+    hegel_settings_set_test_location,
     hegel_settings_set_database,
     hegel_settings_set_database_key,
     hegel_settings_set_phases,
@@ -723,6 +724,20 @@ foreign import ccall unsafe "hegel_settings_set_unbounded_choices"
 -- | Print a statistics block of recorded events at the end of the run.
 foreign import ccall unsafe "hegel_settings_set_show_statistics"
   hegel_settings_set_show_statistics :: Ptr HegelContext -> Ptr HegelSettings -> CBool -> IO CInt
+
+-- | Record where the test under these settings is defined, which the engine
+-- uses to report each run's verdict inside Antithesis.
+--
+-- Returns 'HEGEL_E_INVALID_ARG' for a NULL or non-UTF-8 string.
+foreign import ccall unsafe "hegel_settings_set_test_location"
+  hegel_settings_set_test_location
+    :: Ptr HegelContext
+    -> Ptr HegelSettings
+    -> CString -- ^ @file@
+    -> Word32  -- ^ @begin_line@
+    -> CString -- ^ @class_name@
+    -> CString -- ^ @function@
+    -> IO CInt
 
 -- | Configure the on-disk example database.
 --

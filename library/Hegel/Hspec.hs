@@ -51,6 +51,7 @@ module Hegel.Hspec
   )
 where
 
+import Control.Applicative ((<|>))
 import Control.Monad ((>=>))
 import Data.Default.Class (def)
 import Data.Foldable (toList)
@@ -59,7 +60,7 @@ import Data.Maybe (isJust, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Stack (CallStack, HasCallStack, SrcLoc (..), callStack, withFrozenCallStack)
-import Hegel.Internal.DatabaseKey (propKey)
+import Hegel.Internal.DatabaseKey (propKey, testLocationOf)
 import Hegel.Internal.RunnerConfig qualified as Config
 import Hegel.Property.Internal (Property, PropertyT, hoist)
 import Hegel.Report
@@ -72,7 +73,7 @@ import Hegel.Report
     renderReportAuto,
   )
 import Hegel.Report.Style qualified as Style
-import Hegel.Settings (Settings (..), defaultSettings, withDatabaseKey)
+import Hegel.Settings (Settings (..), defaultSettings)
 import System.Environment (lookupEnv)
 import System.IO (hIsTerminalDevice, stderr, stdout)
 import Test.Hspec.Core.Spec qualified as Hspec
@@ -167,10 +168,7 @@ prop = withFrozenCallStack (propWith defaultSettings)
 propWith :: (HasCallStack) => Settings -> String -> Property () -> Hspec.Spec
 propWith settings label body = do
   path <- Hspec.getSpecDescriptionPath
-  let settings' = case settings.databaseKey of
-        Just _ -> settings
-        Nothing -> withDatabaseKey (propKey callStack path label) settings
-  Hspec.it label (HegelExample callStack settings' body)
+  Hspec.it label (HegelExample callStack (identify callStack path label settings) body)
 
 -- | 'prop' for a property over a custom base monad @m@.
 --
@@ -224,10 +222,16 @@ keyedT ::
   Hspec.SpecWith env
 keyedT cs settings nat label body = do
   path <- Hspec.getSpecDescriptionPath
-  let settings' = case settings.databaseKey of
-        Just _ -> settings
-        Nothing -> withDatabaseKey (propKey cs path label) settings
-  Hspec.it label (HegelExampleT cs settings' nat body)
+  Hspec.it label (HegelExampleT cs (identify cs path label settings) nat body)
+
+-- | Fill in the database key and test location a property derives from its
+-- call site and describe path, keeping any that @settings@ already sets.
+identify :: CallStack -> [String] -> String -> Settings -> Settings
+identify cs path label settings =
+  settings
+    { databaseKey = settings.databaseKey <|> Just (propKey cs path label),
+      testLocation = settings.testLocation <|> testLocationOf cs path label
+    }
 
 -- | Returns 'True' when ANSI color output is appropriate: the output handle
 -- is a terminal AND the @NO_COLOR@ environment variable is unset.
@@ -300,10 +304,7 @@ propFor = withFrozenCallStack (propForWith defaultSettings)
 propForWith :: (HasCallStack) => Settings -> String -> (fixture -> Property ()) -> Hspec.SpecWith fixture
 propForWith settings label body = do
   path <- Hspec.getSpecDescriptionPath
-  let keyed = case settings.databaseKey of
-        Just _ -> settings
-        Nothing -> withDatabaseKey (propKey callStack path label) settings
-  Hspec.it label (HegelFixture callStack keyed body)
+  Hspec.it label (HegelFixture callStack (identify callStack path label settings) body)
 
 data HegelFixture fixture = HegelFixture CallStack Settings (fixture -> Property ())
 
