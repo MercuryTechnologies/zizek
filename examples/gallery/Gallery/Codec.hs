@@ -7,16 +7,21 @@
 -- the run reports both failures: @"0"@ decodes to nothing, and @"0a"@
 -- decodes to the empty string. Each annotation shows the encoder left its
 -- input untouched, so the reader sees two symptoms of the same ambiguity.
+--
+-- The run also prints its event statistics: how often a generated input held
+-- a digit, the case the codec gets wrong, and how long the inputs were.
 module Gallery.Codec (scenario) where
 
+import Control.Monad (when)
 import Data.Char (isDigit)
 import Data.Function ((&))
 import Data.List (group, sort)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Gallery.Scenario
 import Hegel.Gen qualified as Gen
-import Hegel.Property (Property, annotate, failure, forAll, (===))
-import Hegel.Report (FailureEvidence (..), Note (..), NoteKind (Drawn))
+import Hegel.Property (Property, annotate, event, eventValue, failure, forAll, (===))
+import Hegel.Report (FailureEvidence (..), Note (..), NoteKind (Drawn), Report (..))
 import Hegel.Report qualified
 import Hegel.Settings (Settings (..))
 
@@ -25,7 +30,7 @@ scenario =
   Scenario
     { name = "codec",
       title = "plain property: two failures, one ambiguous codec",
-      settings = seeded {reportMultipleFailures = Just True},
+      settings = seeded {reportMultipleFailures = Just True, showStatistics = Just True},
       property = roundTrip,
       ascii = False,
       attempts = 1,
@@ -49,6 +54,8 @@ decode s = case span isDigit s of
 roundTrip :: Property ()
 roundTrip = do
   s <- forAll (Gen.list (Gen.element "ab01") & Gen.maxSize 6 & Gen.build)
+  when (any isDigit s) (event "input contains a digit")
+  eventValue "input length" (fromIntegral (length s))
   let e = encode s
   annotate ("encoded as " <> Hegel.Report.renderValue e)
   case decode e of
@@ -56,11 +63,15 @@ roundTrip = do
     Just s' -> s' === s
 
 check :: Hegel.Report.Report -> [Text]
-check report = case captured report of
-  Left mismatch -> [mismatch]
-  Right evidence ->
-    ensureEqual "failure messages" ["=== failed, values are not equal", "the encoding decodes"] (sort [e.message | e <- evidence])
-      <> ensureEqual "counterexamples" ["\"0\"", "\"0a\""] (sort (concatMap drawn evidence))
+check report =
+  statistics <> case captured report of
+    Left mismatch -> [mismatch]
+    Right evidence ->
+      ensureEqual "failure messages" ["=== failed, values are not equal", "the encoding decodes"] (sort [e.message | e <- evidence])
+        <> ensureEqual "counterexamples" ["\"0\"", "\"0a\""] (sort (concatMap drawn evidence))
   where
+    output = T.unlines report.engineOutput
+    statistics =
+      concat [ensure (needle `T.isInfixOf` output) ("statistics: missing " <> needle) | needle <- ["Statistics (over", "input contains a digit", "input length"]]
     drawn :: FailureEvidence -> [Text]
     drawn e = take 1 [n.text | n <- e.notes, Drawn {} <- [n.kind]]
