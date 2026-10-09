@@ -10,6 +10,8 @@ module Hegel.Internal.TestCase
   ( -- * Construction
     mkTestCase,
     withClone,
+    acquireClone,
+    releaseClone,
     withClonePair,
     withClones,
 
@@ -27,7 +29,7 @@ module Hegel.Internal.TestCase
   )
 where
 
-import Control.Exception (bracket, throwIO)
+import Control.Exception (bracket, onException, throwIO)
 import Control.Monad (void)
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
@@ -71,9 +73,17 @@ mkTestCase recording handle = do
 -- prevents that, so do not call 'hegel_test_case_free' on the clone
 -- yourself, and do not return it out of @action@.
 withClone :: TestCase -> (TestCase -> IO a) -> IO a
-withClone src action =
-  bracket hegel_context_new (void . hegel_context_free) \ctx ->
-    bracket (acquire ctx) release action
+withClone src = bracket (acquireClone src) releaseClone
+
+-- | Clone @src@ onto a fresh context, for a caller whose clone lifetime
+-- doesn't fit a single 'withClone' block.
+--
+-- __NOTE__: run this with asynchronous exceptions masked, and pair every clone
+-- it returns with exactly one 'releaseClone' before the case completes.
+acquireClone :: TestCase -> IO TestCase
+acquireClone src = do
+  ctx <- hegel_context_new
+  acquire ctx `onException` hegel_context_free ctx
   where
     acquire :: Ptr HegelContext -> IO TestCase
     acquire ctx = do
@@ -87,8 +97,12 @@ withClone src action =
         Tick.Silent -> pure Tick.Silent
         Tick.Active _ -> Tick.newRecording
       mkTestCase recording Handle {ctx, ptr}
-    release :: TestCase -> IO ()
-    release clone = void (hegel_test_case_free clone.handle.ctx clone.handle.ptr)
+
+-- | Free a clone from 'acquireClone' along with its context.
+releaseClone :: TestCase -> IO ()
+releaseClone clone = do
+  void (hegel_test_case_free clone.handle.ctx clone.handle.ptr)
+  void (hegel_context_free clone.handle.ctx)
 
 -- | Acquire two clones of @tc@ in a fixed order, against @tc@ itself rather
 -- than each other, so both fork positions are direct children at clone depth
