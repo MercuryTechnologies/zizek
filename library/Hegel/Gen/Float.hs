@@ -30,7 +30,7 @@ import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), ValidationError (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
-import Hegel.Internal.DataSource (FloatSpec (..), drawFloat)
+import Hegel.Internal.DataSource (FloatSpec (..), Label (LabelFloat), drawFloat, spanLabel)
 
 data FloatBuilder a = FloatBuilder
   { bMin :: Maybe a,
@@ -124,7 +124,7 @@ checkFloatBounds what b = do
       | otherwise = pure ()
 
 instance Build (FloatBuilder Float) Float where
-  build b = withFrozenCallStack $ Draw \tc -> do
+  build b = withFrozenCallStack $ Draw (spanLabel LabelFloat) \tc -> do
     checkFloatBounds "Hegel.Gen.Float" b
     double2Float <$> drawFloat tc 32 spec
     where
@@ -141,7 +141,7 @@ instance Build (FloatBuilder Float) Float where
           }
 
 instance Build (FloatBuilder Double) Double where
-  build b = withFrozenCallStack $ Draw \tc -> do
+  build b = withFrozenCallStack $ Draw (spanLabel LabelFloat) \tc -> do
     checkFloatBounds "Hegel.Gen.Float" b
     drawFloat tc 64 spec
     where

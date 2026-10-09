@@ -15,7 +15,7 @@ import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), ValidationError (..))
 import Hegel.Gen.Internal (Gen (..))
-import Hegel.Internal.DataSource (drawBool)
+import Hegel.Internal.DataSource (Label (LabelBool), drawBool, spanLabel)
 
 -- | A boolean generator. The default ('bool') is a fair coin (@p = 0.5@);
 -- 'weighted' biases the draw.
@@ -34,7 +34,7 @@ weighted :: Double -> BoolBuilder -> BoolBuilder
 weighted p b = b {probability = p}
 
 instance Build BoolBuilder Bool where
-  build b = withFrozenCallStack $ Draw \tc -> do
+  build b = withFrozenCallStack $ Draw (spanLabel LabelBool) \tc -> do
     checkProbability b.probability
     drawBool tc b.probability
 

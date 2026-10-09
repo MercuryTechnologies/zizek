@@ -81,6 +81,7 @@ import Hegel.Internal.DataSource
   ( Label (LabelStatefulRule),
     freeStateMachine,
     newStateMachine,
+    spanLabel,
     startSpan,
     stateMachineNextGroup,
     stopSpan,
@@ -282,7 +283,7 @@ run machine = withFrozenCallStack $ do
         -- 'ContinueRound' it closes discarded exactly when some rule this
         -- round was rejected, so the shrinker can delete the whole round.
         roundLoop = do
-          startSpan tc LabelStatefulRule
+          startSpan tc (spanLabel LabelStatefulRule)
           mGroupId <- stateMachineNextGroup tc sm
           case mGroupId of
             -- HEGEL_STATE_MACHINE_DONE: the whole machine is done stepping.

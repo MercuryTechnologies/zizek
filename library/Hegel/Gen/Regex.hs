@@ -21,7 +21,7 @@ import GHC.Stack (withFrozenCallStack)
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Char (CharBuilder, HasAlphabet (..), buildCharTextGen)
 import Hegel.Gen.Internal.String (stringGen)
-import Hegel.Internal.DataSource (buildRegexGen)
+import Hegel.Internal.DataSource (Label (LabelRegex), buildRegexGen, spanLabel)
 
 -- | Builder for a regex-constrained 'Text' generator.
 data RegexBuilder = RegexBuilder
@@ -44,7 +44,7 @@ instance HasAlphabet RegexBuilder where
   alphabet cb b = b {bAlphabet = Just cb}
 
 instance Build RegexBuilder Text where
-  build b = withFrozenCallStack $ stringGen gen
+  build b = withFrozenCallStack $ stringGen (spanLabel LabelRegex) gen
     where
       -- The alphabet, if any, uses the same single-character bounds
       -- 'Hegel.Gen.Char' uses; see 'buildCharTextGen' for why.

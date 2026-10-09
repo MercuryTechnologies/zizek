@@ -17,8 +17,8 @@ import Data.IntMap.Strict qualified as IntMap
 import GHC.Stack (withFrozenCallStack)
 import Hegel.Collection qualified as Collection
 import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
-import Hegel.Gen.Internal (Gen (..), draw)
-import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
+import Hegel.Gen.Internal (Gen (..), draw, labelOf)
+import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
 data IntMapBuilder v = IntMapBuilder
   { mKeys :: !(Gen Int),
@@ -37,9 +37,8 @@ instance HasSize (IntMapBuilder v) where
   maxSize n b = b {mMaxSize = Just n}
 
 instance Build (IntMapBuilder v) (IntMap v) where
-  build b = withFrozenCallStack $ Draw $ \tc -> do
+  build b = withFrozenCallStack $ Draw (combineLabels [spanLabel LabelMap, labelOf b.mKeys, labelOf b.mValues]) \tc -> do
     checkSizeBounds "Hegel.Gen.IntMap" b.mMinSize b.mMaxSize
-    startSpan tc LabelMap
     -- See Note [Variable-size mode required for reject] in Hegel.Collection.
     let poolMax = case b.mMaxSize of
           Nothing -> Nothing
@@ -60,5 +59,4 @@ instance Build (IntMapBuilder v) (IntMap v) where
     let trimmed = case b.mMaxSize of
           Just mx | IntMap.size result > mx -> IntMap.fromAscList (take mx (IntMap.toAscList result))
           _ -> result
-    stopSpan tc False
     pure trimmed

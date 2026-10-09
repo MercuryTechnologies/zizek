@@ -18,9 +18,9 @@ import Data.Text (Text)
 import GHC.Stack (withFrozenCallStack)
 import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Char (CharBuilder, HasAlphabet (..), buildCharTextGen)
-import Hegel.Gen.Internal (Gen (..), draw)
+import Hegel.Gen.Internal (Gen (..), drawInline)
 import Hegel.Gen.Internal.String (stringGen)
-import Hegel.Internal.DataSource (TextSpec (..), buildTextGen)
+import Hegel.Internal.DataSource (Label (LabelText), TextSpec (..), buildTextGen, spanLabel)
 
 data TextBuilder = TextBuilder
   { bMinSize :: !Int,
@@ -42,14 +42,14 @@ instance HasAlphabet TextBuilder where
   alphabet cb b = b {bAlphabet = Just cb}
 
 instance Build TextBuilder Text where
-  build b = withFrozenCallStack $ Draw \tc -> do
+  build b = withFrozenCallStack $ Draw (spanLabel LabelText) \tc -> do
     checkSizeBounds "Hegel.Gen.Text" b.bMinSize b.bMaxSize
-    draw tc textGen
+    drawInline tc textGen
     where
       -- 'textGen' must stay bound here, outside the 'Draw' lambda above, so
       -- 'stringGen' builds its handle once and shares it across every draw
       -- of this 'Gen' value.
-      textGen = stringGen gen
+      textGen = stringGen (spanLabel LabelText) gen
       wireLo = fromIntegral b.bMinSize
       wireHi = maybe maxBound fromIntegral b.bMaxSize
       gen = withFrozenCallStack $ case b.bAlphabet of

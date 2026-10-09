@@ -482,3 +482,25 @@ spec = do
       ts <- readIORef seen
       ts `shouldSatisfy` elem Leaf
       ts `shouldSatisfy` any isBranch
+
+    -- A deferred edge has a fixed label, so labelling a generator that
+    -- recurses through one terminates.
+    it "gives a recursive generator a finite label" $ do
+      Internal.labelOf treeGen `shouldBe` Internal.labelOf treeGen
+
+  describe "span labels" $ do
+    -- Generators of the same shape share a label, and a composite's label
+    -- reflects its components.
+    it "labels same-shaped generators alike" $ do
+      Internal.labelOf (Gen.int & Gen.min 0 & Gen.build)
+        `shouldBe` Internal.labelOf (Gen.int & Gen.max 9 & Gen.build)
+
+    it "labels a list by its element generator" $ do
+      Internal.labelOf (Gen.list (Gen.int & Gen.build) & Gen.build)
+        `shouldNotBe` Internal.labelOf (Gen.list (Gen.text & Gen.build) & Gen.build)
+
+    it "labels a tuple by its components and their order" $ do
+      let int = Gen.int & Gen.build
+          text = Gen.text & Gen.build
+      Internal.labelOf ((,) <$> int <*> text)
+        `shouldNotBe` Internal.labelOf (flip (,) <$> text <*> int)

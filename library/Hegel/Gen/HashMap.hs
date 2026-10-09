@@ -16,8 +16,8 @@ import Data.Hashable (Hashable)
 import GHC.Stack (withFrozenCallStack)
 import Hegel.Collection qualified as Collection
 import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
-import Hegel.Gen.Internal (Gen (..), draw)
-import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
+import Hegel.Gen.Internal (Gen (..), draw, labelOf)
+import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
 data HashMapBuilder k v = HashMapBuilder
   { mKeys :: !(Gen k),
@@ -35,9 +35,8 @@ instance HasSize (HashMapBuilder k v) where
   maxSize n b = b {mMaxSize = Just n}
 
 instance (Hashable k) => Build (HashMapBuilder k v) (HashMap k v) where
-  build b = withFrozenCallStack $ Draw $ \tc -> do
+  build b = withFrozenCallStack $ Draw (combineLabels [spanLabel LabelMap, labelOf b.mKeys, labelOf b.mValues]) \tc -> do
     checkSizeBounds "Hegel.Gen.HashMap" b.mMinSize b.mMaxSize
-    startSpan tc LabelMap
     -- See Note [Variable-size mode required for reject] in Hegel.Collection.
     let poolMax = case b.mMaxSize of
           Nothing -> Nothing
@@ -58,5 +57,4 @@ instance (Hashable k) => Build (HashMapBuilder k v) (HashMap k v) where
     let trimmed = case b.mMaxSize of
           Just mx | HashMap.size result > mx -> HashMap.fromList (take mx (HashMap.toList result))
           _ -> result
-    stopSpan tc False
     pure trimmed

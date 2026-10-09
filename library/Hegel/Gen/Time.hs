@@ -23,7 +23,7 @@ import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), ValidationError (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
-import Hegel.Internal.DataSource (drawTime)
+import Hegel.Internal.DataSource (Label (LabelTime), drawTime, spanLabel)
 
 data TimeBuilder = TimeBuilder
   { bMin :: Maybe TimeOfDay,
@@ -42,7 +42,7 @@ instance HasMax TimeBuilder TimeOfDay where
   max hi b = b {bMax = Just hi}
 
 instance Build TimeBuilder TimeOfDay where
-  build b = withFrozenCallStack $ Draw \tc -> do
+  build b = withFrozenCallStack $ Draw (spanLabel LabelTime) \tc -> do
     checkFields "Hegel.Gen.Time" lo
     checkFields "Hegel.Gen.Time" hi
     checkOrdered "Hegel.Gen.Time" lo hi

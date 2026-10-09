@@ -25,13 +25,15 @@ where
 
 {- Note [span-discipline]
 ~~~~~~~~~~~~~~~~~~~~~~~~~
-Normally, libhegel never discards an opened span on its own, so the function
-that opens a span is responsible for closing it (including on an exception).
+Every span a recursive value opens carries the generator's own label, so the
+shrinker can replace a tree with one of its own subtrees. 'draw' opens one
+around the whole value, retries included, and one around each child
+sub-value drawn through 'childGen'.
 
-Recursive draws, however, can be closed by libhegel at which point we must
-consider the span to have been closed by the engine (and thus not issue a
-call to 'stopSpan' ourselves). This is indicated with an exception, and so
-we /don't/ bracket `subtree` with `startSpan`/`stopSpan`.
+A discarded attempt unwinds with an exception and leaves its child spans
+open. The engine closes those spans itself, so the retry loop must not call
+'stopSpan' for them. It only resets the case's open-span count to where the
+attempt started.
 -}
 
 import Control.Exception (Handler (..), bracket, catches)
@@ -40,19 +42,21 @@ import Data.Word (Word64)
 import Foreign (Ptr)
 import GHC.Stack (withFrozenCallStack)
 import Hegel.Gen.Builder (Build (..), checkNonNegativeNamed)
-import Hegel.Gen.Internal (Gen (..), draw)
+import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.Control (AttemptMispriced (..), LeafBudgetExceeded (..))
 import Hegel.Internal.DataSource
   ( HegelRecursion,
     Label (..),
+    combineLabels,
+    forgetSpansTo,
     freeRecursion,
     newRecursion,
+    openSpanDepth,
     recursionBranch,
     recursionFinish,
     recursionLeaf,
     recursionRetry,
-    startSpan,
-    stopSpan,
+    spanLabel,
   )
 import Hegel.Internal.TestCase (TestCase)
 
@@ -96,34 +100,36 @@ maxLeaves :: Int -> RecursiveBuilder a -> RecursiveBuilder a
 maxLeaves n b = b {rMaxLeaves = n}
 
 instance Build (RecursiveBuilder a) a where
-  build b = withFrozenCallStack $ Draw \tc -> do
+  build b = withFrozenCallStack $ Draw label \tc -> do
     checkNonNegativeNamed "Hegel.Gen.Recursive" "maxDepth" b.rMaxDepth
     checkNonNegativeNamed "Hegel.Gen.Recursive" "maxLeaves" b.rMaxLeaves
     bracket
       (newRecursion tc (fromIntegral b.rMaxDepth) (fromIntegral b.rMaxLeaves))
       (freeRecursion tc)
-      (retryLoop tc b)
+      (retryLoop tc b label)
+    where
+      label = combineLabels [spanLabel LabelRecursive, labelOf b.rLeaf]
 
 -- | Regenerate the whole value from the root after a 'LeafBudgetExceeded' or
 -- 'AttemptMispriced' unwind out of 'subtree'.
-retryLoop :: TestCase -> RecursiveBuilder a -> Ptr HegelRecursion -> IO a
-retryLoop tc b recursion = retryLoopWith (subtree tc recursion b 0) (recursionRetry tc recursion)
+retryLoop :: TestCase -> RecursiveBuilder a -> Word64 -> Ptr HegelRecursion -> IO a
+retryLoop tc b label recursion = do
+  base <- openSpanDepth tc
+  -- See Note [span-discipline] for why each attempt forgets, rather than
+  -- closes, the spans an earlier attempt left open.
+  retryLoopWith (forgetSpansTo tc base *> subtree tc recursion b label 0) (recursionRetry tc recursion)
 
--- see [span-discipline] above for why this doesn't open/close spans under
--- a `bracket`.
-
-subtree :: TestCase -> Ptr HegelRecursion -> RecursiveBuilder a -> Word64 -> IO a
-subtree tc recursion b depth = do
-  startSpan tc LabelRecursive
+-- | Draw the sub-value at @depth@ in its caller's span.
+subtree :: TestCase -> Ptr HegelRecursion -> RecursiveBuilder a -> Word64 -> Word64 -> IO a
+subtree tc recursion b label depth = do
   isBranch <- recursionBranch tc recursion depth
   result <-
     if isBranch
       then do
         let ctx = RecursionContext {depth, maxDepth = fromIntegral b.rMaxDepth}
-        draw tc (b.rBranch ctx (childGen recursion b depth))
+        draw tc (b.rBranch ctx (childGen recursion b label depth))
       else recursionLeaf tc recursion *> draw tc b.rLeaf
   when (depth == 0) (recursionFinish tc recursion)
-  stopSpan tc False
   pure result
 
 -- | Helper to handle looping on a recursive draw, exposed for testing only.
@@ -135,6 +141,6 @@ retryLoopWith attempt onLeafBudgetExceeded =
               ]
 
 -- | The generator handed to the caller's branch function: one more sub-value,
--- one level deeper.
-childGen :: Ptr HegelRecursion -> RecursiveBuilder a -> Word64 -> Gen a
-childGen recursion b depth = Draw \tc -> subtree tc recursion b (depth + 1)
+-- one level deeper, in a span with the whole generator's @label@.
+childGen :: Ptr HegelRecursion -> RecursiveBuilder a -> Word64 -> Word64 -> Gen a
+childGen recursion b label depth = Draw label \tc -> subtree tc recursion b label (depth + 1)

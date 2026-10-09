@@ -34,7 +34,7 @@ import Data.Word (Word16, Word32, Word64, Word8)
 import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
-import Hegel.Internal.DataSource (drawInteger)
+import Hegel.Internal.DataSource (Label (LabelInteger), drawInteger, spanLabel)
 
 data IntegralBuilder a = IntegralBuilder
   { bMin :: Maybe a,
@@ -101,7 +101,7 @@ instance HasMax (IntegralBuilder a) a where
   max hi b = b {bMax = Just hi}
 
 instance (Bounded a, Integral a, Show a) => Build (IntegralBuilder a) a where
-  build b = withFrozenCallStack $ Draw \tc -> do
+  build b = withFrozenCallStack $ Draw (spanLabel LabelInteger) \tc -> do
     checkOrdered "Hegel.Gen.Integer" lo hi
     fromInteger <$> drawInteger tc loI hiI
     where

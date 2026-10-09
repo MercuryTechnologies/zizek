@@ -11,7 +11,7 @@ import Data.Text (Text)
 import GHC.Stack (withFrozenCallStack)
 import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Internal.String (stringGen)
-import Hegel.Internal.DataSource (buildEmailGen)
+import Hegel.Internal.DataSource (Label (LabelEmail), buildEmailGen, spanLabel)
 
 data EmailBuilder = EmailBuilder
 
@@ -20,4 +20,4 @@ email :: EmailBuilder
 email = EmailBuilder
 
 instance Build EmailBuilder Text where
-  build _ = withFrozenCallStack $ stringGen buildEmailGen
+  build _ = withFrozenCallStack $ stringGen (spanLabel LabelEmail) buildEmailGen

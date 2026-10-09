@@ -23,9 +23,9 @@ import Data.Text qualified as T
 import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), ValidationError (..))
-import Hegel.Gen.Internal (Gen (..), draw)
+import Hegel.Gen.Internal (Gen (..), drawInline)
 import Hegel.Gen.Internal.String (stringGen)
-import Hegel.Internal.DataSource (buildDomainGen)
+import Hegel.Internal.DataSource (Label (LabelDomain), buildDomainGen, spanLabel)
 
 newtype DomainBuilder = DomainBuilder
   { bMaxLength :: Int
@@ -41,14 +41,14 @@ maxLength :: Int -> DomainBuilder -> DomainBuilder
 maxLength n b = b {bMaxLength = n}
 
 instance Build DomainBuilder Text where
-  build b = withFrozenCallStack $ Draw \tc -> do
+  build b = withFrozenCallStack $ Draw (spanLabel LabelDomain) \tc -> do
     checkMaxLength b.bMaxLength
-    draw tc domainGen
+    drawInline tc domainGen
     where
       -- 'domainGen' must stay bound here, outside the 'Draw' lambda above,
       -- so 'stringGen' builds its handle once and shares it across every
       -- draw of this 'Gen' value.
-      domainGen = stringGen (buildDomainGen (fromIntegral b.bMaxLength))
+      domainGen = stringGen (spanLabel LabelDomain) (buildDomainGen (fromIntegral b.bMaxLength))
       checkMaxLength :: (HasCallStack) => Int -> IO ()
       checkMaxLength n
         | n < 4 || n > 255 =

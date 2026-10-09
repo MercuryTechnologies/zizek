@@ -52,7 +52,7 @@ import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Exception (InvariantViolation (..))
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.Control (AssumeRejected (..))
-import Hegel.Internal.DataSource (HegelPool, freePool, freshPoolIdentity, labelPool, newPool, poolAdd, poolAddFrom, poolGenerate)
+import Hegel.Internal.DataSource (HegelPool, Label (LabelPoolConsume, LabelPoolReuse, LabelPoolTransfer), freePool, freshPoolIdentity, labelPool, newPool, poolAdd, poolAddFrom, poolGenerate, spanLabel)
 import Hegel.Internal.Event (Var (..))
 import Hegel.Internal.TestCase (TestCase)
 import Hegel.Property.Internal (Env (..), PropertyT, askEnv, resource)
@@ -118,7 +118,7 @@ isEmpty pool = IntMap.null <$> readMVar pool.values
 -- Drawing from an empty pool skips the step it's drawn in without
 -- discarding the case, the same as @assume False@ inside a rule body.
 reuse :: Pool a -> Gen a
-reuse pool = Draw \tc ->
+reuse pool = Draw (spanLabel LabelPoolReuse) \tc ->
   withMVar pool.values \vals ->
     if IntMap.null vals
       then throwIO AssumeRejected
@@ -135,7 +135,7 @@ reuse pool = Draw \tc ->
 -- Drawing from an empty pool skips the step it's drawn in without
 -- discarding the case, the same as @assume False@ inside a rule body.
 consume :: Pool a -> Gen a
-consume pool = Draw \tc -> snd <$> drawConsuming "consume" pool tc
+consume pool = Draw (spanLabel LabelPoolConsume) \tc -> snd <$> drawConsuming "consume" pool tc
 
 -- | The consuming draw shared by 'consume' and 'transfer': draw a
 -- vid from the engine (removing it there) and pop the mirrored value.
@@ -163,7 +163,7 @@ drawConsuming caller pool tc =
 -- The move is not atomic across the two pools, and is therefore not safe to
 -- retry.
 transfer :: Pool a -> Pool a -> Gen a
-transfer src dst = Draw \tc -> do
+transfer src dst = Draw (spanLabel LabelPoolTransfer) \tc -> do
   (vid, v) <- drawConsuming "transfer" src tc
   modifyMVar_ dst.values \m -> do
     vid' <- poolAddFrom tc dst.handle dst.identity Var {pool = src.identity, id = vid}

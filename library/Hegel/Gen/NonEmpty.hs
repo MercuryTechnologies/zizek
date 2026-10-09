@@ -17,8 +17,8 @@ import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Collection qualified as Collection
 import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), HasSize (..), ValidationError (..), checkSizeBounds)
-import Hegel.Gen.Internal (Gen (..), draw)
-import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
+import Hegel.Gen.Internal (Gen (..), draw, labelOf)
+import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
 data NonEmptyBuilder a = NonEmptyBuilder
   { neElement :: !(Gen a),
@@ -39,10 +39,9 @@ instance HasSize (NonEmptyBuilder a) where
   maxSize n b = b {neMaxSize = Just n}
 
 instance Build (NonEmptyBuilder a) (NonEmpty a) where
-  build b = withFrozenCallStack $ Draw $ \tc -> do
+  build b = withFrozenCallStack $ Draw (combineLabels [spanLabel LabelList, labelOf b.neElement]) \tc -> do
     checkSizeBounds "Hegel.Gen.NonEmpty" b.neMinSize b.neMaxSize
     checkAtLeastOne b.neMinSize
-    startSpan tc LabelList
     result <- Collection.with tc b.neMinSize b.neMaxSize \coll -> do
       let loop acc = do
             keepGoing <- Collection.more coll
@@ -55,7 +54,6 @@ instance Build (NonEmptyBuilder a) (NonEmpty a) where
     let trimmed = case b.neMaxSize of
           Just mx | length result > mx -> take mx result
           _ -> result
-    stopSpan tc False
     pure (NonEmpty.fromList trimmed)
 
 -- | Require @n >= 1@, throwing 'ValidationError' otherwise.

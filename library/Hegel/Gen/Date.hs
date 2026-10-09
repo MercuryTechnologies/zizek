@@ -34,7 +34,7 @@ import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasYear (..), ValidationError (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
-import Hegel.Internal.DataSource (drawDate)
+import Hegel.Internal.DataSource (Label (LabelDate), drawDate, spanLabel)
 
 data DateBuilder = DateBuilder
   { bMin :: Maybe Day,
@@ -57,7 +57,7 @@ instance HasYear DateBuilder where
   maxYear y b = b {bMax = Just (fromGregorian y 12 31)}
 
 instance Build DateBuilder Day where
-  build b = withFrozenCallStack $ Draw \tc -> do
+  build b = withFrozenCallStack $ Draw (spanLabel LabelDate) \tc -> do
     checkYearRange "Hegel.Gen.Date" lo
     checkYearRange "Hegel.Gen.Date" hi
     checkOrdered "Hegel.Gen.Date" lo hi

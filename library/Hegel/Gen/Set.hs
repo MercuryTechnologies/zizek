@@ -15,8 +15,8 @@ import Data.Set qualified as Set
 import GHC.Stack (withFrozenCallStack)
 import Hegel.Collection qualified as Collection
 import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
-import Hegel.Gen.Internal (Gen (..), draw)
-import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
+import Hegel.Gen.Internal (Gen (..), draw, labelOf)
+import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
 data SetBuilder a = SetBuilder
   { sElement :: !(Gen a),
@@ -33,9 +33,8 @@ instance HasSize (SetBuilder a) where
   maxSize n b = b {sMaxSize = Just n}
 
 instance (Ord a) => Build (SetBuilder a) (Set a) where
-  build b = withFrozenCallStack $ Draw $ \tc -> do
+  build b = withFrozenCallStack $ Draw (combineLabels [spanLabel LabelSet, labelOf b.sElement]) \tc -> do
     checkSizeBounds "Hegel.Gen.Set" b.sMinSize b.sMaxSize
-    startSpan tc LabelList
     -- See Note [Variable-size mode required for reject] in Hegel.Collection.
     let poolMax = case b.sMaxSize of
           Nothing -> Nothing
@@ -54,5 +53,4 @@ instance (Ord a) => Build (SetBuilder a) (Set a) where
     let trimmed = case b.sMaxSize of
           Just mx | Set.size result > mx -> Set.take mx result
           _ -> result
-    stopSpan tc False
     pure trimmed

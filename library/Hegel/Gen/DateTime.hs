@@ -36,7 +36,7 @@ import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasYear (..), ch
 import Hegel.Gen.Date (checkYearRange)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Gen.Time (checkFields)
-import Hegel.Internal.DataSource (drawDatetime)
+import Hegel.Internal.DataSource (Label (LabelDateTime), drawDatetime, spanLabel)
 
 data DateTimeBuilder = DateTimeBuilder
   { bMin :: Maybe LocalTime,
@@ -64,7 +64,7 @@ onDay :: Day -> DateTimeBuilder -> DateTimeBuilder
 onDay d b = b {bMin = Just (LocalTime d midnight), bMax = Just (LocalTime d (TimeOfDay 23 59 59.999999999))}
 
 instance Build DateTimeBuilder LocalTime where
-  build b = withFrozenCallStack $ Draw \tc -> do
+  build b = withFrozenCallStack $ Draw (spanLabel LabelDateTime) \tc -> do
     checkYearRange "Hegel.Gen.DateTime" lo.localDay
     checkYearRange "Hegel.Gen.DateTime" hi.localDay
     checkFields "Hegel.Gen.DateTime" lo.localTimeOfDay

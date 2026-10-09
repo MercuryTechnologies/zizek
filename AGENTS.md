@@ -140,15 +140,15 @@ All of these are FFI calls into `libhegel` via `Hegel.Internal.Foreign.Raw`, wra
 
 ### `Gen` GADT
 
-`Gen a` is a GADT (not a typeclass) defined in `Hegel.Gen.Internal`, with constructors `Pure`, `Draw` (an opaque `TestCase -> IO a` leaf — every leaf generator and combinators like `filtered`/`frequency` bottom out here), `Map`, `Ap`, `Bind`, and `OneOf`. `draw :: TestCase -> Gen a -> IO a` produces a value from a live test case.
+`Gen a` is a GADT (not a typeclass) defined in `Hegel.Gen.Internal`, with constructors `Pure`, `Draw` (an opaque `TestCase -> IO a` leaf — every leaf generator and combinators like `filtered`/`frequency` bottom out here), `Map`, `Ap`, `Bind`, and `OneOf`. Every constructor but `Pure` carries its span label (`labelOf`), computed strictly at construction from its components (the package enables `StrictData`, so never tie a knot through a label field). `draw :: TestCase -> Gen a -> IO a` produces a value from a live test case.
 
-The GADT structure is interpreted, not just executed: `runInteractive` walks the constructors to decide span nesting for shrinking — `Map` opens MAPPED, `Ap` opens TUPLE (only with ≥2 non-`Pure` leaves), `Bind` opens FLAT_MAP, `OneOf` opens ONE_OF.
+The GADT structure is interpreted, not just executed: `draw` opens one span per generator level, labelled `labelOf g`, and draws every component through `draw` so each gets its own span, mirroring upstream `TestCase::draw_silent`. `Pure` opens nothing, and an `Ap` spine with fewer than two non-`Pure` leaves forwards without a TUPLE span. `drawInline` runs a body inside the caller's span, for forwarding generators such as `defer` and the validating `Text`/`Domain` builders.
 
 `filtered`/`mapMaybe` make up to three attempts, each in its own discardable span, and discard the case once all three miss; an exhausted filter surfaces as the engine's `FilterTooMuch` health check or an unsatisfiable run.
 
 ### Span System
 
-Spans (`start_span`/`stop_span`) group related generation calls so the engine can shrink them as a unit. The `Label` type in `Hegel.Internal.DataSource` identifies span types (LIST, TUPLE, ONE_OF, FILTER, etc.).
+Spans (`start_span`/`stop_span`) group related generation calls so the engine can shrink them as a unit. The `Label` type in `Hegel.Internal.DataSource` names each generator kind (`zizek.integer`, `zizek.list`, …); `spanLabel` gives its wire value and `combineLabels` (equal to `hegel_label_combine`) folds in component labels, so `list int` and `list text` differ. A filter opens a discardable `zizek.filter.attempt` span per attempt inside its own `zizek.filter`-derived span. Each `TestCase` counts its open spans: `Hegel.Internal.StatefulRound` closes the spans a rejected rule unwound past (`discardSpansTo`) before the round span, and the recursion retry loop forgets the ones the engine closed itself (`forgetSpansTo`).
 
 ### Collections
 
@@ -156,7 +156,7 @@ Spans (`start_span`/`stop_span`) group related generation calls so the engine ca
 
 ### Recursive Generation
 
-`Gen.recursive` (`Hegel.Gen.Recursive`) generates recursively defined data, such as trees or JSON documents, from a leaf generator and a branch function over sub-values. The engine owns branch probability, the depth cap (`maxDepth`), the leaf budget (`maxLeaves`), and the per-value target size, driven through `hegel_new_recursion`/`hegel_recursion_branch`/`hegel_recursion_leaf`/`hegel_recursion_finish`/`hegel_recursion_retry`. Two distinct situations both signal through `HEGEL_E_RETRY`: outgrowing the leaf budget (from `hegel_recursion_leaf`) throws `LeafBudgetExceeded`, and a completed value the engine discarded as mispriced (from `hegel_recursion_finish`) throws `AttemptMispriced`; both are control signals in `Hegel.Internal.Control`, caught only by the retry loop that opened the recursion scope. The `RECURSIVE` span around each sub-value is opened and closed in plain sequence, never under a `bracket`-style guarantee, so either retry's unwind skips the closing `stopSpan` instead of closing a span the engine already discarded.
+`Gen.recursive` (`Hegel.Gen.Recursive`) generates recursively defined data, such as trees or JSON documents, from a leaf generator and a branch function over sub-values. The engine owns branch probability, the depth cap (`maxDepth`), the leaf budget (`maxLeaves`), and the per-value target size, driven through `hegel_new_recursion`/`hegel_recursion_branch`/`hegel_recursion_leaf`/`hegel_recursion_finish`/`hegel_recursion_retry`. Two distinct situations both signal through `HEGEL_E_RETRY`: outgrowing the leaf budget (from `hegel_recursion_leaf`) throws `LeafBudgetExceeded`, and a completed value the engine discarded as mispriced (from `hegel_recursion_finish`) throws `AttemptMispriced`; both are control signals in `Hegel.Internal.Control`, caught only by the retry loop that opened the recursion scope. Every span a recursive value opens carries the generator's own label (so the shrinker can swap a tree for a subtree): one around the whole value, retries included, and one around each child sub-value. They are opened and closed in plain sequence, never under a `bracket`-style guarantee, so either retry's unwind skips the closing `stopSpan` instead of closing a span the engine already discarded.
 
 ### Stateful Testing
 

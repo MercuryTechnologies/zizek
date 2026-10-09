@@ -27,7 +27,7 @@ import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), ValidationError (..))
 import Hegel.Gen.Internal (Gen (..))
-import Hegel.Internal.DataSource (InvariantViolation (..), drawUuid)
+import Hegel.Internal.DataSource (InvariantViolation (..), Label (LabelUuid), drawUuid, spanLabel)
 
 newtype UuidBuilder = UuidBuilder
   { bVersion :: Maybe Word8
@@ -45,7 +45,7 @@ version :: Word8 -> UuidBuilder -> UuidBuilder
 version n b = b {bVersion = Just n}
 
 instance Build UuidBuilder UUID where
-  build b = withFrozenCallStack $ Draw \tc -> do
+  build b = withFrozenCallStack $ Draw (spanLabel LabelUuid) \tc -> do
     checkVersion b.bVersion
     bytes <- drawUuid tc b.bVersion
     case UUID.fromByteString (BSL.fromStrict bytes) of

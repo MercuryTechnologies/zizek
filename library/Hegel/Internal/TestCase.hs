@@ -56,7 +56,8 @@ mkTestCase recording handle = do
   slot <- newSlot
   events <- newIORef Seq.empty
   draws <- newIORef []
-  pure TestCase {handle, slot, recording, events, draws}
+  spanDepth <- newIORef 0
+  pure TestCase {handle, slot, recording, events, draws, spanDepth}
 
 -- | Clone @src@ and run @action@ against the clone, freeing it on every
 -- exit, including an exception.
@@ -132,7 +133,10 @@ data TestCase = TestCase
     -- 'Hegel.Internal.Tick.Active'. See "Hegel.Internal.Event".
     events :: !(IORef (Seq Event)),
     -- | Pool 'Var's drawn since the last 'forAll' boundary, newest-first.
-    draws :: !(IORef [Var])
+    draws :: !(IORef [Var]),
+    -- | How many spans this case has open, so a caller that recovers from an
+    -- unwind can close or forget the spans it left behind.
+    spanDepth :: !(IORef Int)
   }
 
 -- * Draw provenance

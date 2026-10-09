@@ -43,7 +43,7 @@ import Foreign.ForeignPtr (ForeignPtr)
 import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Gen.Builder (Build (..), checkNonNegativeNamed, checkOrderedMaybe)
 import Hegel.Gen.Internal.String (stringDraw)
-import Hegel.Internal.DataSource (HegelStringGenerator, InvariantViolation (..), TextSpec (..), buildTextGen)
+import Hegel.Internal.DataSource (HegelStringGenerator, InvariantViolation (..), Label (LabelCharacter), TextSpec (..), buildTextGen, spanLabel)
 import Hegel.Internal.TestCase (TestCase)
 
 -- | Which base range a text\/char\/regex-alphabet draw's alphabet starts
@@ -191,7 +191,7 @@ buildCharTextGen minSz maxSz b = withFrozenCallStack $ do
       | otherwise = Just (fmap categoryCode (nub (Surrogate : fromMaybe [] b.bExcludeCategories)))
 
 instance Build CharBuilder Char where
-  build b = withFrozenCallStack $ stringDraw (buildCharTextGen 1 1 b) postProcess
+  build b = withFrozenCallStack $ stringDraw (spanLabel LabelCharacter) (buildCharTextGen 1 1 b) postProcess
     where
       postProcess :: TestCase -> Text -> IO Char
       postProcess _tc t = case T.uncons t of

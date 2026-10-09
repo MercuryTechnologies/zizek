@@ -29,7 +29,7 @@ import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), ValidationError (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
-import Hegel.Internal.DataSource (drawInteger)
+import Hegel.Internal.DataSource (Label (LabelDuration), drawInteger, spanLabel)
 
 data DurationBuilder = DurationBuilder
   { bMin :: Maybe NominalDiffTime,
@@ -64,7 +64,7 @@ instance HasMax DurationBuilder NominalDiffTime where
   max hi b = b {bMax = Just hi}
 
 instance Build DurationBuilder NominalDiffTime where
-  build b = withFrozenCallStack $ Draw \tc -> do
+  build b = withFrozenCallStack $ Draw (spanLabel LabelDuration) \tc -> do
     checkOrdered "Hegel.Gen.Duration" lo hi
     checkNonNegative lo
     fromPicoseconds <$> drawInteger tc (toPicoseconds lo) (toPicoseconds hi)

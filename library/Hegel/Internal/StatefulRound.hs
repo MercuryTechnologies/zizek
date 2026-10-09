@@ -34,7 +34,7 @@ import Data.Traversable (for)
 import Foreign (Ptr)
 import Hegel.Exception (InvariantViolation (..))
 import Hegel.Internal.Control (AssumeRejected (..), ControlSignal (Assume, Stop), TestStopped (..), catchControl, isAborting)
-import Hegel.Internal.DataSource (Label (LabelStatefulRule), startSpan, stateMachineNextRule, stateMachineRuleRejected, stateMachineShouldCheckInvariant, stopSpan)
+import Hegel.Internal.DataSource (Label (LabelStatefulRule), discardSpansTo, openSpanDepth, spanLabel, startSpan, stateMachineNextRule, stateMachineRuleRejected, stateMachineShouldCheckInvariant, stopSpan)
 import Hegel.Internal.Foreign.Raw (HegelStateMachine)
 import Hegel.Internal.TestCase (TestCase)
 import UnliftIO.Async (Async)
@@ -63,7 +63,7 @@ data Worker = Worker
 runWorkerRound :: Ptr HegelStateMachine -> Worker -> Int -> IO ()
 runWorkerRound sm w workerIndex = case w.roundSpan of
   Own -> do
-    startSpan w.testCase LabelStatefulRule
+    startSpan w.testCase (spanLabel LabelStatefulRule)
     loop False `onException` stopSpan w.testCase False
   Caller -> loop False
   where
@@ -74,10 +74,17 @@ runWorkerRound sm w workerIndex = case w.roundSpan of
           Own -> stopSpan w.testCase rejected
           Caller -> pure ()
         Just ruleIndex -> do
+          depth <- openSpanDepth w.testCase
           verdict <- (Right <$> w.dispatch ruleIndex) `catchControl` (pure . Left)
           case verdict of
             Right () -> loop rejected
-            Left Assume -> stateMachineRuleRejected w.testCase sm workerIndex *> w.onRejected *> loop True
+            -- A rejected rule unwinds out of whatever draws it was making, so
+            -- their spans are closed here before the round span is.
+            Left Assume -> do
+              discardSpansTo w.testCase depth
+              stateMachineRuleRejected w.testCase sm workerIndex
+              w.onRejected
+              loop True
             Left Stop -> throwIO TestStopped
 
 -- * Round resolution

@@ -67,15 +67,19 @@ module Hegel.Internal.DataSource
     -- * Spans
     Label (..),
     labelName,
+    spanLabel,
     labelFromName,
     combineLabels,
     startSpan,
     stopSpan,
+    openSpanDepth,
+    discardSpansTo,
+    forgetSpansTo,
   )
 where
 
 import Control.Exception (finally, throwIO)
-import Control.Monad (void)
+import Control.Monad (void, when)
 import Data.Bits (bit, shiftL, shiftR, testBit, xor, (.&.))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
@@ -85,7 +89,7 @@ import Hegel.Exception (InvariantViolation (..))
 #ifdef HEGEL_CENSUS
 import Data.Foldable (traverse_)
 #endif
-import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
@@ -849,64 +853,120 @@ freeRecursion tc recursion = void (hegel_recursion_free tc.handle.ctx recursion)
 
 -- * Spans
 
--- | Open a labeled span.
-startSpan :: TestCase -> Label -> IO ()
+-- | Open a span labelled @label@, a value from 'spanLabel', 'labelFromName',
+-- or 'combineLabels'.
+startSpan :: TestCase -> Word64 -> IO ()
 startSpan tc label = do
-  result <- hegel_start_span tc.handle.ctx tc.handle.ptr (Witch.into @Word64 label)
+  result <- hegel_start_span tc.handle.ctx tc.handle.ptr label
   handleReturnCode tc result
+  modifyIORef' tc.spanDepth (+ 1)
 
 -- | Close the most-recently-opened span.
 -- Pass 'True' to mark it discarded.
 stopSpan :: TestCase -> Bool -> IO ()
 stopSpan tc isDiscard = do
   result <- hegel_stop_span tc.handle.ctx tc.handle.ptr (CBool (if isDiscard then 1 else 0))
+  modifyIORef' tc.spanDepth (subtract 1)
   handleReturnCode tc result
+
+-- | The number of spans currently open on @tc@.
+openSpanDepth :: TestCase -> IO Int
+openSpanDepth tc = readIORef tc.spanDepth
+
+-- | Close every span opened on @tc@ beyond @depth@, marking each discarded.
+--
+-- A caller that catches an unwind out of a draw and carries on drawing uses
+-- this to close the spans the unwind skipped.
+discardSpansTo :: TestCase -> Int -> IO ()
+discardSpansTo tc depth = do
+  open <- openSpanDepth tc
+  when (open > depth) (stopSpan tc True *> discardSpansTo tc depth)
+
+-- | Record that the engine itself closed every span opened on @tc@ beyond
+-- @depth@, as a discarded recursion attempt does.
+forgetSpansTo :: TestCase -> Int -> IO ()
+forgetSpansTo tc depth = modifyIORef' tc.spanDepth (min depth)
 
 -- | Span labels used to group related draws so the engine can shrink them
 -- as a unit. Each label is derived from a @zizek.<kind>@ name, so it never
 -- collides with the engine's own @hegel.<kind>@ spans.
 data Label
-  = LabelList
-  | LabelListElement
+  = LabelBool
+  | LabelInteger
+  | LabelFloat
+  | LabelBinary
+  | LabelText
+  | LabelCharacter
+  | LabelRegex
+  | LabelEmail
+  | LabelUrl
+  | LabelDomain
+  | LabelUuid
+  | LabelDate
+  | LabelTime
+  | LabelDateTime
+  | LabelDuration
+  | LabelJust
+  | LabelSampledFrom
+  | LabelList
   | LabelSet
-  | LabelSetElement
   | LabelMap
-  | LabelMapEntry
   | LabelTuple
   | LabelOneOf
   | LabelOptional
-  | LabelFixedDict
   | LabelFlatMap
   | LabelFilter
+  | LabelFilterAttempt
   | LabelMapped
-  | LabelSampledFrom
-  | LabelEnumVariant
-  | LabelFeatureFlag
-  | LabelStatefulRule
+  | LabelDeferred
   | LabelRecursive
+  | LabelPoolReuse
+  | LabelPoolConsume
+  | LabelPoolTransfer
+  | LabelStatefulRule
   deriving stock (Show, Eq, Enum, Bounded)
 
 -- | The name a 'Label' is derived from.
 labelName :: Label -> ByteString
 labelName = \case
+  LabelBool -> "zizek.bool"
+  LabelInteger -> "zizek.integer"
+  LabelFloat -> "zizek.float"
+  LabelBinary -> "zizek.binary"
+  LabelText -> "zizek.text"
+  LabelCharacter -> "zizek.character"
+  LabelRegex -> "zizek.regex"
+  LabelEmail -> "zizek.email"
+  LabelUrl -> "zizek.url"
+  LabelDomain -> "zizek.domain"
+  LabelUuid -> "zizek.uuid"
+  LabelDate -> "zizek.date"
+  LabelTime -> "zizek.time"
+  LabelDateTime -> "zizek.datetime"
+  LabelDuration -> "zizek.duration"
+  LabelJust -> "zizek.just"
+  LabelSampledFrom -> "zizek.sampled_from"
   LabelList -> "zizek.list"
-  LabelListElement -> "zizek.list_element"
   LabelSet -> "zizek.set"
-  LabelSetElement -> "zizek.set_element"
   LabelMap -> "zizek.map"
-  LabelMapEntry -> "zizek.map_entry"
   LabelTuple -> "zizek.tuple"
   LabelOneOf -> "zizek.one_of"
   LabelOptional -> "zizek.optional"
-  LabelFixedDict -> "zizek.fixed_dict"
   LabelFlatMap -> "zizek.flat_map"
   LabelFilter -> "zizek.filter"
+  LabelFilterAttempt -> "zizek.filter.attempt"
   LabelMapped -> "zizek.mapped"
-  LabelSampledFrom -> "zizek.sampled_from"
-  LabelEnumVariant -> "zizek.enum_variant"
-  LabelFeatureFlag -> "zizek.feature_flag"
-  LabelStatefulRule -> "zizek.stateful_rule"
+  LabelDeferred -> "zizek.deferred"
   LabelRecursive -> "zizek.recursive"
+  LabelPoolReuse -> "zizek.pool.reuse"
+  LabelPoolConsume -> "zizek.pool.consume"
+  LabelPoolTransfer -> "zizek.pool.transfer"
+  LabelStatefulRule -> "zizek.stateful_rule"
+
+-- | The wire value of a 'Label', as 'startSpan' takes it.
+spanLabel :: Label -> Word64
+spanLabel = Witch.into
+{-# INLINE spanLabel #-}
 
 -- | The span label passed to @libhegel@.
 instance Witch.From Label Word64 where

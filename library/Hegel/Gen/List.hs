@@ -14,8 +14,8 @@ where
 import GHC.Stack (withFrozenCallStack)
 import Hegel.Collection qualified as Collection
 import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
-import Hegel.Gen.Internal (Gen (..), draw)
-import Hegel.Internal.DataSource (Label (..), startSpan, stopSpan)
+import Hegel.Gen.Internal (Gen (..), draw, labelOf)
+import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
 data ListBuilder a = ListBuilder
   { lElement :: !(Gen a),
@@ -40,9 +40,8 @@ instance HasSize (ListBuilder a) where
   maxSize n b = b {lMaxSize = Just n}
 
 instance Build (ListBuilder a) [a] where
-  build b = withFrozenCallStack $ Draw $ \tc -> do
+  build b = withFrozenCallStack $ Draw (combineLabels [spanLabel LabelList, labelOf b.lElement]) \tc -> do
     checkSizeBounds "Hegel.Gen.List" b.lMinSize b.lMaxSize
-    startSpan tc LabelList
     -- For unique lists, see Note [Variable-size mode required for reject]
     -- in Hegel.Collection.
     --
@@ -68,5 +67,4 @@ instance Build (ListBuilder a) [a] where
     let trimmed = case b.lMaxSize of
           Just mx | length result > mx -> take mx result
           _ -> result
-    stopSpan tc False
     pure trimmed
