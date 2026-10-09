@@ -8,7 +8,7 @@ copyright: 2026 jkachmar
 maintainer: j@mercury.com
 license: MPL-2.0
 license-file: LICENSE
-tested-with: ghc ^>=9.10 && ^>=9.12
+tested-with: ghc ^>=9.10 || ^>=9.12
 build-type: Simple
 extra-source-files: licenses/hedgehog.LICENSE
 
