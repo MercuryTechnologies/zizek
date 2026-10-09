@@ -105,7 +105,8 @@ spec = do
           _ -> False
 
     it "renders live concurrent validation failures with their user location" do
-      let machine =
+      let machine :: Concurrent.Machine () IO
+          machine =
             Concurrent.Machine
               { initial = pure (),
                 rules = [Concurrent.rule "invalid draw" (\() -> void (Property.forAll (Gen.int & Gen.min 2 & Gen.max 1 & Gen.build)))],

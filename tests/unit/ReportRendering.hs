@@ -560,7 +560,7 @@ spec = do
     it "renders an outcome with no caveat or token without trailing blank lines" do
       let evidence = FailureEvidence "bare body" [] [] Nothing Nothing
           one = FailureOutcome "origin" Nothing Nothing (Captured evidence)
-          other = FailureOutcome "other" Nothing Nothing (Captured evidence {message = "other body"})
+          other = FailureOutcome "other" Nothing Nothing (Captured (FailureEvidence "other body" [] [] Nothing Nothing))
       renderReport (Report (Failures (one :| [])) (Stats 3 0 0) Unstored [])
         `shouldBe` "failed after 3 tests, including shrinking\nbare body"
       renderReport (Report (Failures (one :| [other])) (Stats 3 0 0) Unstored [])
