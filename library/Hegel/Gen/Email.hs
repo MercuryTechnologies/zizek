@@ -13,6 +13,7 @@ import Hegel.Gen.Builder (Build (..))
 import Hegel.Gen.Internal.String (stringGen)
 import Hegel.Internal.DataSource (Label (LabelEmail), buildEmailGen, spanLabel)
 
+-- | Builder for an email-address generator.
 data EmailBuilder = EmailBuilder
 
 -- | Generate a random RFC 5321\/5322 email address, e.g. @alice\@example.com@.

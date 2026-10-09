@@ -143,7 +143,10 @@ data Scope
 
 -- | The per-test-case environment a property runs against.
 data Env = Env
-  { testCase :: !TestCase,
+  { -- | The engine handle every draw in this scope goes through, which is a
+    -- clone inside a branch, fork, or concurrent worker.
+    testCase :: !TestCase,
+    -- | Where this scope records the notes a failure report is built from.
     journal :: !Journal,
     -- | Ambient nesting level stamped onto each journaled 'Note'.
     noteDepth :: !Int,

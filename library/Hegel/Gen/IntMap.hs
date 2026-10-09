@@ -20,6 +20,8 @@ import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
+-- | Builder for an 'IntMap' generator from key and value generators, sized
+-- with 'HasSize'.
 data IntMapBuilder v = IntMapBuilder
   { mKeys :: !(Gen Int),
     mValues :: !(Gen v),

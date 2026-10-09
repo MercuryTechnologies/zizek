@@ -38,6 +38,8 @@ import Hegel.Gen.Internal (Gen (..))
 import Hegel.Gen.Time (checkFields)
 import Hegel.Internal.DataSource (Label (LabelDateTime), drawDatetime, spanLabel)
 
+-- | Builder for a 'LocalTime' generator, bounded with 'HasMin', 'HasMax', and
+-- 'HasYear', or pinned to one date with 'onDay'.
 data DateTimeBuilder = DateTimeBuilder
   { bMin :: Maybe LocalTime,
     bMax :: Maybe LocalTime

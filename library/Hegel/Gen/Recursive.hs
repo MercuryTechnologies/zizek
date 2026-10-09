@@ -71,6 +71,8 @@ data RecursionContext = RecursionContext
   }
   deriving stock (Show, Eq)
 
+-- | Builder for a recursively defined generator, bounded with 'maxDepth' and
+-- 'maxLeaves'.
 data RecursiveBuilder a = RecursiveBuilder
   { rLeaf :: !(Gen a),
     rBranch :: !(RecursionContext -> Gen a -> Gen a),

@@ -32,6 +32,9 @@ import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), ValidationError 
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (FloatSpec (..), Label (LabelFloat), drawFloat, spanLabel)
 
+-- | Builder for a floating-point generator, bounded with 'HasMin' and 'HasMax'
+-- and refined with 'exclusiveMin', 'exclusiveMax', 'disallowNan', and
+-- 'disallowInfinity'.
 data FloatBuilder a = FloatBuilder
   { bMin :: Maybe a,
     bMax :: Maybe a,

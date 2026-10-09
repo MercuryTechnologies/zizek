@@ -15,6 +15,7 @@ import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (Label (LabelBinary), drawBytes, spanLabel)
 
+-- | Builder for a 'ByteString' generator, sized with 'HasSize'.
 data BinaryBuilder = BinaryBuilder
   { bMinSize :: !Int,
     bMaxSize :: !(Maybe Int)

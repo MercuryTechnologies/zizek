@@ -20,6 +20,8 @@ import Hegel.Gen.Builder (Build (..), HasSize (..), ValidationError (..), checkS
 import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
+-- | Builder for a 'NonEmpty' generator from an element generator, sized with
+-- 'HasSize'.
 data NonEmptyBuilder a = NonEmptyBuilder
   { neElement :: !(Gen a),
     neMinSize :: !Int,

@@ -17,6 +17,8 @@ import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
+-- | Builder for a list generator from an element generator, sized with
+-- 'HasSize' and deduplicated with 'unique'.
 data ListBuilder a = ListBuilder
   { lElement :: !(Gen a),
     lMinSize :: !Int,

@@ -22,6 +22,8 @@ import Hegel.Gen.Internal (Gen (..), drawInline)
 import Hegel.Gen.Internal.String (stringGen)
 import Hegel.Internal.DataSource (Label (LabelText), TextSpec (..), buildTextGen, spanLabel)
 
+-- | Builder for a 'Text' generator, sized with 'HasSize' and restricted with
+-- 'HasAlphabet'.
 data TextBuilder = TextBuilder
   { bMinSize :: !Int,
     bMaxSize :: !(Maybe Int),

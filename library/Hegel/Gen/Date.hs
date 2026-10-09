@@ -36,6 +36,8 @@ import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasYear (..), Va
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (Label (LabelDate), drawDate, spanLabel)
 
+-- | Builder for a calendar 'Day' generator, bounded with 'HasMin', 'HasMax',
+-- and 'HasYear'.
 data DateBuilder = DateBuilder
   { bMin :: Maybe Day,
     bMax :: Maybe Day

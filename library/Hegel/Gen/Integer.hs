@@ -36,6 +36,8 @@ import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), checkOrdered)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (Label (LabelInteger), drawInteger, spanLabel)
 
+-- | Builder for a bounded integral generator, bounded with 'HasMin' and
+-- 'HasMax'.
 data IntegralBuilder a = IntegralBuilder
   { bMin :: Maybe a,
     bMax :: Maybe a

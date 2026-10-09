@@ -19,6 +19,8 @@ import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
+-- | Builder for a 'HashMap' generator from key and value generators, sized
+-- with 'HasSize'.
 data HashMapBuilder k v = HashMapBuilder
   { mKeys :: !(Gen k),
     mValues :: !(Gen v),

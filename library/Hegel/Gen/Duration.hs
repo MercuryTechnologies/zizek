@@ -31,6 +31,8 @@ import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), ValidationError 
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (Label (LabelDuration), drawInteger, spanLabel)
 
+-- | Builder for a 'NominalDiffTime' generator, bounded with 'HasMin' and
+-- 'HasMax'.
 data DurationBuilder = DurationBuilder
   { bMin :: Maybe NominalDiffTime,
     bMax :: Maybe NominalDiffTime

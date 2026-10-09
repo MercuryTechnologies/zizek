@@ -25,6 +25,7 @@ import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), ValidationError 
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (Label (LabelTime), drawTime, spanLabel)
 
+-- | Builder for a 'TimeOfDay' generator, bounded with 'HasMin' and 'HasMax'.
 data TimeBuilder = TimeBuilder
   { bMin :: Maybe TimeOfDay,
     bMax :: Maybe TimeOfDay

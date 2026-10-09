@@ -28,12 +28,14 @@ import Hegel.Internal.DataSource (InvariantViolation (..), Label (LabelUrl), bui
 import Hegel.Internal.TestCase (TestCase)
 import Network.URI (URI, parseURI)
 
+-- | Builder for a 'URI' generator.
 data UriBuilder = UriBuilder
 
 -- | Generate a random RFC 3986 HTTP\/HTTPS URL, returning a parsed 'URI'.
 uri :: UriBuilder
 uri = UriBuilder
 
+-- | Builder for a generator of URIs rendered as 'Text'.
 data UriTextBuilder = UriTextBuilder
 
 -- | Generate a random RFC 3986 HTTP\/HTTPS URL, returning the raw 'Text'.

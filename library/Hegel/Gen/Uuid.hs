@@ -29,6 +29,8 @@ import Hegel.Gen.Builder (Build (..), ValidationError (..))
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (InvariantViolation (..), Label (LabelUuid), drawUuid, spanLabel)
 
+-- | Builder for a 'UUID' generator, restricted to one UUID version with
+-- 'version'.
 newtype UuidBuilder = UuidBuilder
   { bVersion :: Maybe Word8
   }

@@ -109,7 +109,9 @@ import UnliftIO.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 -- real system under test via 'liftIO'. Return the updated model state.
 -- Use 'assume'\/'discard' at the head of 'apply' to express preconditions.
 data Rule s m = Rule
-  { name :: !Text,
+  { -- | The name the engine registers this rule under and step traces display,
+    -- which should be unique within a machine.
+    name :: !Text,
     -- | How often the engine picks this rule relative to the others, which
     -- must be finite and positive.
     --
@@ -136,7 +138,9 @@ weighted w r = r {weight = w}
 --
 -- May draw values but must not modify the model.
 data Invariant s m = Invariant
-  { name :: !Text,
+  { -- | The name the engine registers this invariant under and failure reports
+    -- display, which should be unique within a machine.
+    name :: !Text,
     -- | Whether to check this invariant at every join point instead of a
     -- sampled subset of them.
     alwaysRun :: !Bool,

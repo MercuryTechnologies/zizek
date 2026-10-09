@@ -27,6 +27,7 @@ import Hegel.Gen.Internal (Gen (..), drawInline)
 import Hegel.Gen.Internal.String (stringGen)
 import Hegel.Internal.DataSource (Label (LabelDomain), buildDomainGen, spanLabel)
 
+-- | Builder for a domain-name generator, capped with 'maxLength'.
 newtype DomainBuilder = DomainBuilder
   { bMaxLength :: Int
   }

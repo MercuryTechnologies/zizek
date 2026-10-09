@@ -19,6 +19,8 @@ import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
+-- | Builder for a 'HashSet' generator from an element generator, sized with
+-- 'HasSize'.
 data HashSetBuilder a = HashSetBuilder
   { sElement :: !(Gen a),
     sMinSize :: !Int,

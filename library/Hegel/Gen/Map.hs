@@ -19,6 +19,8 @@ import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 import Prelude hiding (map)
 
+-- | Builder for a 'Data.Map.Strict.Map' generator from key and value
+-- generators, sized with 'HasSize'.
 data MapBuilder k v = MapBuilder
   { mKeys :: !(Gen k),
     mValues :: !(Gen v),
