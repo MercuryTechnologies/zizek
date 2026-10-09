@@ -9,6 +9,8 @@ import Hegel.Report.Discovery (Pos (..), Position (..), findDeclarations)
 import Hegel.Report.Source
   ( Context (..),
     Declaration (..),
+    Inline (..),
+    InlineRole (..),
     Line (..),
     applyContext,
     mergeDeclarations,
@@ -29,7 +31,7 @@ render = T.unpack . PP.Text.renderStrict . PP.layoutPretty PP.defaultLayoutOptio
 
 -- | The concrete annotation type used by 'ppDeclaration': a style for the
 -- source line plus a list of (style, doc) pairs to emit below it.
-type Annot = (Style, [(Style, Doc Ann)])
+type Annot = (Style, [Inline])
 
 -- | Build a 'Declaration' where all lines have the default annotation.
 mkDecl :: FilePath -> LineNo -> String -> [(LineNo, String)] -> Declaration Annot
@@ -60,7 +62,7 @@ markInteresting n decl =
   decl
     { declarationSource =
         Map.adjust
-          (\l -> l {lineAnnotation = (StyleAnnotation, [(StyleAnnotation, PP.pretty ("val" :: String))])})
+          (\l -> l {lineAnnotation = (StyleAnnotation, [Inline Body StyleAnnotation (PP.pretty ("val" :: String))])})
           n
           decl.declarationSource
     }
@@ -169,7 +171,7 @@ spec = do
             decl
               { declarationSource =
                   Map.adjust
-                    (\l -> l {lineAnnotation = (StyleAnnotation, [(StyleAnnotation, PP.pretty (txt :: String))])})
+                    (\l -> l {lineAnnotation = (StyleAnnotation, [Inline Body StyleAnnotation (PP.pretty (txt :: String))])})
                     1
                     decl.declarationSource
               }

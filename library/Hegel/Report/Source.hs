@@ -18,6 +18,8 @@ module Hegel.Report.Source
     Line (..),
     Declaration (..),
     Annotation,
+    Inline (..),
+    InlineRole (..),
     Context (..),
 
     -- * Building annotated declarations
@@ -76,10 +78,27 @@ data Declaration a = Declaration
 data Context = FullContext | Context Int
   deriving stock (Eq, Show)
 
--- | The annotation type for a fully-built source listing.
--- Each line carries a 'Style' for the source text and a list of extra docs
--- (inline values, arrows, diffs) to emit after the source line.
-type Annotation = (Style, [(Style, Doc Ann)])
+-- | The annotation type for a fully-built source listing: a 'Style' for the
+-- source text and the inline docs to emit after the source line.
+type Annotation = (Style, [Inline])
+
+-- | One doc emitted beneath a source line.
+data Inline = Inline
+  { role :: !InlineRole,
+    style :: !Style,
+    doc :: Doc Ann
+  }
+
+-- | Where an inline doc belongs when several annotations land on one line.
+data InlineRole
+  = -- | The @^^^@ arrow under a failing line, drawn once however many failures
+    -- share the line.
+    Caret
+  | -- | A value, message, or diff line, kept in the order it was added.
+    Body
+  | -- | A failure's @at file:line@ text, drawn once per distinct location after
+    -- every body.
+    Location !Text
 
 -- | Default context: keep 2 boring lines around each interesting one.
 defaultContext :: Context
@@ -161,7 +180,7 @@ ppInlinedValue cache valLines sloc = do
   (decl, (startCol, _)) <- lookupStyledDeclaration cache sloc
   let ppValLine d =
         PP.indent startCol (PP.annotate AnnotationGutter "│ " <> d)
-      valDocs = fmap ((StyleAnnotation,) . ppValLine) valLines
+      valDocs = fmap (Inline Body StyleAnnotation . ppValLine) valLines
   pure (spliceDocs StyleAnnotation valDocs sloc decl)
 
 -- | Try to produce a source-inlined declaration for one drawn/annotated note.
@@ -184,27 +203,37 @@ ppFailedInput cache ix (mspan, val) =
 -- | Inline the failure message, diff, and @^^^@ arrows at the source line of
 -- the failing assertion.
 --
+-- A label, such as a concurrent branch's @Branch 2: @, leads the message's
+-- first line and every later message and diff line is indented beneath it, so
+-- failures stacked on one line each read as their own block.
+--
 -- Returns @'Nothing'@ if no source is available.
 ppFailureLocation ::
   Declarations ->
+  Maybe (Doc Ann) ->
   [Doc Ann] ->
   Maybe Diff ->
   Span ->
   Maybe (Declaration Annotation)
-ppFailureLocation cache msgs mdiff sloc = do
+ppFailureLocation cache label msgs mdiff sloc = do
   (decl, (startCol, endCol)) <- lookupStyledDeclaration cache sloc
   let arrowDoc =
         PP.indent startCol $
           PP.annotate FailureMark (PP.pretty (replicate (endCol - startCol) '^'))
       inline x = PP.indent startCol (PP.annotate FailureGutter "│ " <> x)
-      msgDocs = fmap (inline . PP.annotate FailureMessage) msgs
-      diffLines = foldMap (fmap inline . diffDocs) mdiff
-      -- A grep-able @at file:line@, last — the listing's gutter carries the
-      -- same information, but not in the copyable form.
-      locLine =
-        inline . PP.annotate LocAnn $
-          "at" <+> PP.pretty sloc.spanFile <> ":" <> PP.pretty sloc.spanStartLine.unLineNo
-      docs = (StyleFailure,) <$> (arrowDoc : msgDocs <> diffLines <> [locLine])
+      (leading, beneath) = case label of
+        Nothing -> (id, id)
+        Just l -> ((l <>), PP.indent 2)
+      msgDocs = zipWith ($) (leading : repeat beneath) (fmap (PP.annotate FailureMessage) msgs)
+      diffLines = foldMap (fmap beneath . diffDocs) mdiff
+      -- The listing's gutter already shows the line, but not in a form a
+      -- reader can copy into an editor.
+      locText = "at " <> T.pack sloc.spanFile <> ":" <> T.pack (show sloc.spanStartLine.unLineNo)
+      locLine = inline (PP.annotate LocAnn (PP.pretty locText))
+      docs =
+        Inline Caret StyleFailure arrowDoc
+          : fmap (Inline Body StyleFailure . inline) (msgDocs <> diffLines)
+            <> [Inline (Location locText) StyleFailure locLine]
   pure (spliceDocs StyleFailure docs sloc decl)
 
 -- * Shared lookup\/splice machinery
@@ -222,7 +251,7 @@ lookupStyledDeclaration cache sloc = do
 -- inline docs after the span's last line.
 spliceDocs ::
   Style ->
-  [(Style, Doc Ann)] ->
+  [Inline] ->
   Span ->
   Declaration Annotation ->
   Declaration Annotation
@@ -281,11 +310,11 @@ ppDeclaration decl
         && Map.notMember n decl.declarationSource
         && maybe False ((< n) . fst) (Map.lookupMin decl.declarationSource)
 
-    ppAnnot :: (Style, Doc Ann) -> Doc Ann
-    ppAnnot (style, doc) =
-      PP.annotate (StyledLineNo style) ppEmptyNo
-        <+> PP.annotate (StyledBorder style) "┃"
-        <+> doc
+    ppAnnot :: Inline -> Doc Ann
+    ppAnnot i =
+      PP.annotate (StyledLineNo i.style) ppEmptyNo
+        <+> PP.annotate (StyledBorder i.style) "┃"
+        <+> i.doc
 
     ppLines :: [Doc Ann]
     ppLines = do
@@ -315,7 +344,24 @@ mergeDeclaration d1 d2 =
 
 mergeLine :: Line Annotation -> Line Annotation -> Line Annotation
 mergeLine l1 l2 =
-  l1 {lineAnnotation = l1.lineAnnotation <> l2.lineAnnotation}
+  l1 {lineAnnotation = (s1 <> s2, stackInlines (xs <> ys))}
+  where
+    (s1, xs) = l1.lineAnnotation
+    (s2, ys) = l2.lineAnnotation
+
+-- | Lay out the inline docs of several annotations sharing one source line:
+-- a single caret, then every body in the order it was added, then each
+-- distinct location once.
+stackInlines :: [Inline] -> [Inline]
+stackInlines items = take 1 carets <> bodies <> List.nubBy ((==) `on` locationOf) locations
+  where
+    carets = [i | i@Inline {role = Caret} <- items]
+    bodies = [i | i@Inline {role = Body} <- items]
+    locations = [i | i@Inline {role = Location _} <- items]
+    locationOf :: Inline -> Maybe Text
+    locationOf i = case i.role of
+      Location t -> Just t
+      _ -> Nothing
 
 -- | Merge a list of declarations, combining those that share the same file and
 -- starting line. Docs attached to the same line stack in first-seen order

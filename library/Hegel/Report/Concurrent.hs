@@ -103,9 +103,10 @@ spliceNote decls label x@(_, n) =
   maybe (Left (noteLineAtDepth x)) Right do
     sl <- n.loc
     let sp = spanFromSrcLoc sl
-        tag d = maybe d (\l -> PP.annotate BranchLabelAnn (PP.pretty (l <> ": ")) <> d) label
+        labelDoc = (\l -> PP.annotate BranchLabelAnn (PP.pretty (l <> ": "))) <$> label
+        tag d = maybe d (<> d) labelDoc
     case n.kind of
       BranchFailure diff ->
-        ppFailureLocation decls (tag . PP.pretty <$> T.lines n.text) diff sp
+        ppFailureLocation decls labelDoc (PP.pretty <$> T.lines n.text) diff sp
       _ ->
         ppInlinedValue decls (tag . PP.annotate AnnotationValue . PP.pretty <$> T.lines n.text) sp

@@ -20,6 +20,7 @@ import Hegel.Property
     discard,
     forAll,
     forAllWithLabel,
+    (===),
   )
 import Hegel.Property.Branch qualified as Branch
 import Hegel.Report (FailureEvidence (..), Note (..), Report (..), Result (..), isBranchFailure, isBranchHeader, renderReport, renderReportRich)
@@ -155,6 +156,19 @@ spec = describe "concurrent combinators" do
       T.count "┏━━" rich `shouldBe` 1
       ("Branch 1:" `T.isInfixOf` rich) `shouldBe` True
       ("Branch 2:" `T.isInfixOf` rich) `shouldBe` True
+
+    it "stacks failures sharing a source line under one caret, each diff beneath its label" do
+      report <- check def do
+        Branch.forConcurrently_ [1, 2 :: Int] \i -> i === 0
+      rich <- renderReportRich report
+      let caretOnly l = case T.strip (snd (T.breakOnEnd "┃" l)) of
+            "" -> False
+            rest -> T.all (== '^') rest
+      length (filter caretOnly (T.lines rich)) `shouldBe` 1
+      T.count "at tests/unit/BranchProperties.hs:" rich `shouldBe` 1
+      ("Branch 1: === failed" `T.isInfixOf` rich) `shouldBe` True
+      ("Branch 2: === failed" `T.isInfixOf` rich) `shouldBe` True
+      T.count "│   (- lhs) (+ rhs)" rich `shouldBe` 2
 
     it "does not show a redundant bare header once a branch's content is fully spliced" do
       -- Regression test: an earlier version of this renderer always emitted

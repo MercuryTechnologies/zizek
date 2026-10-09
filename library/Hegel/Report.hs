@@ -367,7 +367,7 @@ plainRichDoc message notes loc diff = do
   let (args, idecls) =
         partitionEithers (zipWith (ppFailedInput decls) [0 ..] inputs)
       mFailureDecl =
-        ppFailureLocation decls (fmap PP.pretty (T.lines message)) diff
+        ppFailureLocation decls Nothing (fmap PP.pretty (T.lines message)) diff
           =<< mFailureSpan
       allDecls = mergeFileDeclarations (mergeDeclarations (maybeToList mFailureDecl <> idecls))
       declDocs = fmap (ppDeclaration . applyContext defaultContext) allDecls

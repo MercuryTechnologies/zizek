@@ -123,6 +123,6 @@ spliceNote decls x@(_, n) =
     let sp = spanFromSrcLoc sl
     case n.kind of
       Failure diff ->
-        ppFailureLocation decls (PP.pretty <$> T.lines n.text) diff sp
+        ppFailureLocation decls Nothing (PP.pretty <$> T.lines n.text) diff sp
       _ ->
         ppInlinedValue decls ((PP.annotate AnnotationValue . PP.pretty) <$> T.lines n.text) sp
