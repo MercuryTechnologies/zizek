@@ -1,8 +1,8 @@
 -- | Profiling copy of a pool-bearing stateful machine: file handles that
 -- live in an @open@ pool and 'Hegel.Pool.transfer' into a @closed@ pool on
 -- close, so a failure renders the full composed report with a transfer
--- lineage in its flat event log. Modeled on the gallery's connection-pool
--- scenario (@examples/gallery/Main.hs@).
+-- lineage in its flat event log. Modeled on the gallery's library
+-- scenario (@examples/gallery/Gallery/Library.hs@).
 --
 -- The point is coverage of the composed-report machinery: the per-case event
 -- stream (recorded only on cases the engine stamps for capture, 'Silent'

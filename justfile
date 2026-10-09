@@ -1,4 +1,4 @@
-hs_dirs  := "library tests"
+hs_dirs  := "library tests examples"
 nix_dirs := "."
 
 # Format cabal, Haskell, and Nix sources in one shot.
@@ -12,8 +12,8 @@ check-format:
   @cabal-gild -i zizek.cabal -o /dev/stdout | diff -u zizek.cabal -
   @find {{hs_dirs}} -name '*.hs' | xargs ormolu --mode check
 
-# Run the same checks CI runs: check-format, build, test.
-check: check-format build test
+# Run the same checks CI runs: check-format, build, test, gallery-check.
+check: check-format build test gallery-check
 
 build target="all":
   cabal build {{target}}
@@ -86,6 +86,11 @@ check-coverage:
   @echo "check-coverage: not yet implemented — add hpc-codecov to flake.nix devShell and wire up here"
   @exit 1
 
-# Render the failure-report gallery: eleven scenarios spanning plain/branch/fork/stateful/concurrent stateful reports (eyeball harness)
-gallery:
-    cabal run gallery
+# Render the failure-report gallery, one failing property per report shape;
+# name scenarios (codec warehouse library locales upload bank) to render only those.
+gallery *scenarios:
+    cabal run -v0 gallery -- {{scenarios}}
+
+# Confirm every gallery scenario still renders the report shape it pins.
+gallery-check:
+    cabal run -v0 gallery -- --check

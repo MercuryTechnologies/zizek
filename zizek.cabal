@@ -186,6 +186,15 @@ executable gallery
   import: threaded
   hs-source-dirs: examples/gallery
   main-is: Main.hs
+  other-modules:
+    Gallery.Bank
+    Gallery.Codec
+    Gallery.Library
+    Gallery.Locales
+    Gallery.Scenario
+    Gallery.Upload
+    Gallery.Warehouse
+
   build-depends:
     containers ^>=0.7,
     zizek,

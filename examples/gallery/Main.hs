@@ -1,693 +1,126 @@
--- | A gallery of deliberately-failing properties: the permanent eyeball
--- harness for the failure renderers. Eleven scenarios span the spectrum of
--- report shapes. Every stateful failure renders as one flat chronological
--- event log, then the failing step's source splice; runs of steps
--- unrelated to the failure collapse into a single elision row. For a
--- sequential machine the failing step is always the log's last row; a
--- concurrent one folds a whole round unconditionally, so a step from
--- another worker in that round can follow it:
+-- | A gallery of deliberately failing properties, one per report shape the
+-- failure renderers draw.
 --
---   1. plain property — the non-stateful base case: drawn values splice into
---      their source and a '(===)' failure carries a structural diff, with no
---      event log or footer
---   2. stack palindrome — the smallest /stateful/ spliced report: a multi-rule
---      '(===)' failure with a structural diff in-band, no pool values, so the
---      log shows every step (compact call rows) leading the splice
---   3. warehouse — the realistic no-pool report: four rules over three
---      coupled structures, cross-structure invariants, a minimal
---      counterexample that interleaves three distinct rules, with annotation
---      detail rows and 'forAllWithLabel'-labeled draws
---      (@restock item="apple" qty=5@)
---   4. connection pool — a pooled connection threads idle → active → in-tx →
---      active → idle over its life, so one value's story crosses four pool
---      boundaries ('Pool.transfer' each). A use-after-checkin leak whose
---      /minimal/ counterexample needs an unrelated connect between begin_tx
---      and commit shows the elision row naming the unrelated @conn₂@ it
---      hides, a long lineage across four pools, and named values throughout.
---      Printed in unicode and ascii, beside the unicode report.
---   5. ledger — a /multi-value/ failure: the settling step consumes two
---      distinct funded accounts, so the failing step touches two lineage
---      roots and every step is kept — there is no step that touches neither
---      account, so nothing elides, including the load-bearing @accrue@ step.
---   6. concurrently — two independent branches, each on its own cloned
---      choice stream ('Hegel.Property.Branch.concurrently'), fail
---      independently. Not stateful, so no event log; below the
---      branch-splice threshold every branch renders, merged into one
---      listing since both share this file's enclosing declaration, each
---      stacked line labeled @Branch N:@ so attribution survives the merge,
---      and each failing branch is marked and spliced on its own, not only
---      the one the case shrinks on.
---   7. fan-out — ten independent client sessions
---      ('Hegel.Property.Branch.forConcurrently'), rigged so only client #7
---      ever fails. Crosses the branch-splice threshold, so the nine passing
---      clients collapse into one summary line instead of flooding the report
---      with nine near-identical splices, and only #7 splices, marked.
---   8. fork — a worker spawned mid-property ('Hegel.Property.Fork.spawn'),
---      alongside genuine top-level draws before and after the fork call.
---      Where scenario 6 keeps every line inside one of two branch arguments,
---      this property has top-level activity that renders unlabeled, with only
---      the forked worker's own lines tagged @Fork 1:@. It runs through the
---      same 'Hegel.Report.Concurrent' machinery as scenario 6, rendering the
---      @Branch N@ header shape under a @Fork N@ label.
---   9. concurrent pool, in-rule assert — a concurrent twin of scenario 4:
---      several workers check connections in and out of one shared pool at
---      once, racing a non-atomically maintained cache of the idle count.
---      The claim lives inside the @checkin@ rule itself, so the failure
---      journals into that worker's own step and renders in-band under its
---      @Step N: checkin@ row, tagged with the round\/worker that saw the
---      stale count. The race fails on most but not every replay, so the
---      engine confirms it under nondeterministic handling and its caveat
---      renders above the replay token.
---   10. concurrent pool, invariant at the round join — the same racing
---      machine, but the claim moves to an always-run
---      'Hegel.Stateful.Concurrent.Invariant', checked on the root case after
---      every worker in each round has finished, the shape that catches
---      corruption no single worker could see on its own. The failure marks
---      the round's own  N invariant check@ row rather than any worker
---      step, and the invariant's body splices in underneath.
---   11. concurrent groups — the same racing pool, pared to a single seeded
---      connection @checkout@\/@checkin@ toggle forever. The two share a
---      @"writers"@ 'Hegel.Stateful.Concurrent.grouped' concurrency group,
---      and a new read-only @peek@ rule sits alone in a @"readers"@ group,
---      so no round ever mixes the two. The origin column names each step's
---      group directly, so the constraint is visible without inferring it
---      from rule names: every round's rows read @(writers)@ or
---      @(readers)@, never a mix.
+-- Run it with @just gallery@ from the repository root, since source splicing
+-- reads each declaration from a path relative to the working directory. Every
+-- scenario renders through 'renderReportAuto', the path real failures take.
 --
--- Run with @just gallery@ from the repo root (source splicing resolves
--- @srcLocFile@ relative to the working directory). Every scenario renders
--- through 'renderReportRichAnsi', the same path real failures take.
---
--- Always exits 0; this is an eyeballing harness, not an assertion.
+-- @--check@ renders nothing and instead confirms that each scenario's report
+-- still has the shape it pins, exiting nonzero if any has drifted. @--sweep N@
+-- reruns the seeded scenarios under @N@ fresh seeds and prints how often each
+-- failed and how often it produced its pinned shape. Naming scenarios after
+-- either flag, or alone, limits the run to those scenarios.
 module Main (main) where
 
-import Control.Concurrent (threadDelay)
-import Control.Monad.IO.Class (liftIO)
-import Data.Default.Class (def)
-import Data.Function ((&))
-import Data.Map.Strict (Map)
-import Data.Map.Strict qualified as Map
+import Control.Monad (forM, forM_, unless, when)
+import Data.List (isPrefixOf)
+import Data.Maybe (isJust)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Text.IO qualified as T
-import Hegel.Assertion (assert)
-import Hegel.Gen qualified as Gen
-import Hegel.Pool (Pool)
-import Hegel.Pool qualified as Pool
-import Hegel.Property
-  ( Property,
-    annotate,
-    assume,
-    forAll,
-    forAllWithLabel,
-    (===),
-  )
-import Hegel.Property.Branch qualified as Branch
-import Hegel.Property.Fork qualified as Fork
-import Hegel.Report (Report (..), renderReportAuto, renderReportRichAnsiWith, renderValue)
+import Data.Time.Clock (diffUTCTime, getCurrentTime)
+import Gallery.Bank qualified as Bank
+import Gallery.Codec qualified as Codec
+import Gallery.Library qualified as Library
+import Gallery.Locales qualified as Locales
+import Gallery.Scenario (Scenario (..))
+import Gallery.Upload qualified as Upload
+import Gallery.Warehouse qualified as Warehouse
+import Hegel.Report (Report (..), Result (..), renderReportAuto, renderReportRichAnsiWith)
 import Hegel.Report.Style (defaultStyle)
 import Hegel.Report.Style qualified as Style
 import Hegel.Runner (check)
 import Hegel.Settings (Settings (..))
-import Hegel.Stateful qualified as Stateful
-import Hegel.Stateful.Concurrent qualified as Concurrent
-import System.IO (stdout)
-import UnliftIO.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import System.Environment (getArgs)
+import System.Exit (exitFailure)
+import System.IO (stderr, stdout)
+import Text.Read (readMaybe)
+import UnliftIO.Directory (doesFileExist, removePathForcibly)
+
+scenarios :: [Scenario]
+scenarios = [Codec.scenario, Warehouse.scenario, Library.scenario, Locales.scenario, Upload.scenario, Bank.scenario]
 
 main :: IO ()
 main = do
-  runScenario "1: plain property — drawn values spliced, === diff" plainProperty
-  runScenario "2: stack palindrome — === diff, spliced" (Stateful.run palindromeMachine)
-  runScenario "3: warehouse — realistic interleaving, spliced" (Stateful.run warehouseMachine)
-  runTraceScenario True "4: connection pool — use-after-checkin, elided lineage" (Stateful.run connectionMachine)
-  runTraceScenario False "5: ledger — two accounts settled, flat log" (Stateful.run ledgerMachine)
-  runScenario "6: concurrently — two branches fail independently, spliced" concurrentProperty
-  runScenario "7: fan-out — ten clients, only #7 fails, threshold collapses the rest" fanOutProperty
-  runScenario "8: fork — spawned worker fails independently, top-level lines unlabeled" forkedWorkerProperty
-  runScenarioWith concurrentPoolSettings "9: concurrent pool — in-rule assert, splices at the worker's own step" (Concurrent.run (Concurrent.fixed 3) inRuleAssertMachine)
-  runScenarioWith concurrentPoolSettings "10: concurrent pool — invariant at the round join, no worker attribution" (Concurrent.run (Concurrent.fixed 3) invariantJoinMachine)
-  runScenarioWith concurrentPoolSettings "11: concurrent groups — writers and readers never share a round" (Concurrent.run (Concurrent.fixed 3) groupedMachine)
+  args <- getArgs
+  requireRepositoryRoot
+  -- A failure stored by an earlier run would be replayed instead of found
+  -- afresh, which changes the report's statistics line.
+  removePathForcibly ".hegel/gallery"
+  case args of
+    "--check" : names -> checkAll =<< select names
+    "--sweep" : n : names | Just runs <- readMaybe n, runs > 0 -> mapM_ (sweep runs) =<< select names
+    names | not (any ("--" `isPrefixOf`) names) -> mapM_ render =<< select names
+    _ -> usage
 
-runScenario :: Text -> Property () -> IO ()
-runScenario title prop = showReport title =<< check def prop
+usage :: IO a
+usage = do
+  T.hPutStrLn stderr ("usage: gallery [--check | --sweep N] [SCENARIO...]\nscenarios: " <> T.unwords (map (.name) scenarios))
+  exitFailure
 
--- | 'runScenario' with settings other than the default, for a scenario that
--- needs a tighter budget to keep its log readable.
-runScenarioWith :: Settings -> Text -> Property () -> IO ()
-runScenarioWith settings title prop = showReport title =<< check settings prop
+-- | The scenarios with the given names, or every scenario when none are given.
+select :: [String] -> IO [Scenario]
+select [] = pure scenarios
+select names = case filter (`notElem` map (T.unpack . (.name)) scenarios) names of
+  [] -> pure [s | s <- scenarios, T.unpack s.name `elem` names]
+  _ -> usage
 
--- | Print one report through the wired rich ANSI renderer.
-showReport :: Text -> Report -> IO ()
-showReport title report = do
+-- | Exit unless a scenario's source is readable from the working directory,
+-- since every splice would otherwise fall back to bare journal lines.
+requireRepositoryRoot :: IO ()
+requireRepositoryRoot = do
+  found <- doesFileExist "examples/gallery/Gallery/Library.hs"
+  unless found do
+    T.hPutStrLn stderr "gallery: run from the repository root so source splicing can find its files"
+    exitFailure
+
+render :: Scenario -> IO ()
+render s = do
+  report <- check s.settings s.property
   pref <- Style.preference stdout
-  T.putStrLn (Style.cleanFor pref ("\n━━━━━ scenario " <> title <> " ━━━━━"))
+  T.putStrLn (Style.cleanFor pref ("\n━━━━━ " <> s.name <> ": " <> s.title <> " ━━━━━"))
   T.putStrLn =<< renderReportAuto True pref report
+  when s.ascii do
+    T.putStrLn "-- ascii --"
+    T.putStrLn . Style.sevenBitClean =<< renderReportRichAnsiWith (defaultStyle Style.ascii) report
 
--- | The trace scenarios through the /wired/ path — 'renderReportRichAnsi'
--- composes the event log and the failing step's splice itself — plus the
--- ascii table via the options variant. No scenario here persists, so the
--- reproduction footer never renders; a scenario demonstrating it is future
--- work.
-runTraceScenario :: Bool -> Text -> Property () -> IO ()
-runTraceScenario withAscii title prop = do
-  report <- check def prop
-  showReport title report
-  if withAscii
-    then do
-      T.putStrLn "-- ascii --"
-      T.putStrLn . Style.sevenBitClean
-        =<< renderReportRichAnsiWith (defaultStyle Style.ascii) report
-    else pure ()
+checkAll :: [Scenario] -> IO ()
+checkAll selected = do
+  results <- forM selected \s -> do
+    start <- getCurrentTime
+    mismatches <- firstMatch s.attempts s
+    elapsed <- (`diffUTCTime` start) <$> getCurrentTime
+    let timing = "  (" <> T.pack (show elapsed) <> ")"
+    if null mismatches
+      then T.putStrLn ("ok    " <> s.name <> timing)
+      else do
+        T.putStrLn ("FAIL  " <> s.name <> timing)
+        forM_ mismatches \m -> T.putStrLn ("        " <> m)
+    pure (null mismatches)
+  unless (and results) exitFailure
 
--- | Naive count-with-noun pluralization for demo messages:
--- @pluralize 1 "apple" = "1 apple"@, @pluralize 3 "apple" = "3 apples"@.
-pluralize :: Int -> Text -> Text
-pluralize 1 noun = "1 " <> noun
-pluralize n noun = renderValue n <> " " <> noun <> "s"
+-- | Run a scenario up to @n@ times, stopping at the first report that has its
+-- pinned shape, and return the last run's mismatches.
+firstMatch :: Int -> Scenario -> IO [Text]
+firstMatch n s = do
+  mismatches <- s.expect =<< check s.settings s.property
+  if null mismatches || n <= 1 then pure mismatches else firstMatch (n - 1) s
 
--- * Scenario 1: a plain property
-
--- | The non-stateful base case: two draws and a false claim (subtraction does
--- not commute), so the report is just the spliced draws and the '(===)' diff —
--- no event log or footer.
-plainProperty :: Property ()
-plainProperty = do
-  a <- forAll (Gen.int & Gen.min 0 & Gen.max 9 & Gen.build)
-  b <- forAll (Gen.int & Gen.min 0 & Gen.max 9 & Gen.build)
-  a - b === b - a
-
--- * Scenario 2: stack palindrome
-
--- | A stack of small integers, with a parseable 'Show' so '(===)' produces a
--- structural diff.
-newtype Stack = Stack [Int]
-  deriving stock (Eq, Show)
-
--- | Push a drawn value onto the stack.
-push :: Stateful.Rule Stack IO
-push =
-  Stateful.Rule "push" \(Stack xs) -> do
-    n <- forAll (Gen.int & Gen.min 0 & Gen.max 9 & Gen.build)
-    pure (Stack (n : xs))
-
--- | A deliberately false claim: that the stack always reads the same
--- forwards and backwards. Fails via '(===)' as soon as two distinct values
--- have been pushed.
-checkPalindrome :: Stateful.Rule Stack IO
-checkPalindrome =
-  Stateful.Rule "check_palindrome" \s@(Stack xs) -> do
-    Stack xs === Stack (reverse xs)
-    pure s
-
-palindromeMachine :: Stateful.Machine Stack IO
-palindromeMachine =
-  Stateful.Machine
-    { initial = pure (Stack []),
-      rules = [push, checkPalindrome],
-      stepCount = Stateful.defaultStepCount,
-      invariants = []
-    }
-
--- * Scenario 3: warehouse
-
--- | A warehouse whose model couples three structures: on-hand stock, a
--- __denormalized__ per-SKU reservation cache, and the pending-order table
--- the cache summarizes. The consistency invariant recomputes the cache from
--- the table on every step.
-data Warehouse = Warehouse
-  { -- | On-hand quantity per SKU.
-    stock :: Map Text Int,
-    -- | Reservation totals per SKU — a cache of 'pending', kept
-    -- incrementally by the rules (that's where the bug lives).
-    reserved :: Map Text Int,
-    -- | Open orders: id → (SKU, quantity).
-    pending :: Map Int (Text, Int),
-    nextOrder :: Int
-  }
-  deriving stock (Show)
-
--- | Two SKUs, not more: the bug needs two same-SKU orders, and each extra
--- SKU multiplies the engine's search for that conjunction.
-skus :: [Text]
-skus = ["apple", "banana"]
-
--- | Adjust a per-SKU tally, dropping entries at (or below) zero.
-tally :: Text -> Int -> Map Text Int -> Map Text Int
-tally sku dq = Map.filter (> 0) . Map.insertWith (+) sku dq
-
-restock :: Stateful.Rule Warehouse IO
-restock =
-  Stateful.Rule "restock" \w -> do
-    sku <- forAllWithLabel "item" (Gen.element skus)
-    qty <- forAllWithLabel "qty" (Gen.int & Gen.min 5 & Gen.max 10 & Gen.build)
-    pure w {stock = tally sku qty w.stock}
-
--- | Reserve stock for a new order; only as much as is unreserved.
-placeOrder :: Stateful.Rule Warehouse IO
-placeOrder =
-  Stateful.Rule "place_order" \w -> do
-    sku <- forAllWithLabel "item" (Gen.element skus)
-    qty <- forAllWithLabel "qty" (Gen.int & Gen.min 1 & Gen.max 3 & Gen.build)
-    let available =
-          Map.findWithDefault 0 sku w.stock - Map.findWithDefault 0 sku w.reserved
-    assume (qty <= available)
-    annotate ("order #" <> renderValue w.nextOrder <> " reserves " <> pluralize qty sku)
-    pure
-      w
-        { pending = Map.insert w.nextOrder (sku, qty) w.pending,
-          reserved = tally sku qty w.reserved,
-          nextOrder = w.nextOrder + 1
-        }
-
--- | Ship an order: consumes both the stock and the reservation.
-fulfillOrder :: Stateful.Rule Warehouse IO
-fulfillOrder =
-  Stateful.Rule "fulfill_order" \w -> do
-    assume (not (Map.null w.pending))
-    oid <- forAllWithLabel "order" (Gen.element (Map.keys w.pending))
-    let (sku, qty) = w.pending Map.! oid
-    annotate ("fulfilling order #" <> renderValue oid <> ": " <> pluralize qty sku)
-    pure
-      w
-        { pending = Map.delete oid w.pending,
-          reserved = tally sku (negate qty) w.reserved,
-          stock = tally sku (negate qty) w.stock
-        }
-
-cancelOrder :: Stateful.Rule Warehouse IO
-cancelOrder =
-  Stateful.Rule "cancel_order" \w -> do
-    assume (not (Map.null w.pending))
-    oid <- forAllWithLabel "order" (Gen.element (Map.keys w.pending))
-    annotate ("canceling order #" <> renderValue oid)
-    -- BUG: releases the reservation held by the *newest* pending order
-    -- instead of the canceled one — harmless exactly when they coincide.
-    pure case Map.lookupMax w.pending of
-      -- Unreachable: the 'assume' above guarantees a pending order.
-      Nothing -> w
-      Just (_, (sku, qty)) ->
-        w
-          { pending = Map.delete oid w.pending,
-            reserved = tally sku (negate qty) w.reserved
-          }
-
--- | The cross-structure consistency claim: the incremental cache always
--- equals the reservation totals recomputed from the order table.
-reservationsMatchOrders :: Stateful.Invariant Warehouse IO
-reservationsMatchOrders =
-  Stateful.invariant "reservations_match_orders" \w ->
-    w.reserved === Map.filter (> 0) (Map.fromListWith (+) (Map.elems w.pending))
-
-stockCoversReservations :: Stateful.Invariant Warehouse IO
-stockCoversReservations =
-  Stateful.invariant "stock_covers_reservations" \w ->
-    assert
-      (and [Map.findWithDefault 0 sku w.stock >= q | (sku, q) <- Map.toList w.reserved])
-      "every reservation is backed by on-hand stock"
-
-stockNonNegative :: Stateful.Invariant Warehouse IO
-stockNonNegative =
-  Stateful.invariant "stock_non_negative" \w ->
-    assert (all (>= 0) w.stock) "stock never goes negative"
-
-warehouseMachine :: Stateful.Machine Warehouse IO
-warehouseMachine =
-  Stateful.Machine
-    { initial =
-        pure
-          Warehouse
-            { stock = Map.empty,
-              reserved = Map.empty,
-              pending = Map.empty,
-              nextOrder = 1
-            },
-      rules = [restock, placeOrder, fulfillOrder, cancelOrder],
-      stepCount = Stateful.defaultStepCount,
-      invariants = [reservationsMatchOrders, stockCoversReservations, stockNonNegative]
-    }
-
--- * Scenario 4: connection pool (elided lineage)
-
--- | A pooled connection threads through several pools over its life — @idle@
--- when available, @active@ when checked out, @in-tx@ mid-transaction — so one
--- value's lineage crosses four pool boundaries ('Pool.transfer' each): the
--- longest lineage the report renders.
---
--- The SUT bug: @commit@ clears the connection's open-transaction flag —
--- /unless/ the pool grew (another connection opened) since @begin_tx@, in which
--- case the clear is skipped and the transaction leaks. A later @query@ of the
--- now-idle, checked-in connection then sees the stale transaction and errors.
--- The resize forces an unrelated @connect@ between @begin_tx@ and @commit@ (an
--- elision row and a second lifeline shrinking cannot remove); the leak forces
--- the whole checkout → begin_tx → commit → checkin chain onto the subject's
--- lifeline, so the report shows a value crossing every pool boundary.
-data ConnModel = ConnModel
-  { idle :: Pool Int,
-    active :: Pool Int,
-    inTx :: Pool Int,
-    nextConn :: IORef Int,
-    -- | SUT: grows on every connect (the pool table "epoch").
-    epoch :: IORef Int,
-    -- | SUT: the epoch at each connection's begin_tx.
-    txEpoch :: IORef (Map Int Int),
-    -- | SUT: does the connection have an uncommitted transaction?
-    txOpen :: IORef (Map Int Bool)
-  }
-
-connectionMachine :: Stateful.Machine ConnModel IO
-connectionMachine =
-  Stateful.Machine
-    { initial = do
-        idle <- Pool.named "conn"
-        active <- Pool.new
-        inTx <- Pool.new
-        nextConn <- newIORef 0
-        epoch <- newIORef 0
-        txEpoch <- newIORef Map.empty
-        txOpen <- newIORef Map.empty
-        pure ConnModel {idle, active, inTx, nextConn, epoch, txEpoch, txOpen},
-      rules =
-        [ Stateful.Rule "connect" \m -> do
-            c <- liftIO do
-              c <- readIORef m.nextConn
-              modifyIORef' m.nextConn (+ 1)
-              modifyIORef' m.epoch (+ 1)
-              pure c
-            Pool.add m.idle c
-            pure m,
-          Stateful.Rule "checkout" \m -> do
-            _ <- forAll (Pool.transfer m.idle m.active)
-            pure m,
-          Stateful.Rule "begin_tx" \m -> do
-            c <- forAll (Pool.transfer m.active m.inTx)
-            liftIO do
-              e <- readIORef m.epoch
-              modifyIORef' m.txEpoch (Map.insert c e)
-              modifyIORef' m.txOpen (Map.insert c True)
-            pure m,
-          Stateful.Rule "commit" \m -> do
-            c <- forAll (Pool.transfer m.inTx m.active)
-            liftIO do
-              e <- readIORef m.epoch
-              began <- Map.findWithDefault 0 c <$> readIORef m.txEpoch
-              -- BUG: only clears the transaction when the table hasn't grown
-              -- since begin_tx; a resize makes commit silently leak it.
-              if e > began
-                then pure () -- leak!
-                else modifyIORef' m.txOpen (Map.insert c False)
-            pure m,
-          Stateful.Rule "checkin" \m -> do
-            _ <- forAll (Pool.transfer m.active m.idle)
-            pure m,
-          Stateful.Rule "query" \m -> do
-            c <- forAll (Pool.reuse m.idle)
-            open <- liftIO (Map.findWithDefault False c <$> readIORef m.txOpen)
-            Stateful.respondShow open
-            assert (not open) "a checked-in connection has no open transaction"
-            pure m
-        ],
-      stepCount = Stateful.defaultStepCount,
-      invariants = []
-    }
-
--- * Scenario 5: ledger (flat log, two lineage roots)
-
--- | The failing step touches /two/ distinct pool values: @settle@ consumes
--- two funded accounts and trips a claim about both. Both accounts are
--- relevant roots, so every step that touches either one is kept. The
--- interest-posting @accrue@ step touches no pool value at all, so it elides
--- even though it funded the accounts @settle@ depends on. A standing fixture
--- for multi-root failures.
---
--- The claim is deliberately false: nothing in the model stops two accounts
--- from holding funds at once, in the spirit of scenario 2's palindrome.
-data LedgerModel = LedgerModel
-  { accounts :: Pool Int,
-    balances :: IORef (Map Int Int),
-    nextAccount :: IORef Int
-  }
-
-ledgerMachine :: Stateful.Machine LedgerModel IO
-ledgerMachine =
-  Stateful.Machine
-    { initial = do
-        accounts <- Pool.named "account"
-        balances <- newIORef Map.empty
-        nextAccount <- newIORef 0
-        pure LedgerModel {accounts, balances, nextAccount},
-      rules =
-        [ Stateful.Rule "open" \m -> do
-            acc <- liftIO do
-              n <- readIORef m.nextAccount
-              modifyIORef' m.nextAccount (+ 1)
-              modifyIORef' m.balances (Map.insert n 0)
-              pure n
-            Pool.add m.accounts acc
-            pure m,
-          -- Posts interest to every account at once. It draws nothing from
-          -- the pool, so it touches no pool value and elides from the log
-          -- even though it is load-bearing: with no accrual, no account is
-          -- funded, and settle passes.
-          Stateful.Rule "accrue" \m -> do
-            liftIO (modifyIORef' m.balances (Map.map (+ 1)))
-            pure m,
-          -- Consumes two distinct accounts (a consuming draw removes the first,
-          -- so the second is necessarily different), giving the failing step two
-          -- pool subjects.
-          Stateful.Rule "settle" \m -> do
-            a <- forAll (Pool.consume m.accounts)
-            b <- forAll (Pool.consume m.accounts)
-            bals <- liftIO (readIORef m.balances)
-            let funded acc = Map.findWithDefault 0 acc bals > 0
-            assert (not (funded a && funded b)) "funds stay consolidated in one account"
-            pure m
-        ],
-      stepCount = Stateful.defaultStepCount,
-      invariants = []
-    }
-
--- * Scenario 6: concurrently (two branches, independent failures)
-
--- | Two clients drawing against a shared upper bound, each on its own cloned
--- choice stream. Both fail independently, so the report shows two branch
--- splices rather than one: each branch's draw and annotation inline into its
--- own source lines regardless of outcome, and each failing branch's own
--- assertion, message, and location render in-band, marked on its own header,
--- not only the branch the case shrinks on.
-concurrentProperty :: Property ()
-concurrentProperty =
-  Branch.concurrently_
-    ( do
-        v <- forAll (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
-        annotate ("client A drew " <> renderValue v)
-        assert (v < 30) "client A: value too big"
-    )
-    ( do
-        v <- forAll (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
-        annotate ("client B drew " <> renderValue v)
-        assert (v < 30) "client B: value too big"
-    )
-
--- * Scenario 7: fan-out (branch-splice threshold)
-
--- | Ten independent client sessions, each on its own cloned choice stream,
--- deterministically rigged so only client #7 ever fails: this crosses
--- 'Hegel.Report.Concurrent''s branch-splice threshold, so the nine passing
--- clients collapse into a one-line summary instead of flooding the report
--- with nine near-identical splices, and only #7's own draw and failure
--- render, labeled and marked.
-fanOutProperty :: Property ()
-fanOutProperty = do
-  _ <-
-    Branch.forConcurrently [1 .. 10] \i -> do
-      v <- forAll (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
-      annotate ("client " <> renderValue (i :: Int) <> " drew " <> renderValue v)
-      assert (i /= 7 || v < 30) "client stayed under budget"
-  pure ()
-
--- * Scenario 8: fork (spawn, join, independent failure)
-
--- | A worker forked mid-property, drawing and asserting on its own cloned
--- choice stream, alongside genuine top-level draws before and after the fork
--- call. Unlike 'concurrentProperty', where every line lives inside one of two
--- branch arguments, this property has top-level activity of its own: the
--- budget draw and annotation render unlabeled, and only the forked worker's
--- own lines carry the @Fork 1:@ tag.
-forkedWorkerProperty :: Property ()
-forkedWorkerProperty = do
-  budget <- forAll (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
-  annotate ("budget " <> renderValue budget)
-  worker <- Fork.spawn do
-    v <- forAll (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
-    annotate ("worker drew " <> renderValue v)
-    assert (v < 30) "worker: value too big"
-  Fork.join worker
-
--- * Scenarios 9-10: concurrent pool (racy cache, two render paths)
-
--- | Connections checked in and out of a shared pool by several workers at
--- once, alongside the SUT's own cached idle count.
-data PoolModel = PoolModel
-  { idle :: Pool Int,
-    active :: Pool Int,
-    nextConn :: IORef Int,
-    -- | SUT: the pool's own cached count of idle connections.
-    cached :: IORef Int
-  }
-
-newPoolModel :: Property PoolModel
-newPoolModel = do
-  idle <- Pool.named "conn"
-  active <- Pool.new
-  nextConn <- newIORef 0
-  cached <- newIORef 0
-  pure PoolModel {idle, active, nextConn, cached}
-
--- | Read, pause, write: widens the window so two workers updating a shared
--- counter within one round reliably lose one of their two updates.
-bumpRacily :: IORef Int -> Int -> IO ()
-bumpRacily ref dv = do
-  v <- readIORef ref
-  threadDelay 200
-  writeIORef ref (v + dv)
-
--- | Mint a fresh connection into 'idle'.
---
--- BUG: the shared cache is bumped non-atomically, the same way every rule
--- below touches it; two workers racing in one round can each read the same
--- starting value and one update is lost.
-connectBody :: PoolModel -> Property ()
-connectBody m = do
-  c <- liftIO do
-    c <- readIORef m.nextConn
-    modifyIORef' m.nextConn (+ 1)
-    pure c
-  Pool.add m.idle c
-  liftIO (bumpRacily m.cached 1)
-
-connect :: Concurrent.Rule PoolModel IO
-connect = Concurrent.rule "connect" connectBody
-
-checkoutBody :: PoolModel -> Property ()
-checkoutBody m = do
-  _ <- forAll (Pool.transfer m.idle m.active)
-  liftIO (bumpRacily m.cached (-1))
-
-checkout :: Concurrent.Rule PoolModel IO
-checkout = Concurrent.rule "checkout" checkoutBody
-
-checkinBody :: PoolModel -> Property ()
-checkinBody m = do
-  _ <- forAll (Pool.transfer m.active m.idle)
-  liftIO (bumpRacily m.cached 1)
-
--- | 'checkinBody', with the claim checked inline at the end of the rule:
--- the failure journals into the firing worker's own step.
-checkinAsserting :: Concurrent.Rule PoolModel IO
-checkinAsserting =
-  Concurrent.rule "checkin" \m -> do
-    checkinBody m
-    actual <- liftIO (Pool.size m.idle)
-    cachedNow <- liftIO (readIORef m.cached)
-    assert (cachedNow == actual) "the cached idle count matches the pool"
-
--- | 'checkinBody' with no claim of its own, for pairing with
--- 'cacheMatchesPool'.
-checkinPlain :: Concurrent.Rule PoolModel IO
-checkinPlain = Concurrent.rule "checkin" checkinBody
-
--- | The same claim as 'checkinAsserting', checked on the root case once
--- every worker in the round has finished rather than inside any one rule.
-cacheMatchesPool :: Concurrent.Invariant PoolModel IO
-cacheMatchesPool =
-  Concurrent.alwaysInvariant "cache_matches_pool" \m -> do
-    actual <- liftIO (Pool.size m.idle)
-    cachedNow <- liftIO (readIORef m.cached)
-    cachedNow === actual
-
-inRuleAssertMachine :: Concurrent.Machine PoolModel IO
-inRuleAssertMachine =
-  Concurrent.Machine
-    { initial = newPoolModel,
-      rules = [connect, checkout, checkinAsserting],
-      stepCount = concurrentStepCount,
-      invariants = []
-    }
-
-invariantJoinMachine :: Concurrent.Machine PoolModel IO
-invariantJoinMachine =
-  Concurrent.Machine
-    { initial = newPoolModel,
-      rules = [connect, checkout, checkinPlain],
-      stepCount = concurrentStepCount,
-      invariants = [cacheMatchesPool]
-    }
-
--- | A tighter case budget than 'def' for the concurrent scenarios.
-concurrentPoolSettings :: Settings
-concurrentPoolSettings = def {testCases = 20}
-
--- | A tighter step budget than 'Concurrent.defaultStepCount'. A concurrent
--- machine's step count bounds rounds rather than raw steps, and up to five
--- rule dispatches can land in a single round, so a tight round budget is
--- what keeps the log readable.
-concurrentStepCount :: Int
-concurrentStepCount = 3
-
--- * Scenario 11: concurrent groups (writers and readers never share a round)
-
--- | A read-only rule in its own @"readers"@ concurrency group: 'Pool.reuse'
--- doesn't remove its draw, so @peek@ mutates nothing and carries no claim
--- of its own, but the draw is a real touch, so its steps render rather than
--- eliding away with the rest.
-peek :: Concurrent.Rule PoolModel IO
-peek =
-  Concurrent.grouped "peek" "readers" \m -> do
-    c <- forAll (Pool.reuse m.idle)
-    Stateful.respondShow c
-
--- | Two connections, seeded directly into @idle@, with no @connect@ rule to
--- mint more: 'checkout' and 'checkin' just toggle them between pools
--- forever. Two keeps both directions almost always available, so workers
--- rarely grind through a run of rejections the way exactly one connection
--- would; two is still few enough that a 'peek' read usually shares a
--- lineage root with whichever connection a failing writer step touches.
---
--- Matching the pool's size to the worker count instead, one connection per
--- worker, was tried and measured worse: three connections against three
--- workers gives a thinner margin, since as soon as all three land in the
--- same pool the opposite direction starves completely, which happened more
--- often in practice than the storms two connections still occasionally hit.
---
--- Occasionally a worker's assigned rule keeps rejecting for many steps in a
--- row before the round moves on: genuine contention on a two-item pool
--- shared by three workers, not a bug in this fixture. When the failure
--- lands on such a step, its header falls back to that rejection's own
--- annotation text instead of a normal @Step N: rule@ line, the same
--- "attaches to whichever step folded last" trade-off scenario 10 already
--- documents, just more visible here under heavier contention.
-groupedInitial :: Property PoolModel
-groupedInitial = do
-  idle <- Pool.named "conn"
-  active <- Pool.new
-  nextConn <- newIORef 2
-  cached <- newIORef 2
-  Pool.add idle 0
-  Pool.add idle 1
-  pure PoolModel {idle, active, nextConn, cached}
-
--- | 'checkout' and 'checkin' share a @"writers"@ group, so they still race
--- exactly as in scenarios 9 and 10; 'peek' never shares a round with them,
--- and every step's origin column names its group, so the constraint is
--- visible without inferring it from rule names alone.
-groupedMachine :: Concurrent.Machine PoolModel IO
-groupedMachine =
-  Concurrent.Machine
-    { initial = groupedInitial,
-      rules =
-        [ Concurrent.grouped "checkout" "writers" checkoutBody,
-          Concurrent.grouped "checkin" "writers" checkinBody,
-          peek
-        ],
-      stepCount = concurrentStepCount,
-      invariants = [cacheMatchesPool]
-    }
+-- | Rerun a seeded scenario under fresh seeds, clearing the example database
+-- before each run, and print how often it failed and how often it matched its
+-- pinned shape.
+sweep :: Int -> Scenario -> IO ()
+sweep runs s = when (isJust s.settings.seed) do
+  let settings = s.settings {seed = Nothing}
+  outcomes <- forM [1 .. runs] \_ -> do
+    removePathForcibly ".hegel/gallery"
+    report <- check settings s.property
+    mismatches <- s.expect report
+    pure (isFailure report.result, null mismatches)
+  let count p = T.pack (show (length (filter p outcomes)))
+      total = T.pack (show runs)
+  T.putStrLn (s.name <> ": failed " <> count fst <> "/" <> total <> ", pinned shape " <> count snd <> "/" <> total)
+  where
+    isFailure = \case
+      Failures _ -> True
+      _ -> False
