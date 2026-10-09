@@ -1,10 +1,13 @@
 -- | Configuration resolution and runner execution contracts.
 module RunnerConfiguration (spec) where
 
+import Control.Concurrent.Async (AsyncCancelled)
+import Control.Exception (SomeException, fromException)
 import Control.Monad (void)
 import Data.Either (isLeft)
 import Data.Foldable (for_)
 import Data.Function ((&))
+import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Data.Word (Word64)
 import Hegel.Database (Database (..))
@@ -200,7 +203,7 @@ spec = do
       withAsync (evalAround aroundAction (Hspec.propForWith defaultSettings "cancel" body)) \worker -> do
         takeMVar entered
         cancel worker
-        waitCatch worker >>= (`shouldSatisfy` isLeft)
+        waitCatch worker >>= (`shouldSatisfy` surfacedAsCancellation)
       readIORef cleaned `shouldReturn` True
       readIORef released `shouldReturn` True
 
@@ -242,6 +245,20 @@ runTree opts = \case
   Tree.TestGroup _ [child] -> runTree opts child
   Tree.PlusTestOptions modify child -> runTree (modify opts) child
   _ -> fail "expected one leaf"
+
+-- | Whether a cancelled example surfaced the cancellation itself, either rethrown
+-- or reported as the example's error, rather than passing or failing as a
+-- property.
+--
+-- hspec-core may do either: the runner's own thread wrapper rethrows it, while
+-- 'Core.itemExample' called directly may catch it and report an error.
+surfacedAsCancellation :: Either SomeException Core.Result -> Bool
+surfacedAsCancellation = \case
+  Left e -> isCancellation e
+  Right (Core.Result _ (Core.Failure _ (Core.Error _ e))) -> isCancellation e
+  Right _ -> False
+  where
+    isCancellation e = isJust (fromException @AsyncCancelled e)
 
 evalFixture :: a -> SpecWith a -> IO Core.Result
 evalFixture fixture = evalAround ($ fixture)

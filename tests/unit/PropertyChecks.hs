@@ -1,6 +1,9 @@
 -- | Smoke tests for the property monad ('check').
 module PropertyChecks (spec) where
 
+import Control.Exception (AsyncException (ThreadKilled))
+import Control.Exception qualified
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ask, runReaderT)
 import Data.Default.Class (def)
@@ -34,6 +37,9 @@ intR (lo, hi) = Gen.integral & Gen.min lo & Gen.max hi & Gen.build
 
 spec :: Spec
 spec = do
+  it "rethrows an asynchronous exception from the body as itself" do
+    check def (liftIO (Control.Exception.throwIO ThreadKilled)) `shouldThrow` (== ThreadKilled)
+
   it "interleaves draws, notes, and assertions" $ do
     report <- check def do
       x <- forAll (intR (0, 100))

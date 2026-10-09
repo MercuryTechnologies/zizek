@@ -10,6 +10,7 @@ where
 
 import Control.Concurrent.Async (wait, withAsyncBound)
 import Control.Exception (SomeException, bracket, finally, mask, toException, try)
+import Control.Exception qualified as E
 import Control.Monad (unless, void)
 import Data.Bits ((.|.))
 import Data.Foldable (for_)
@@ -461,7 +462,10 @@ runTestCase ctx action tcPtr lastFailure = do
         | not (null failures),
           isAborting e ->
             throwIO $ FinalizerFailed (Just e) failures
-        | otherwise -> throwIO $ NoBacktrace e
+        -- Base 'E.throwIO', because unliftio's would wrap an asynchronous
+        -- exception such as a cancellation as a synchronous one, and callers
+        -- could no longer catch it as what it is.
+        | otherwise -> E.throwIO $ NoBacktrace e
       Right status -> case failures of
         [] -> pure status
         -- A captured finalizer failure aborts the run; 'drainFinalizers'
