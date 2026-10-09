@@ -350,7 +350,7 @@ reportOf events notes =
               loc = Nothing,
               diff = Nothing
             },
-      stats = Stats 1 0,
+      stats = Stats 1 0 0,
       reproduction = Unstored,
       engineOutput = []
     }

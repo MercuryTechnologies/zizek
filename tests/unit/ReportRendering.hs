@@ -5,7 +5,7 @@ module ReportRendering (spec) where
 import Control.Exception (displayException)
 import Control.Monad (unless)
 import Data.Foldable (for_)
-import Data.List (isInfixOf)
+import Data.List (isInfixOf, isPrefixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (isJust)
 import Data.Text (Text)
@@ -63,15 +63,23 @@ spec :: Spec
 spec = do
   describe "renderReport" $ do
     it "renders a passing run" $ do
-      renderReport Report {result = Ok, stats = Stats {valid = 100, invalid = 0}, reproduction = Unstored, engineOutput = []}
+      renderReport Report {result = Ok, stats = Stats {valid = 100, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
         `shouldBe` "OK, passed 100 tests"
 
     it "renders discard counts" $ do
-      renderReport Report {result = Ok, stats = Stats {valid = 100, invalid = 3}, reproduction = Unstored, engineOutput = []}
+      renderReport Report {result = Ok, stats = Stats {valid = 100, invalid = 3, failing = 0}, reproduction = Unstored, engineOutput = []}
         `shouldBe` "OK, passed 100 tests (3 discarded)"
 
+    it "counts failing cases toward a failure's tests and not a pass's" $ do
+      let result = failureResult FailureEvidence {message = "boom", notes = [], events = [], loc = Nothing, diff = Nothing}
+          stats = Stats {valid = 4, invalid = 1, failing = 2}
+      T.lines (renderReport Report {result, stats, reproduction = Unstored, engineOutput = []})
+        `shouldSatisfy` (["failed after 6 tests (1 discarded), including shrinking"] `isPrefixOf`)
+      renderReport Report {result = Ok, stats, reproduction = Unstored, engineOutput = []}
+        `shouldBe` "OK, passed 4 tests (1 discarded)"
+
     it "follows the report with the engine's output" $ do
-      renderReport Report {result = Ok, stats = Stats {valid = 100, invalid = 0}, reproduction = Unstored, engineOutput = ["Statistics (over 100 test cases):", "  empty: 12%"]}
+      renderReport Report {result = Ok, stats = Stats {valid = 100, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = ["Statistics (over 100 test cases):", "  empty: 12%"]}
         `shouldBe` "OK, passed 100 tests\n\nStatistics (over 100 test cases):\n  empty: 12%"
 
     it "renders a counterexample with numbered draws, footnotes last" $ do
@@ -89,9 +97,9 @@ spec = do
                   loc = Just aLoc,
                   diff = Nothing
                 }
-          report = Report {result, stats = Stats {valid = 12, invalid = 1}, reproduction = Unstored, engineOutput = []}
+          report = Report {result, stats = Stats {valid = 12, invalid = 1, failing = 0}, reproduction = Unstored, engineOutput = []}
       T.lines (renderReport report)
-        `shouldBe` [ "failed after 12 tests (1 discarded)",
+        `shouldBe` [ "failed after 12 tests (1 discarded), including shrinking",
                      "sum stays small",
                      "  at tests/Spec.hs:42",
                      "  Draw 1: 50",
@@ -110,9 +118,9 @@ spec = do
                   loc = Just aLoc,
                   diff = Just [LineRemoved "old", LineAdded "new"]
                 }
-          report = Report {result, stats = Stats {valid = 5, invalid = 0}, reproduction = Unstored, engineOutput = []}
+          report = Report {result, stats = Stats {valid = 5, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
       T.lines (renderReport report)
-        `shouldBe` [ "failed after 5 tests",
+        `shouldBe` [ "failed after 5 tests, including shrinking",
                      "=== failed, values are not equal",
                      "  (- lhs) (+ rhs)",
                      "  - old",
@@ -145,9 +153,9 @@ spec = do
                   loc = Just aLoc,
                   diff = Just [LineRemoved "Stack [ 1 , 0 ]", LineAdded "Stack [ 0 , 1 ]"]
                 }
-          report = Report {result, stats = Stats {valid = 5038, invalid = 0}, reproduction = Unstored, engineOutput = []}
+          report = Report {result, stats = Stats {valid = 5038, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
       T.lines (renderReport report)
-        `shouldBe` [ "failed after 5038 tests",
+        `shouldBe` [ "failed after 5038 tests, including shrinking",
                      "  Initial invariant check.",
                      "  Step 1: push",
                      "    Draw 1: 0",
@@ -175,9 +183,9 @@ spec = do
                   loc = Just aLoc,
                   diff = Nothing
                 }
-          report = Report {result, stats = Stats {valid = 11, invalid = 0}, reproduction = Unstored, engineOutput = []}
+          report = Report {result, stats = Stats {valid = 11, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
       T.lines (renderReport report)
-        `shouldBe` [ "failed after 11 tests",
+        `shouldBe` [ "failed after 11 tests, including shrinking",
                      "  Initial invariant check.",
                      "  Step 1: increment",
                      "    ✗ counter stays small",
@@ -200,9 +208,9 @@ spec = do
                   loc = Nothing,
                   diff = Nothing
                 }
-          report = Report {result, stats = Stats {valid = 1, invalid = 0}, reproduction = Unstored, engineOutput = []}
+          report = Report {result, stats = Stats {valid = 1, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
       T.lines (renderReport report)
-        `shouldBe` [ "failed after 1 tests",
+        `shouldBe` [ "failed after 1 test, including shrinking",
                      "boom",
                      "  Step 1: push",
                      "    Draw 1: Stack",
@@ -226,9 +234,9 @@ spec = do
                   loc = Just aLoc,
                   diff = Nothing
                 }
-          report = Report {result, stats = Stats {valid = 1, invalid = 0}, reproduction = Unstored, engineOutput = []}
+          report = Report {result, stats = Stats {valid = 1, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
       T.lines (renderReport report)
-        `shouldBe` [ "failed after 1 tests",
+        `shouldBe` [ "failed after 1 test, including shrinking",
                      "  Step 1: push",
                      "      deep note",
                      "      ✗ boom",
@@ -251,23 +259,23 @@ spec = do
                   loc = Nothing,
                   diff = Nothing
                 }
-          report = Report {result, stats = Stats {valid = 1, invalid = 0}, reproduction = Unstored, engineOutput = []}
+          report = Report {result, stats = Stats {valid = 1, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
       T.lines (renderReport report)
-        `shouldBe` [ "failed after 1 tests",
+        `shouldBe` [ "failed after 1 test, including shrinking",
                      "boom",
                      "  Draw 1: 1",
                      "  nested footer"
                    ]
 
     it "renders gave-up and aborted verdicts" $ do
-      renderReport Report {result = GaveUp "no valid examples", stats = Stats {valid = 0, invalid = 7}, reproduction = Unstored, engineOutput = []}
+      renderReport Report {result = GaveUp "no valid examples", stats = Stats {valid = 0, invalid = 7, failing = 0}, reproduction = Unstored, engineOutput = []}
         `shouldBe` "gave up after 0 tests (7 discarded): no valid examples"
       renderReport (aborted (UnhealthyInput "filter too much"))
         `shouldBe` "aborted: health check failed: filter too much"
 
     it "appends the reproduction footer to a plain counterexample" $ do
       let result = failureResult FailureEvidence {message = "boom", notes = [], events = [], loc = Nothing, diff = Nothing}
-          reportWith repro = Report {result, stats = Stats {valid = 1, invalid = 0}, reproduction = repro, engineOutput = []}
+          reportWith repro = Report {result, stats = Stats {valid = 1, invalid = 0, failing = 0}, reproduction = repro, engineOutput = []}
       renderReport (reportWith (Stored "k")) `shouldSatisfy` T.isInfixOf "stored under k and replays automatically next run"
       renderReport (reportWith Unreproducible) `shouldSatisfy` T.isInfixOf "no stored example to replay"
       renderReport (reportWith Unstored) `shouldNotSatisfy` T.isInfixOf "stored under"
@@ -275,7 +283,7 @@ spec = do
 
     it "places a runner's trailer between the reproduction footer and the engine output" $ do
       let result = failureResult FailureEvidence {message = "boom", notes = [], events = [], loc = Nothing, diff = Nothing}
-          report = Report {result, stats = Stats {valid = 1, invalid = 0}, reproduction = Stored "k", engineOutput = ["Statistics (over 1 test cases):"]}
+          report = Report {result, stats = Stats {valid = 1, invalid = 0, failing = 0}, reproduction = Stored "k", engineOutput = ["Statistics (over 1 test cases):"]}
       rendered <- renderReportAuto False Style.PreferUnicode ["Hegel identity: k"] report
       let offset needle = T.length (fst (T.breakOn needle rendered))
       offset "stored under k" `shouldSatisfy` (< offset "\n\nHegel identity: k\n\n")
@@ -346,7 +354,7 @@ spec = do
                   loc = Nothing,
                   diff = Just [LineRemoved "old", LineAdded "new"]
                 }
-          report = Report {result, stats = Stats {valid = 1, invalid = 0}, reproduction = Unstored, engineOutput = []}
+          report = Report {result, stats = Stats {valid = 1, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
       let plain = T.unpack (renderReport report)
           ansi = T.unpack (renderReportAnsi report)
       ansi `shouldNotBe` plain
@@ -364,7 +372,7 @@ spec = do
                   loc = Nothing,
                   diff = Nothing
                 }
-          report = Report {result, stats = Stats {valid = 3, invalid = 0}, reproduction = Unstored, engineOutput = []}
+          report = Report {result, stats = Stats {valid = 3, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
       rich <- renderReportRich report
       -- The note's location sits inside the `spec` declaration of this very
       -- file, so the source listing should include the marked line.
@@ -388,7 +396,7 @@ spec = do
                   loc = Just aLoc,
                   diff = Nothing
                 }
-          report = Report {result, stats = Stats {valid = 4, invalid = 0}, reproduction = Unstored, engineOutput = []}
+          report = Report {result, stats = Stats {valid = 4, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
       rich <- renderReportRich report
       rich `shouldSatisfy` T.isInfixOf "Step 1: increment"
       rich `shouldSatisfy` T.isInfixOf "✗ counter stays small"
@@ -412,7 +420,7 @@ spec = do
                   loc = Just failLoc,
                   diff = Nothing
                 }
-          report = Report {result, stats = Stats {valid = 3, invalid = 0}, reproduction = Unstored, engineOutput = []}
+          report = Report {result, stats = Stats {valid = 3, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
       rich <- renderReportRich report
       -- The step header stays in the event log; the draw and the failure splice
       -- into this very declaration, under one listing header.
@@ -437,7 +445,7 @@ spec = do
                   loc = Just goodLoc,
                   diff = Nothing
                 }
-          report = Report {result, stats = Stats {valid = 3, invalid = 0}, reproduction = Unstored, engineOutput = []}
+          report = Report {result, stats = Stats {valid = 3, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
       rich <- renderReportRich report
       -- The failure splices; the unreadable draw keeps its structured line.
       ("stateful-mix-marker" `T.isInfixOf` rich) `shouldBe` True
@@ -460,7 +468,7 @@ spec = do
                   loc = Just aLoc,
                   diff = Nothing
                 }
-          report = Report {result, stats = Stats {valid = 2, invalid = 0}, reproduction = Unstored, engineOutput = []}
+          report = Report {result, stats = Stats {valid = 2, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
       rich <- renderReportRich report
       -- The headline and location are kept (no in-band ✗ carries the reason)…
       rich `shouldSatisfy` T.isInfixOf "boom: exception in rule"
@@ -489,7 +497,7 @@ spec = do
                   loc = Nothing,
                   diff = Nothing
                 }
-          report = Report {result, stats = Stats {valid = 3, invalid = 0}, reproduction = Unstored, engineOutput = []}
+          report = Report {result, stats = Stats {valid = 3, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
       rich <- renderReportRich report
       rich `shouldBe` renderReport report
 
@@ -504,13 +512,13 @@ spec = do
                   loc = Nothing,
                   diff = Nothing
                 }
-      rich <- renderReportRich Report {result, stats = Stats {valid = 3, invalid = 0}, reproduction = Stored "k", engineOutput = []}
+      rich <- renderReportRich Report {result, stats = Stats {valid = 3, invalid = 0, failing = 0}, reproduction = Stored "k", engineOutput = []}
       rich `shouldSatisfy` T.isInfixOf "stored under k and replays automatically next run"
       richUnreproducible <-
-        renderReportRich Report {result, stats = Stats {valid = 3, invalid = 0}, reproduction = Unreproducible, engineOutput = []}
+        renderReportRich Report {result, stats = Stats {valid = 3, invalid = 0, failing = 0}, reproduction = Unreproducible, engineOutput = []}
       richUnreproducible `shouldSatisfy` T.isInfixOf "no stored example to replay"
       richUnstored <-
-        renderReportRich Report {result, stats = Stats {valid = 3, invalid = 0}, reproduction = Unstored, engineOutput = []}
+        renderReportRich Report {result, stats = Stats {valid = 3, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
       richUnstored `shouldNotSatisfy` T.isInfixOf "stored under"
       richUnstored `shouldNotSatisfy` T.isInfixOf "no stored example to replay"
 
@@ -521,9 +529,9 @@ spec = do
           divergence :: Text -> ReplayDivergence
           divergence why = ReplayDivergence {replayReason = InvalidReplayBlob why}
           outcome origin status = FailureOutcome origin (Just (token origin)) Nothing status
-          report = Report {result = Failures (outcome "A" (Captured failure) :| [outcome "B" (Diverged (divergence "changed assertion")), outcome "C" Uncaptured]), stats = Stats 3 0, reproduction = Stored "mixed-key", engineOutput = []}
+          report = Report {result = Failures (outcome "A" (Captured failure) :| [outcome "B" (Diverged (divergence "changed assertion")), outcome "C" Uncaptured]), stats = Stats 3 0 0, reproduction = Stored "mixed-key", engineOutput = []}
           summary :: Text
-          summary = "failed with 3 distinct failures (1 uncaptured, 1 replay diverged) after 3 tests"
+          summary = "failed with 3 distinct failures (1 uncaptured, 1 replay diverged) after 3 tests, including shrinking"
       forRenderers report \rendered -> do
         rendered `shouldSatisfy` T.isInfixOf summary
         for_ ["first body", "first note", "old", "new", "changed assertion", "no failing case with this origin was captured", "stored under mixed-key"] \text ->
@@ -543,7 +551,7 @@ spec = do
 
     it "gives singleton failures a concise summary without numbering or a census" do
       let evidence = FailureEvidence "singleton body" [] [] Nothing Nothing
-          report = Report (failureResult evidence) (Stats 3 0) Unstored []
+          report = Report (failureResult evidence) (Stats 3 0 0) Unstored []
       forRenderers report \text -> do
         text `shouldSatisfy` T.isPrefixOf "failed after 3 tests"
         for_ ["failure 1", "distinct failures", "uncaptured", "diverged"] \fragment ->
@@ -553,15 +561,15 @@ spec = do
       let evidence = FailureEvidence "bare body" [] [] Nothing Nothing
           one = FailureOutcome "origin" Nothing Nothing (Captured evidence)
           other = FailureOutcome "other" Nothing Nothing (Captured evidence {message = "other body"})
-      renderReport (Report (Failures (one :| [])) (Stats 3 0) Unstored [])
-        `shouldBe` "failed after 3 tests\nbare body"
-      renderReport (Report (Failures (one :| [other])) (Stats 3 0) Unstored [])
-        `shouldBe` "failed with 2 distinct failures after 3 tests\nfailure 1\nbare body\nfailure 2\nother body"
+      renderReport (Report (Failures (one :| [])) (Stats 3 0 0) Unstored [])
+        `shouldBe` "failed after 3 tests, including shrinking\nbare body"
+      renderReport (Report (Failures (one :| [other])) (Stats 3 0 0) Unstored [])
+        `shouldBe` "failed with 2 distinct failures after 3 tests, including shrinking\nfailure 1\nbare body\nfailure 2\nother body"
 
     it "renders a failure's caveat once in every renderer" do
       let evidence = FailureEvidence "flaky body" [] [] (Just aLoc) Nothing
           outcome = FailureOutcome "origin" Nothing (Just "failed in 2 of 5 replays") (Captured evidence)
-          report = Report (Failures (outcome :| [])) (Stats 3 0) Unreproducible []
+          report = Report (Failures (outcome :| [])) (Stats 3 0 0) Unreproducible []
       forRenderers report \rendered -> do
         T.count "note: failed in 2 of 5 replays" rendered `shouldBe` 1
         rendered `shouldNotSatisfy` T.isInfixOf "replay token:"
@@ -582,14 +590,14 @@ spec = do
                 loc = Nothing,
                 diff = Nothing
               }
-          report = Report (failureResult evidence) (Stats 1 0) Unstored []
+          report = Report (failureResult evidence) (Stats 1 0 0) Unstored []
       forRenderers report \rendered -> do
         T.count "left branch property failed" rendered `shouldBe` 1
         T.count "right branch property failed" rendered `shouldBe` 1
 
     it "renders an uncaptured failure by its origin" do
       let uncaptured = FailureOutcome "Hegel.Origin at Spec.hs:1" Nothing Nothing Uncaptured
-          report = Report (Failures (uncaptured :| [])) (Stats 4 0) Unstored []
+          report = Report (Failures (uncaptured :| [])) (Stats 4 0 0) Unstored []
       forRenderers report \rendered -> do
         rendered `shouldSatisfy` T.isInfixOf "Hegel.Origin at Spec.hs:1"
         rendered `shouldSatisfy` T.isInfixOf "no failing case with this origin was captured"
@@ -597,7 +605,7 @@ spec = do
 
     it "renders incompatible replay versions" do
       let mismatch = FailureOutcome "origin" Nothing Nothing (Diverged (ReplayDivergence (IncompatibleVersions "new-engine" "old-engine")))
-          report = Report (Failures (mismatch :| [])) (Stats 0 0) Unstored []
+          report = Report (Failures (mismatch :| [])) (Stats 0 0 0) Unstored []
       forRenderers report \rendered -> do
         rendered `shouldSatisfy` T.isInfixOf "new-engine"
         rendered `shouldSatisfy` T.isInfixOf "old-engine"
@@ -605,7 +613,7 @@ spec = do
     it "renders a stale replay as diverged" do
       let token = makeReplayToken "test-engine" "origin" "AAAA"
           stale = FailureOutcome "origin" (Just token) Nothing (Diverged (ReplayDivergence DidNotReproduce))
-          report = Report (Failures (stale :| [])) (Stats 4 0) Unstored []
+          report = Report (Failures (stale :| [])) (Stats 4 0 0) Unstored []
       forRenderers report \rendered -> do
         rendered `shouldSatisfy` T.isPrefixOf "replay diverged after 4 tests"
         rendered `shouldSatisfy` T.isInfixOf "every replay passed"
@@ -613,20 +621,20 @@ spec = do
   describe "PropertyFailed" $ do
     it "displayException agrees with renderReport" $ do
       let notes = [drawn "50", footer "ft"]
-          report = Report {result = failureResult FailureEvidence {message = "boom", notes, events = [], loc = Just aLoc, diff = Nothing}, stats = Stats {valid = 1, invalid = 0}, reproduction = Unstored, engineOutput = []}
+          report = Report {result = failureResult FailureEvidence {message = "boom", notes, events = [], loc = Just aLoc, diff = Nothing}, stats = Stats {valid = 1, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
           exc = PropertyFailed report
       T.pack (displayException exc)
         `shouldBe` renderReport report
 
   describe "throwOnFailure" $ do
     it "is silent on Ok" $ do
-      throwOnFailure Report {result = Ok, stats = Stats {valid = 1, invalid = 0}, reproduction = Unstored, engineOutput = []}
+      throwOnFailure Report {result = Ok, stats = Stats {valid = 1, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
 
     it "throws PropertyFailed on a counterexample" $ do
       let report =
             Report
               { result = failureResult FailureEvidence {message = "boom", notes = [], events = [], loc = Nothing, diff = Nothing},
-                stats = Stats {valid = 1, invalid = 0},
+                stats = Stats {valid = 1, invalid = 0, failing = 0},
                 reproduction = Unstored,
                 engineOutput = []
               }

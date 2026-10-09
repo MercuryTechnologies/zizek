@@ -25,6 +25,10 @@ module Hegel.Property.Internal
     annotateShow,
     footnote,
 
+    -- * Events
+    event,
+    eventValue,
+
     -- * Discards
     assume,
     discard,
@@ -88,6 +92,7 @@ import Hegel.Diff (Diff)
 import Hegel.Exception (Diagnostic (..), ValidationError (..))
 import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
 import Hegel.Internal.Control (MalformedTest (..), NoBacktrace (..), isControlSignal, isFailure, malformedTest, onFailure)
+import Hegel.Internal.DataSource qualified as DataSource
 import Hegel.Internal.Event qualified as Event
 import Hegel.Internal.TestCase (TestCase (..))
 import Hegel.Internal.TestCase qualified as TestCase
@@ -315,6 +320,30 @@ annotateShow = withFrozenCallStack (annotate . renderValue)
 footnote :: (MonadIO m) => Text -> PropertyT m ()
 footnote = note Footnote Nothing
 {-# INLINE footnote #-}
+
+-- | Record that @label@ occurred in this test case, for the statistics block
+-- that 'Hegel.Settings.showStatistics' prints at the end of the run.
+--
+-- The block gives, per label, the fraction of generated test cases that
+-- recorded it at least once.
+event :: (MonadIO m) => Text -> PropertyT m ()
+event label = PropertyT do
+  env <- ask
+  liftIO (DataSource.event env.testCase label)
+
+-- | Record a numeric observation under @label@ for the statistics block that
+-- 'Hegel.Settings.showStatistics' prints, which summarizes each label's
+-- observed distribution.
+--
+-- @value@ must be finite. A label may be observed any number of times per
+-- test case.
+eventValue :: (HasCallStack, MonadIO m) => Text -> Double -> PropertyT m ()
+eventValue label value
+  | isNaN value || isInfinite value =
+      liftIO (E.throwIO (malformedTest "Hegel.Property.eventValue" "an event value must be finite" [("label", label), ("value", T.pack (show value))]))
+  | otherwise = PropertyT do
+      env <- ask
+      liftIO (DataSource.eventValue env.testCase label value)
 
 -- | Discard the current test case when the condition is 'False'.
 --

@@ -14,14 +14,15 @@ import Data.Word (Word64)
 import GHC.Stack (prettyCallStack)
 import Hegel.Backend (Backend (..))
 import Hegel.Database (Database (..))
-import Hegel.Exception (Diagnostic (..), SettingsError (..))
+import Hegel.Exception (Diagnostic (..), MalformedTest (..), SettingsError (..))
 import Hegel.Gen qualified as Gen
 import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Hspec qualified as Hspec
 import Hegel.Internal.RunnerConfig qualified as Config
 import Hegel.Phase (Phase (..))
 import Hegel.Profile qualified as Profile
-import Hegel.Property (Property, assert, assume, forAll, registerFinalizer)
+import Hegel.Property (Property, assert, assume, event, eventValue, forAll, registerFinalizer)
+import Hegel.Property.Branch qualified as Branch
 import Hegel.Replay (encodeReplayToken)
 import Hegel.Report (Abort (..), FailureOutcome (..), Report (..), Result (..))
 import Hegel.Runner qualified as Runner
@@ -83,6 +84,26 @@ spec = do
       loud <- Runner.check defaultSettings {testCases = Just 5, verbosity = Just Debug} (pure ())
       loud.engineOutput `shouldNotBe` []
 
+    it "prints recorded events as statistics when showStatistics is on" do
+      let prop :: Property ()
+          prop = do
+            n <- forAll (Gen.int & Gen.min 0 & Gen.max 10 & Gen.build)
+            event "every case"
+            eventValue "drawn value" (fromIntegral n)
+            Branch.concurrently_ (event "in a branch") (pure ())
+      shown <- Runner.check defaultSettings {testCases = Just 20, showStatistics = Just True} prop
+      let output = T.unlines shown.engineOutput
+      for_ ["Statistics (over", "every case", "drawn value", "in a branch"] \needle ->
+        output `shouldSatisfy` T.isInfixOf needle
+      hidden <- Runner.check defaultSettings {testCases = Just 20, showStatistics = Just False} prop
+      hidden.engineOutput `shouldBe` []
+
+    it "rejects a non-finite event value as a malformed test" do
+      report <- Runner.check defaultSettings {testCases = Just 5} (eventValue "nan" (0 / 0))
+      case report.result of
+        Aborted (Errored e) | Just (MalformedTest d) <- fromException e -> d.context `shouldBe` "Hegel.Property.eventValue"
+        other -> expectationFailure ("expected a malformed-test abort, got: " <> show other)
+
     it "resolves every engine setting and keeps the overrides" do
       based <- Profile.resolve defaultSettings {profile = Just "base", testCases = Just 7, seed = Just (SeedFixed 5)}
       based.testCases `shouldBe` Just 7
@@ -94,6 +115,7 @@ spec = do
       based.suppressHealthCheck `shouldBe` Just []
       based.printBlob `shouldBe` Just True
       based.unboundedChoices `shouldBe` Just False
+      based.showStatistics `shouldBe` Just False
       based.maxCloneDepth `shouldBe` Just Settings.defaultMaxCloneDepth
       -- The suite's HEGEL_DATABASE sits over the profile, and code sits over both.
       based.database `shouldBe` Just DatabaseDisabled
@@ -156,6 +178,21 @@ spec = do
         reason hspecResult `shouldContain` "SettingsError"
         reason hspecResult `shouldContain` "tests/unit/RunnerConfiguration.hs"
         readIORef ran `shouldReturn` False
+
+    it "places replay instructions after the report and before the engine output in Hspec and Tasty" do
+      let settings = defaultSettings {databaseKey = Just "placement", printBlob = Just True, showStatistics = Just True}
+          body = event "drew a value" >> failing
+          offset needle output = T.length (fst (T.breakOn needle (T.pack output)))
+          inOrder output = do
+            for_ ["replay token:", "Hegel identity: placement", "Statistics (over"] \needle ->
+              output `shouldContain` T.unpack needle
+            offset "replay token:" output `shouldSatisfy` (< offset "Hegel identity: placement" output)
+            offset "Hegel identity: placement" output `shouldSatisfy` (< offset "Statistics (over" output)
+      native <- runTree mempty (Native.testPropertyWith settings "placement" body)
+      Tree.resultSuccessful native `shouldBe` False
+      inOrder (Tree.resultDescription native)
+      hspecResult <- evalFixture () (Hspec.propForWith settings "placement" (const body))
+      inOrder (reason hspecResult)
 
     it "preserves absent values and overlays only supplied settings" do
       low <- parsed [("test-cases", "7"), ("seed", "11"), ("database", "disabled")]

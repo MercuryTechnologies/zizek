@@ -98,6 +98,7 @@ readSettings ctx settings s = do
   suppressHealthCheck <- fromBitmask <$> out (hegel_settings_get_suppress_health_check ctx s)
   reportMultipleFailures <- readBool ctx (hegel_settings_get_report_multiple_failures ctx s)
   unboundedChoices <- readBool ctx (hegel_settings_get_unbounded_choices ctx s)
+  showStatistics <- readBool ctx (hegel_settings_get_show_statistics ctx s)
   printBlob <- readBool ctx (hegel_settings_get_print_blob ctx s)
   verbosity <- out (hegel_settings_get_verbosity ctx s) >>= decode "verbosity"
   backend <- out (hegel_settings_get_backend ctx s) >>= decode "backend"
@@ -116,6 +117,7 @@ readSettings ctx settings s = do
         reportMultipleFailures = Just reportMultipleFailures,
         suppressHealthCheck = Just suppressHealthCheck,
         unboundedChoices = Just unboundedChoices,
+        showStatistics = Just showStatistics,
         nondeterminism = Just nondeterminism,
         printBlob = Just printBlob,
         maxCloneDepth = Just (fromMaybe Settings.defaultMaxCloneDepth settings.maxCloneDepth)
@@ -165,6 +167,7 @@ applySettings ctx s ptr = do
   for_ s.phases \ps -> chk $ hegel_settings_set_phases ctx ptr (phasesBitmask ps)
   for_ s.suppressHealthCheck \hcs -> chk $ hegel_settings_set_suppress_health_check ctx ptr (hcBitmask hcs)
   for_ s.unboundedChoices \b -> chk $ hegel_settings_set_unbounded_choices ctx ptr (fromBool b)
+  for_ s.showStatistics \b -> chk $ hegel_settings_set_show_statistics ctx ptr (fromBool b)
   for_ s.nondeterminism \n -> chk $ hegel_settings_set_nondeterminism_strictness ctx ptr (Witch.into @Word32 n)
   for_ s.printBlob \b -> chk $ hegel_settings_set_print_blob ctx ptr (fromBool b)
   for_ s.database \case

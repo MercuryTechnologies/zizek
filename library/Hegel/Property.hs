@@ -43,6 +43,10 @@ module Hegel.Property
     annotateShow,
     footnote,
 
+    -- * Events
+    event,
+    eventValue,
+
     -- * Discards
     assume,
     discard,
@@ -82,6 +86,8 @@ import Hegel.Property.Internal
     annotateShow,
     assume,
     discard,
+    event,
+    eventValue,
     footnote,
     forAll,
     forAllSilent,

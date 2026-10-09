@@ -139,6 +139,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_settings_set_derandomize,
     hegel_settings_set_report_multiple_failures,
     hegel_settings_set_unbounded_choices,
+    hegel_settings_set_show_statistics,
     hegel_settings_set_database,
     hegel_settings_set_database_key,
     hegel_settings_set_phases,
@@ -156,6 +157,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_settings_get_suppress_health_check,
     hegel_settings_get_report_multiple_failures,
     hegel_settings_get_unbounded_choices,
+    hegel_settings_get_show_statistics,
     hegel_settings_get_print_blob,
     hegel_settings_get_backend,
     hegel_settings_get_nondeterminism_strictness,
@@ -197,6 +199,8 @@ module Hegel.Internal.Foreign.Raw
     hegel_recursion_finish,
     hegel_recursion_free,
     hegel_target,
+    hegel_event,
+    hegel_event_value,
     hegel_mark_complete,
     hegel_test_case_clone,
     hegel_test_case_should_capture,
@@ -716,6 +720,10 @@ foreign import ccall unsafe "hegel_settings_set_report_multiple_failures"
 foreign import ccall unsafe "hegel_settings_set_unbounded_choices"
   hegel_settings_set_unbounded_choices :: Ptr HegelContext -> Ptr HegelSettings -> CBool -> IO CInt
 
+-- | Print a statistics block of recorded events at the end of the run.
+foreign import ccall unsafe "hegel_settings_set_show_statistics"
+  hegel_settings_set_show_statistics :: Ptr HegelContext -> Ptr HegelSettings -> CBool -> IO CInt
+
 -- | Configure the on-disk example database.
 --
 -- Pass @\"\"@ to disable, or @nullPtr@ for the default store under @.hegel/@.
@@ -788,6 +796,10 @@ foreign import ccall unsafe "hegel_settings_get_report_multiple_failures"
 -- | Read whether a handle lifts the per-test-case choice limit.
 foreign import ccall unsafe "hegel_settings_get_unbounded_choices"
   hegel_settings_get_unbounded_choices :: Ptr HegelContext -> Ptr HegelSettings -> Ptr CBool -> IO CInt
+
+-- | Read whether a handle prints the statistics block.
+foreign import ccall unsafe "hegel_settings_get_show_statistics"
+  hegel_settings_get_show_statistics :: Ptr HegelContext -> Ptr HegelSettings -> Ptr CBool -> IO CInt
 
 -- | Read a handle's @HEGEL_BACKEND_*@ value.
 foreign import ccall unsafe "hegel_settings_get_backend"
@@ -1543,6 +1555,16 @@ foreign import ccall unsafe "hegel_generate_string_result_free"
 -- @label@ must be non-@NULL@ valid UTF-8.
 foreign import ccall unsafe "hegel_target"
   hegel_target :: Ptr HegelContext -> Ptr HegelTestCase -> CDouble -> CString -> IO CInt
+
+-- | Record that @label@ occurred in this test case, for the statistics block
+-- the engine prints at the end of a run with @show_statistics@ on.
+foreign import ccall unsafe "hegel_event"
+  hegel_event :: Ptr HegelContext -> Ptr HegelTestCase -> CString -> IO CInt
+
+-- | Record a finite numeric observation under @label@ for the statistics
+-- block. A label may be observed any number of times per test case.
+foreign import ccall unsafe "hegel_event_value"
+  hegel_event_value :: Ptr HegelContext -> Ptr HegelTestCase -> CDouble -> CString -> IO CInt
 
 -- | Mark the test case complete.
 --

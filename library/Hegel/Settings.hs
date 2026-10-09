@@ -75,6 +75,11 @@ data Settings = Settings
     -- A test case meant to run for a long time, such as a concurrent state
     -- machine driven for hours, needs this on.
     unboundedChoices :: !(Maybe Bool),
+    -- | Print a statistics block at the end of the run, summarizing the
+    -- labels recorded with 'Hegel.Property.event' and
+    -- 'Hegel.Property.eventValue' over the generated test cases. The block
+    -- arrives in the run's 'Hegel.Report.engineOutput'.
+    showStatistics :: !(Maybe Bool),
     -- | How the run reacts to a test that behaves differently when the same
     -- choices are replayed.
     nondeterminism :: !(Maybe Nondeterminism),
@@ -105,6 +110,7 @@ instance Semigroup Settings where
         reportMultipleFailures = b.reportMultipleFailures <|> a.reportMultipleFailures,
         suppressHealthCheck = b.suppressHealthCheck <|> a.suppressHealthCheck,
         unboundedChoices = b.unboundedChoices <|> a.unboundedChoices,
+        showStatistics = b.showStatistics <|> a.showStatistics,
         nondeterminism = b.nondeterminism <|> a.nondeterminism,
         printBlob = b.printBlob <|> a.printBlob,
         maxCloneDepth = b.maxCloneDepth <|> a.maxCloneDepth
@@ -130,6 +136,7 @@ defaultSettings =
       reportMultipleFailures = Nothing,
       suppressHealthCheck = Nothing,
       unboundedChoices = Nothing,
+      showStatistics = Nothing,
       nondeterminism = Nothing,
       printBlob = Nothing,
       maxCloneDepth = Nothing

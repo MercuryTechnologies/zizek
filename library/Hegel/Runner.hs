@@ -87,17 +87,17 @@ checkWithProgress progress settings prop =
   where
     go = either throwIO pure (withFrozenCallStack (Settings.validate settings)) *> execute
     execute
-      | Just 0 <- settings.testCases, Just DatabaseDisabled <- settings.database = pure (Report (GaveUp "no valid examples found") (Stats 0 0) Unstored [])
+      | Just 0 <- settings.testCases, Just DatabaseDisabled <- settings.database = pure (Report (GaveUp "no valid examples found") (Stats 0 0 0) Unstored [])
       | otherwise = withContext \ctx ->
           withResolvedSettings ctx settings \resolved s -> do
             captures <- newIORef Map.empty
             (sink, readOutput) <- newOutputBuffer
             -- Read and copy everything out of the run handle before withRun frees
             -- it on bracket exit (see 'readRunOutcome').
-            (nValid, nInvalid, outcome) <- withRun ctx s (Just sink) (driveRun ctx settings prop captures progress)
+            (stats, outcome) <- withRun ctx s (Just sink) (driveRun ctx settings prop captures progress)
             result <- case outcome.status of
               RunPassed
-                | nValid == 0 -> pure (GaveUp "no valid examples found")
+                | stats.valid == 0 -> pure (GaveUp "no valid examples found")
                 | otherwise -> pure Ok
               RunFailed -> case outcome.failures of
                 [] -> pure noCounterexample
@@ -110,7 +110,7 @@ checkWithProgress progress settings prop =
             pure
               Report
                 { result,
-                  stats = Stats nValid nInvalid,
+                  stats,
                   reproduction = case result of
                     Failures {} -> failureReproduction outcome.failures resolved settings.databaseKey
                     _ -> Unstored,
@@ -118,11 +118,11 @@ checkWithProgress progress settings prop =
                 }
 
 -- | Pump every case out of a started run, then copy its outcome.
-driveRun :: Ptr HegelContext -> Settings -> Property () -> IORef (Map Text Capture) -> (Int -> IO ()) -> Ptr HegelRun -> IO (Int, Int, RunOutcome)
+driveRun :: Ptr HegelContext -> Settings -> Property () -> IORef (Map Text Capture) -> (Int -> IO ()) -> Ptr HegelRun -> IO (Stats, RunOutcome)
 driveRun ctx settings prop captures progress run = do
-  (nValid, nInvalid) <- driveLoop ctx (\journal -> propertyAction journal (fromMaybe Settings.defaultMaxCloneDepth settings.maxCloneDepth) prop) captures run progress
+  stats <- driveLoop ctx (\journal -> propertyAction journal (fromMaybe Settings.defaultMaxCloneDepth settings.maxCloneDepth) prop) captures run progress
   outcome <- readRunOutcome ctx run
-  pure (nValid, nInvalid, outcome)
+  pure (stats, outcome)
 
 -- | The result for a run the engine marked failed without exposing a failure.
 noCounterexample :: Result
@@ -181,7 +181,7 @@ replay settings token prop =
         withResolvedSettings ctx settings {database = Just DatabaseDisabled, databaseKey = Nothing} \_ s -> do
           version <- engineVersion ctx
           if version /= Replay.tokenVersionOf token
-            then pure (diverged (Stats 0 0) (IncompatibleVersions (Replay.tokenVersionOf token) version))
+            then pure (diverged (Stats 0 0 0) (IncompatibleVersions (Replay.tokenVersionOf token) version))
             else do
               captures <- newIORef Map.empty
               (sink, readOutput) <- newOutputBuffer
@@ -189,10 +189,9 @@ replay settings token prop =
                 withBlobRun ctx s (Replay.tokenBlobOf token) (Just sink) (driveRun ctx settings prop captures (\_ -> pure ())) >>= \case
                   Left e
                     | e.code == HEGEL_E_INVALID_ARG ->
-                        pure (diverged (Stats 0 0) (InvalidReplayBlob (fromMaybe "invalid replay blob" e.message)))
+                        pure (diverged (Stats 0 0 0) (InvalidReplayBlob (fromMaybe "invalid replay blob" e.message)))
                     | otherwise -> throwIO e
-                  Right (nValid, nInvalid, outcome) -> do
-                    let stats = Stats nValid nInvalid
+                  Right (stats, outcome) -> do
                     captured <- readIORef captures
                     pure case outcome.status of
                       RunPassed -> diverged stats DidNotReproduce
@@ -474,23 +473,23 @@ driveLoop ::
   IORef (Map Text Capture) ->
   Ptr HegelRun ->
   (Int -> IO ()) ->
-  IO (Int, Int)
-driveLoop ctx action captures run progress = loop 0 0 0
+  IO Stats
+driveLoop ctx action captures run progress = loop (Stats 0 0 0) 0
   where
-    loop !nValid !nInvalid !completed = do
+    loop !stats !completed = do
       tcPtr <- alloca \out -> do
         throwOnError ctx =<< hegel_next_test_case ctx run out
         peek out
       if tcPtr == nullPtr
-        then pure (nValid, nInvalid)
+        then pure stats
         else do
           status <- runTestCase ctx action captures tcPtr `finally` void (hegel_test_case_free ctx tcPtr)
           progress (completed + 1)
           case status of
-            Valid -> loop (nValid + 1) nInvalid (completed + 1)
-            Invalid -> loop nValid (nInvalid + 1) (completed + 1)
-            Interesting _ -> loop nValid nInvalid (completed + 1)
-            Overrun -> loop nValid nInvalid (completed + 1)
+            Valid -> loop stats {valid = stats.valid + 1} (completed + 1)
+            Invalid -> loop stats {invalid = stats.invalid + 1} (completed + 1)
+            Interesting _ -> loop stats {failing = stats.failing + 1} (completed + 1)
+            Overrun -> loop stats (completed + 1)
 
 -- | Run one engine-produced test case, recording a capture when it fails.
 --

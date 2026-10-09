@@ -64,6 +64,10 @@ module Hegel.Internal.DataSource
     recursionFinish,
     freeRecursion,
 
+    -- * Events
+    event,
+    eventValue,
+
     -- * Spans
     Label (..),
     labelName,
@@ -853,6 +857,22 @@ recursionFinish tc recursion = do
 -- __NOTE__: Each handle must be freed exactly once.
 freeRecursion :: TestCase -> Ptr HegelRecursion -> IO ()
 freeRecursion tc recursion = void (hegel_recursion_free tc.handle.ctx recursion)
+
+-- * Events
+
+-- | Record that @label@ occurred in the current test case, for the end-of-run
+-- statistics block.
+event :: TestCase -> Text -> IO ()
+event tc label =
+  CString.withText label \p ->
+    hegel_event tc.handle.ctx tc.handle.ptr p >>= handleReturnCode tc
+
+-- | Record a numeric observation under @label@ for the end-of-run statistics
+-- block. The engine rejects a non-finite @value@.
+eventValue :: TestCase -> Text -> Double -> IO ()
+eventValue tc label value =
+  CString.withText label \p ->
+    hegel_event_value tc.handle.ctx tc.handle.ptr (realToFrac value) p >>= handleReturnCode tc
 
 -- * Spans
 

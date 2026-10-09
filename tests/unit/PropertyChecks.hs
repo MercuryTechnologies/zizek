@@ -40,6 +40,12 @@ spec = do
   it "rethrows an asynchronous exception from the body as itself" do
     check def (liftIO (Control.Exception.throwIO ThreadKilled)) `shouldThrow` (== ThreadKilled)
 
+  it "counts the cases of a property that fails on every input" do
+    report <- check def (forAll (intR (0, 100)) >> assert False "always fails")
+    report.stats.valid `shouldBe` 0
+    report.stats.failing `shouldSatisfy` (>= 1)
+    renderReport report `shouldNotSatisfy` T.isInfixOf "after 0 tests"
+
   it "interleaves draws, notes, and assertions" $ do
     report <- check def do
       x <- forAll (intR (0, 100))

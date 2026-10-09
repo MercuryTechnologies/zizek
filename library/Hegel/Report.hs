@@ -94,7 +94,9 @@ data Stats = Stats
     -- | How many cases were rejected as invalid (via 'Hegel.Gen.assume',
     -- 'Hegel.Gen.filtered', 'Hegel.Gen.discard', or 'Hegel.Gen.mapMaybe'
     -- exhaustion).
-    invalid :: !Int
+    invalid :: !Int,
+    -- | Test cases that failed, including failing shrink probes and replays.
+    failing :: !Int
   }
   deriving stock (Show)
 
@@ -208,7 +210,7 @@ data Abort
 
 -- | A report for a run that stopped before any test case could run.
 aborted :: Abort -> Report
-aborted a = Report {result = Aborted a, stats = Stats {valid = 0, invalid = 0}, reproduction = Unstored, engineOutput = []}
+aborted a = Report {result = Aborted a, stats = Stats {valid = 0, invalid = 0, failing = 0}, reproduction = Unstored, engineOutput = []}
 
 -- | Throw on anything other than 'Ok': 'PropertyFailed' on a counterexample,
 -- the original exception on 'Errored', and 'fail' otherwise.
@@ -415,8 +417,8 @@ withEngineOutput output doc =
 
 reportBodyDoc :: Report -> Doc Ann
 reportBodyDoc report = case report.result of
-  Ok -> "OK, passed" <+> statsDoc report.stats
-  GaveUp msg -> "gave up after" <+> statsDoc report.stats <> ":" <+> PP.pretty msg
+  Ok -> "OK, passed" <+> countsDoc report.stats.valid report.stats
+  GaveUp msg -> "gave up after" <+> countsDoc report.stats.valid report.stats <> ":" <+> PP.pretty msg
   Aborted (Errored e) -> "aborted:" <+> PP.pretty (displayException e)
   Aborted (UnhealthyInput msg) -> "aborted: health check failed:" <+> PP.pretty msg
   Failures outcomes ->
@@ -429,16 +431,20 @@ reportBodyDoc report = case report.result of
 
 failureSummary :: Report -> Doc Ann
 failureSummary report = case report.result of
-  Failures (outcome :| []) -> singletonSummary outcome.failureEvidence <+> "after" <+> statsDoc report.stats
+  Failures (outcome :| []) -> singletonSummary outcome.failureEvidence <+> after
   Failures outcomes ->
     "failed with"
       <+> PP.pretty (length outcomes)
       <+> "distinct failures"
       <> qualifiers outcomes
-      <+> "after"
-      <+> statsDoc report.stats
-  _ -> "failed after" <+> statsDoc report.stats
+      <+> after
+  _ -> "failed" <+> after
   where
+    -- The count includes passing and failing shrink probes and replays, while
+    -- the engine's statistics block counts only generated cases.
+    after :: Doc Ann
+    after = "after" <+> countsDoc (report.stats.valid + report.stats.failing) report.stats <> ", including shrinking"
+
     -- Only failures without captured evidence are called out.
     qualifiers :: NonEmpty FailureOutcome -> Doc Ann
     qualifiers outcomes = case unusual outcomes of
@@ -554,11 +560,13 @@ failureRichOutcomeDoc style total index outcome = do
     _ -> pure (renderEvidence outcome)
   pure (outcomeFrame total index outcome body)
 
-statsDoc :: Stats -> Doc Ann
-statsDoc stats
-  | stats.invalid == 0 = PP.pretty stats.valid <+> "tests"
-  | otherwise =
-      PP.pretty stats.valid <+> "tests" <+> PP.parens (PP.pretty stats.invalid <+> "discarded")
+-- | A count of @tests@ followed by the run's discards, if any.
+countsDoc :: Int -> Stats -> Doc Ann
+countsDoc tests stats
+  | stats.invalid == 0 = testsDoc
+  | otherwise = testsDoc <+> PP.parens (PP.pretty stats.invalid <+> "discarded")
+  where
+    testsDoc = PP.pretty tests <+> (if tests == 1 then "test" else "tests")
 
 -- * Exceptions
 
