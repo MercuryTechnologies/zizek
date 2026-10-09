@@ -285,6 +285,27 @@ test-suite string-gen-handles
     tasty-hspec ^>=1.2,
     zizek,
 
+test-suite supply-spike
+  import: library
+  type: exitcode-stdio-1.0
+  hs-source-dirs: tests/supply-spike
+  main-is: Main.hs
+  other-modules:
+    Clock
+    Faults
+    Http
+    Support
+
+  ghc-options:
+    -threaded
+    -rtsopts
+    -with-rtsopts=-N
+
+  build-depends:
+    hspec ^>=2.11,
+    tasty-hspec ^>=1.2,
+    zizek,
+
 test-suite ffi
   import: library
   type: exitcode-stdio-1.0
