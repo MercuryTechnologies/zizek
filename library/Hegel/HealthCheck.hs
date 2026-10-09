@@ -23,7 +23,7 @@ data HealthCheck
     TestCasesTooLarge
   | -- | The first generated test case was already too large.
     LargeInitialTestCase
-  deriving stock (Show, Eq)
+  deriving stock (Show, Eq, Enum, Bounded)
 
 -- | The @hegel_health_check_t@ single-bit wire flag.
 --

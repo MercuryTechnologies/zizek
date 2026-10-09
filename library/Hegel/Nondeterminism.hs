@@ -27,7 +27,7 @@ data Nondeterminism
   | -- | Abort the run with a nondeterminism error, for suites that treat
     -- determinism as a requirement.
     Forbid
-  deriving stock (Show, Eq)
+  deriving stock (Show, Eq, Enum, Bounded)
 
 -- | The @hegel_nondeterminism_strictness_t@ wire value.
 instance Witch.From Nondeterminism Word32 where

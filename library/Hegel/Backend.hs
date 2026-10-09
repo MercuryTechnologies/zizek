@@ -29,7 +29,7 @@ data Backend
     -- Intended for running under Antithesis, whose fuzzer controls
     -- @\/dev\/urandom@; you almost certainly don't want it otherwise.
     Urandom
-  deriving stock (Show, Eq)
+  deriving stock (Show, Eq, Enum, Bounded)
 
 -- | The @hegel_backend_t@ wire value.
 instance Witch.From Backend Word32 where

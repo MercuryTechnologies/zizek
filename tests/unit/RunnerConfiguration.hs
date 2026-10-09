@@ -7,22 +7,29 @@ import Control.Monad (void)
 import Data.Either (isLeft)
 import Data.Foldable (for_)
 import Data.Function ((&))
+import Data.List (isInfixOf)
 import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Data.Word (Word64)
+import GHC.Stack (prettyCallStack)
+import Hegel.Backend (Backend (..))
 import Hegel.Database (Database (..))
 import Hegel.Exception (Diagnostic (..), SettingsError (..))
 import Hegel.Gen qualified as Gen
+import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Hspec qualified as Hspec
 import Hegel.Internal.RunnerConfig qualified as Config
 import Hegel.Phase (Phase (..))
+import Hegel.Profile qualified as Profile
 import Hegel.Property (Property, assert, assume, forAll, registerFinalizer)
 import Hegel.Replay (encodeReplayToken)
 import Hegel.Report (Abort (..), FailureOutcome (..), Report (..), Result (..))
 import Hegel.Runner qualified as Runner
 import Hegel.Seed (Seed (..))
 import Hegel.Settings (Settings (..), defaultSettings)
+import Hegel.Settings qualified as Settings
 import Hegel.Tasty qualified as Native
+import Hegel.Verbosity (Verbosity (..))
 import Test.Hspec
 import Test.Hspec.Core.Spec qualified as Core
 import Test.Tasty (TestTree)
@@ -69,6 +76,52 @@ spec = do
       fmap (isJust . (.failureReplayToken)) (allFailureOutcomes printed.result) `shouldBe` [True]
       hidden <- Runner.check defaultSettings {printBlob = Just False} failing
       fmap (isJust . (.failureReplayToken)) (allFailureOutcomes hidden.result) `shouldBe` [False]
+
+    it "resolves every engine setting and keeps the overrides" do
+      based <- Profile.resolve defaultSettings {profile = Just "base", testCases = Just 7, seed = Just (SeedFixed 5)}
+      based.testCases `shouldBe` Just 7
+      based.seed `shouldBe` Just (SeedFixed 5)
+      based.phases `shouldBe` Just [minBound .. maxBound]
+      -- The base profile's normal verbosity is quieted unless code sets one.
+      based.verbosity `shouldBe` Just Quiet
+      based.backend `shouldBe` Just Default
+      based.suppressHealthCheck `shouldBe` Just []
+      based.printBlob `shouldBe` Just True
+      based.maxCloneDepth `shouldBe` Just Settings.defaultMaxCloneDepth
+      -- The suite's HEGEL_DATABASE sits over the profile, and code sits over both.
+      based.database `shouldBe` Just DatabaseDisabled
+      directed <- Profile.resolve defaultSettings {database = Just (DatabaseDirectory "some/dir")}
+      directed.database `shouldBe` Just (DatabaseDirectory "some/dir")
+      worked <- Profile.resolve defaultSettings {profile = Just "workload"}
+      worked.suppressHealthCheck `shouldBe` Just [minBound .. maxBound]
+      for_ [minBound .. maxBound] \level -> do
+        chosen <- Profile.resolve defaultSettings {verbosity = Just level}
+        chosen.verbosity `shouldBe` Just level
+
+    it "keeps a profile's verbose output when code sets no verbosity" do
+      Profile.register "zizek-unit-verbose" defaultSettings {profile = Just "base", verbosity = Just Verbose}
+      verbose <- Profile.resolve defaultSettings {profile = Just "zizek-unit-verbose"}
+      verbose.verbosity `shouldBe` Just Verbose
+
+    it "registers resolved settings as a named profile" do
+      Profile.register "zizek-unit-registered" defaultSettings {profile = Just "base", testCases = Just 3, suppressHealthCheck = Just [TooSlow]}
+      registered <- Profile.resolve defaultSettings {profile = Just "zizek-unit-registered"}
+      registered.testCases `shouldBe` Just 3
+      registered.suppressHealthCheck `shouldBe` Just [TooSlow]
+
+    it "rejects reserved and malformed profile names" do
+      for_ ["base", "default", "has space"] \name ->
+        Profile.register name defaultSettings `shouldThrow` \(SettingsError d) -> d.context == "Hegel.Profile.register"
+      Profile.setDefault "default" `shouldThrow` \(SettingsError d) -> d.context == "Hegel.Profile.setDefault"
+      Profile.resolve defaultSettings {profile = Just "no-such-profile"} `shouldThrow` \(SettingsError d) -> d.context == "Hegel.Settings.profile"
+      Profile.clearDefault
+
+    it "validates settings before registering or resolving a profile" do
+      let invalid = defaultSettings {testCases = Just (-1)}
+          rejected (SettingsError d) = d.values == [("testCases", "-1")] && "tests/unit/RunnerConfiguration.hs" `isInfixOf` prettyCallStack d.callStack
+      Profile.register "zizek-unit-invalid" invalid `shouldThrow` rejected
+      Profile.resolve invalid `shouldThrow` rejected
+      Profile.resolve defaultSettings {profile = Just "zizek-unit-invalid"} `shouldThrow` \(SettingsError d) -> d.context == "Hegel.Settings.profile"
 
   describe "runner configuration" do
     it "validates effective programmatic settings after overrides" do

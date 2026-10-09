@@ -144,9 +144,19 @@ module Hegel.Internal.Foreign.Raw
     hegel_settings_set_suppress_health_check,
     hegel_settings_set_nondeterminism_strictness,
     hegel_settings_set_print_blob,
+    hegel_settings_register_profile,
+    hegel_set_default_profile,
+    hegel_settings_get_test_cases,
     hegel_settings_get_verbosity,
+    hegel_settings_get_seed,
+    hegel_settings_get_derandomize,
     hegel_settings_get_database,
+    hegel_settings_get_phases,
+    hegel_settings_get_suppress_health_check,
+    hegel_settings_get_report_multiple_failures,
     hegel_settings_get_print_blob,
+    hegel_settings_get_backend,
+    hegel_settings_get_nondeterminism_strictness,
 
     -- * Run lifecycle
     -- $run
@@ -740,9 +750,56 @@ foreign import ccall unsafe "hegel_settings_get_database"
 foreign import ccall unsafe "hegel_settings_get_print_blob"
   hegel_settings_get_print_blob :: Ptr HegelContext -> Ptr HegelSettings -> Ptr CBool -> IO CInt
 
+-- | Read the number of valid test cases a handle runs.
+foreign import ccall unsafe "hegel_settings_get_test_cases"
+  hegel_settings_get_test_cases :: Ptr HegelContext -> Ptr HegelSettings -> Ptr Word64 -> IO CInt
+
 -- | Read a handle's @HEGEL_VERBOSITY_*@ value.
 foreign import ccall unsafe "hegel_settings_get_verbosity"
   hegel_settings_get_verbosity :: Ptr HegelContext -> Ptr HegelSettings -> Ptr Word32 -> IO CInt
+
+-- | Read a handle's seed, which is meaningful only when @*out_has_seed@ is set.
+foreign import ccall unsafe "hegel_settings_get_seed"
+  hegel_settings_get_seed :: Ptr HegelContext -> Ptr HegelSettings -> Ptr Word64 -> Ptr CBool -> IO CInt
+
+-- | Read whether a handle derives its seed from the database key.
+foreign import ccall unsafe "hegel_settings_get_derandomize"
+  hegel_settings_get_derandomize :: Ptr HegelContext -> Ptr HegelSettings -> Ptr CBool -> IO CInt
+
+-- | Read a handle's enabled phases as a @HEGEL_PHASE_*@ bitmask.
+foreign import ccall unsafe "hegel_settings_get_phases"
+  hegel_settings_get_phases :: Ptr HegelContext -> Ptr HegelSettings -> Ptr Word32 -> IO CInt
+
+-- | Read a handle's suppressed health checks as a @HEGEL_HC_*@ bitmask.
+foreign import ccall unsafe "hegel_settings_get_suppress_health_check"
+  hegel_settings_get_suppress_health_check :: Ptr HegelContext -> Ptr HegelSettings -> Ptr Word32 -> IO CInt
+
+-- | Read whether a handle collects every distinct failure.
+foreign import ccall unsafe "hegel_settings_get_report_multiple_failures"
+  hegel_settings_get_report_multiple_failures :: Ptr HegelContext -> Ptr HegelSettings -> Ptr CBool -> IO CInt
+
+-- | Read a handle's @HEGEL_BACKEND_*@ value.
+foreign import ccall unsafe "hegel_settings_get_backend"
+  hegel_settings_get_backend :: Ptr HegelContext -> Ptr HegelSettings -> Ptr Word32 -> IO CInt
+
+-- | Read a handle's @HEGEL_NONDETERMINISM_*@ value.
+foreign import ccall unsafe "hegel_settings_get_nondeterminism_strictness"
+  hegel_settings_get_nondeterminism_strictness :: Ptr HegelContext -> Ptr HegelSettings -> Ptr Word32 -> IO CInt
+
+-- | Register a snapshot of a handle as the named profile for the whole
+-- process, replacing any earlier registration of that name.
+--
+-- Returns 'HEGEL_E_INVALID_ARG' for a reserved name or one outside ASCII
+-- letters, digits, @-@, and @_@. The snapshot leaves out the database key.
+foreign import ccall unsafe "hegel_settings_register_profile"
+  hegel_settings_register_profile :: Ptr HegelContext -> CString -> Ptr HegelSettings -> IO CInt
+
+-- | Make the named profile the one @default@ resolves to for the whole
+-- process, or clear an earlier choice with @NULL@.
+--
+-- Returns 'HEGEL_E_INVALID_ARG' for an invalid name or for @default@ itself.
+foreign import ccall unsafe "hegel_set_default_profile"
+  hegel_set_default_profile :: Ptr HegelContext -> CString -> IO CInt
 
 -- $run
 --

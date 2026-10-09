@@ -24,7 +24,7 @@ data Verbosity
     Verbose
   | -- | As 'Verbose', plus Hypothesis-style shrinker trace output.
     Debug
-  deriving stock (Show, Eq)
+  deriving stock (Show, Eq, Enum, Bounded)
 
 -- | The @hegel_verbosity_t@ wire value.
 instance Witch.From Verbosity Word32 where

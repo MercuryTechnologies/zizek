@@ -11,31 +11,27 @@ where
 import Control.Concurrent.Async (wait, withAsyncBound)
 import Control.Exception (SomeException, bracket, finally, mask, toException, try)
 import Control.Exception qualified as E
-import Control.Monad (unless, void, when)
-import Data.Bits ((.|.))
+import Control.Monad (unless, void)
 import Data.ByteString (ByteString)
-import Data.Foldable (for_, traverse_)
+import Data.Foldable (traverse_)
 import Data.Functor (($>))
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Word (Word32)
-import Foreign (Ptr, Storable, alloca, castPtr, fromBool, nullPtr, peek)
-import Foreign.C.Types (CBool (..), CChar, CInt, CSize)
-import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
+import Foreign (Ptr, Storable, alloca, nullPtr, peek)
+import Foreign.C.Types (CBool (..), CInt, CSize)
+import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Assertion (originOf)
 import Hegel.Database (Database (..))
-import Hegel.Exception (Diagnostic (..))
 import Hegel.Gen.Internal (Gen, draw)
-import Hegel.HealthCheck (HealthCheck)
 import Hegel.Internal.Control (ControlSignal (..), FinalizerFailed (..), NoBacktrace (..), catchControl, isAborting)
-import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
 import Hegel.Internal.Replay qualified as Replay
+import Hegel.Internal.Settings (Resolved (..), withResolvedSettings)
 import Hegel.Internal.TestCase (Handle (..), Status (..), TestCase (..), markComplete, mkTestCase)
 import Hegel.Internal.Tick qualified as Tick
 import Hegel.Phase (Phase (Generate))
@@ -70,10 +66,8 @@ import Hegel.Report
     Stats (..),
     aborted,
   )
-import Hegel.Seed (Seed (..))
 import Hegel.Settings (Settings (..))
 import Hegel.Settings qualified as Settings
-import Hegel.Verbosity (Verbosity (..))
 import UnliftIO.Exception (catchAny, throwIO)
 import UnliftIO.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Witch qualified
@@ -335,107 +329,6 @@ collectCases ctx gen acc run = loop
         `catchControl` \case
           Assume -> markComplete tc Invalid
           Stop -> markComplete tc Overrun
-
--- * Settings
-
--- | What a settings handle resolved to, read back once its overrides are
--- applied.
-data Resolved = Resolved
-  { -- | Whether the run has a database to file failures in.
-    persists :: !Bool,
-    -- | Whether a failure's report carries its replay token.
-    printBlob :: !Bool
-  }
-
--- | Resolve the profile @settings@ selects, apply its overrides, and pass the
--- action what the handle resolved to along with the handle itself.
---
--- Throws 'Settings.SettingsError' when the profile is unknown, or when a
--- @hegel.toml@ or one of the engine's @HEGEL_*@ settings environment variables
--- is malformed.
-withResolvedSettings :: (HasCallStack) => Ptr HegelContext -> Settings -> (Resolved -> Ptr HegelSettings -> IO a) -> IO a
-withResolvedSettings ctx settings action =
-  maybe ($ nullPtr) CString.withText settings.profile \name ->
-    withProfileSettings ctx name configured >>= \case
-      Right a -> pure a
-      Left e
-        | e.code == HEGEL_E_INVALID_ARG -> throwIO (profileError e)
-        | otherwise -> throwIO e
-  where
-    configured s = do
-      applySettings ctx settings s
-      quietByDefault ctx settings s
-      resolved <- readResolved ctx s
-      action resolved s
-    profileError e =
-      Settings.SettingsError
-        Diagnostic
-          { context = "Hegel.Settings.profile",
-            detail = fromMaybe "the settings profile could not be resolved" e.message,
-            values = [("profile", fromMaybe "default" settings.profile)],
-            callStack = callStack
-          }
-
--- | Quiet the engine unless @settings@ sets a 'verbosity' or the profile asks
--- for 'Verbose' or 'Debug' output.
---
--- A profile's 'Normal' looks the same as the engine default, so only an
--- explicit override keeps it.
-quietByDefault :: Ptr HegelContext -> Settings -> Ptr HegelSettings -> IO ()
-quietByDefault ctx settings s = when (isNothing settings.verbosity) do
-  level <- alloca \out -> do
-    throwOnError ctx =<< hegel_settings_get_verbosity ctx s out
-    peek out
-  when (level == Witch.into @Word32 Normal) do
-    throwOnError ctx =<< hegel_settings_set_verbosity ctx s (Witch.into @Word32 Quiet)
-
--- | Read back the resolved fields the runner acts on itself.
-readResolved :: Ptr HegelContext -> Ptr HegelSettings -> IO Resolved
-readResolved ctx s = do
-  database <- alloca \out -> do
-    throwOnError ctx =<< hegel_settings_get_database ctx s out
-    peek out
-  -- NULL is the default store and "" is a disabled one.
-  persists <- if database == nullPtr then pure True else (/= 0) <$> peek (castPtr database :: Ptr CChar)
-  CBool printBlob <- alloca \out -> do
-    throwOnError ctx =<< hegel_settings_get_print_blob ctx s out
-    peek out
-  pure Resolved {persists, printBlob = printBlob /= 0}
-
--- | Apply every override a 'Settings' value sets to a resolved handle, leaving
--- the profile's value for every field it leaves unset.
-applySettings :: Ptr HegelContext -> Settings -> Ptr HegelSettings -> IO ()
-applySettings ctx s ptr = do
-  for_ s.backend \b -> chk $ hegel_settings_set_backend ctx ptr (Witch.into @Word32 b)
-  for_ s.testCases \n -> chk $ hegel_settings_set_test_cases ctx ptr (fromIntegral n)
-  for_ s.verbosity \v -> chk $ hegel_settings_set_verbosity ctx ptr (Witch.into @Word32 v)
-  for_ s.seed \case
-    SeedFresh -> chk $ hegel_settings_set_seed ctx ptr 0 (CBool 0)
-    SeedFixed seed -> chk $ hegel_settings_set_seed ctx ptr seed (CBool 1)
-  for_ s.derandomize \b -> chk $ hegel_settings_set_derandomize ctx ptr (fromBool b)
-  for_ s.reportMultipleFailures \b -> chk $ hegel_settings_set_report_multiple_failures ctx ptr (fromBool b)
-  for_ s.phases \ps -> chk $ hegel_settings_set_phases ctx ptr (phasesBitmask ps)
-  for_ s.suppressHealthCheck \hcs -> chk $ hegel_settings_set_suppress_health_check ctx ptr (hcBitmask hcs)
-  for_ s.nondeterminism \n -> chk $ hegel_settings_set_nondeterminism_strictness ctx ptr (Witch.into @Word32 n)
-  for_ s.printBlob \b -> chk $ hegel_settings_set_print_blob ctx ptr (fromBool b)
-  for_ s.database \case
-    DatabaseDefault -> chk $ hegel_settings_set_database ctx ptr nullPtr
-    DatabaseDisabled -> CString.withFilePath "" \p -> chk $ hegel_settings_set_database ctx ptr p
-    DatabaseDirectory dir -> CString.withFilePath dir \p -> chk $ hegel_settings_set_database ctx ptr p
-  for_ s.databaseKey \key ->
-    CString.withText key \p -> chk $ hegel_settings_set_database_key ctx ptr p
-  where
-    chk io = io >>= throwOnError ctx
-
--- | OR the per-phase wire flags into a bitmask.
---
--- An empty list yields @0@, which disables all phases.
-phasesBitmask :: [Phase] -> Word32
-phasesBitmask = foldl' (\acc p -> acc .|. Witch.into @Word32 p) 0
-
--- | OR the per-health-check wire flags into a suppression bitmask.
-hcBitmask :: [HealthCheck] -> Word32
-hcBitmask = foldl' (\acc hc -> acc .|. Witch.into @Word32 hc) 0
 
 -- * Failures
 

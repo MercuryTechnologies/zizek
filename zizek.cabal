@@ -135,12 +135,14 @@ library
     Hegel.Internal.Foreign.Raw
     Hegel.Internal.Replay
     Hegel.Internal.RunnerConfig
+    Hegel.Internal.Settings
     Hegel.Internal.StatefulRound
     Hegel.Internal.TestCase
     Hegel.Internal.Tick
     Hegel.Nondeterminism
     Hegel.Phase
     Hegel.Pool
+    Hegel.Profile
     Hegel.Property
     Hegel.Property.Branch
     Hegel.Property.Fork
