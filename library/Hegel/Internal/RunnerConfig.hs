@@ -11,7 +11,7 @@ import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Database (Database (..))
 import Hegel.Property.Internal (Property)
 import Hegel.Replay (ReplayToken, decodeReplayToken)
-import Hegel.Report (Report)
+import Hegel.Report (Report (..), Result (Ok))
 import Hegel.Runner qualified as Runner
 import Hegel.Seed (Seed (..))
 import Hegel.Settings (Settings (..))
@@ -112,11 +112,13 @@ execute progress settings overrides body = case overrides.replay of
   Just (key, token) | settings.databaseKey == Just key -> Runner.replay settings token body
   _ -> Runner.checkWithProgress progress settings body
 
--- | Runner-specific instructions accompanying the report's replay tokens.
-replayInstructions :: Bool -> Settings -> Overrides -> [Text]
-replayInstructions native settings overrides = case settings.databaseKey of
-  Nothing -> []
-  Just key ->
+-- | Runner-specific instructions for replaying a report's failures, empty for a
+-- passing report or one without a database key.
+replayInstructions :: Bool -> Settings -> Overrides -> Report -> [Text]
+replayInstructions native settings overrides report = case (report.result, settings.databaseKey) of
+  (Ok, _) -> []
+  (_, Nothing) -> []
+  (_, Just key) ->
     let selected = case overrides.replay of
           Just (requested, _) | requested == key -> ["Replay selected for identity: " <> key]
           _ -> []

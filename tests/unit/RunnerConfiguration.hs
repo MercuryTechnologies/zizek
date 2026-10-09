@@ -194,6 +194,20 @@ spec = do
       hspecResult <- evalFixture () (Hspec.propForWith settings "placement" (const body))
       inOrder (reason hspecResult)
 
+    it "omits replay instructions for a passing property in Hspec and Tasty" do
+      let settings = defaultSettings {databaseKey = Just "passing"}
+          body = draw
+          summaryOnly output = do
+            output `shouldContain` "OK, passed"
+            output `shouldNotContain` "Hegel identity"
+            output `shouldNotContain` "Replay with"
+      native <- runTree mempty (Native.testPropertyWith settings "passing" body)
+      Tree.resultSuccessful native `shouldBe` True
+      summaryOnly (Tree.resultDescription native)
+      evalFixture () (Hspec.propForWith settings "passing" (const body)) >>= \case
+        Core.Result info Core.Success -> summaryOnly info
+        other -> expectationFailure ("expected a pass, got " <> show other)
+
     it "preserves absent values and overlays only supplied settings" do
       low <- parsed [("test-cases", "7"), ("seed", "11"), ("database", "disabled")]
       high <- parsed [("seed", "12")]

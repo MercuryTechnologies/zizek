@@ -10,6 +10,8 @@ import Data.Default.Class (def)
 import Data.Function ((&))
 import Data.Maybe (isJust)
 import Data.Text qualified as T
+import Data.Text.IO qualified as T
+import GHC.IO.Handle (hDuplicate, hDuplicateTo)
 import Hegel (Gen)
 import Hegel.Diff (LineDiff (..))
 import Hegel.Gen qualified as Gen
@@ -17,6 +19,9 @@ import Hegel.Property
   ( annotate,
     assert,
     assume,
+    check_,
+    event,
+    eventValue,
     failure,
     footnote,
     forAll,
@@ -27,10 +32,13 @@ import Hegel.Property
   )
 import Hegel.Report (FailureEvidence (..), Note (..), NoteKind (..), Report (..), Result (..), Stats (..), isDrawn, renderReport)
 import Hegel.Runner (check)
+import Hegel.Settings (Settings (..))
+import System.IO (hClose, hFlush, stderr)
 import Test.Hspec
 import TestSupport (singleCapturedEvidence)
-import UnliftIO.Exception (throwIO, tryAny)
+import UnliftIO.Exception (finally, throwIO, tryAny)
 import UnliftIO.IORef (newIORef, readIORef, writeIORef)
+import UnliftIO.Temporary (withSystemTempFile)
 
 intR :: (Int, Int) -> Gen Int
 intR (lo, hi) = Gen.integral & Gen.min lo & Gen.max hi & Gen.build
@@ -161,3 +169,34 @@ spec = do
     report.result `shouldSatisfy` \case
       Ok -> True
       _ -> False
+
+  it "collects the statistics block into the report's engine output" do
+    report <- check def {showStatistics = Just True} do
+      n <- forAll (intR (0, 100))
+      event (if even n then "even" else "odd")
+      eventValue "n" (fromIntegral n)
+    report.engineOutput `shouldSatisfy` any ("Statistics" `T.isPrefixOf`)
+    report.engineOutput `shouldSatisfy` any ("* even:" `T.isInfixOf`)
+
+  it "check_ writes a passing run's engine output to stderr" do
+    output <- captureStderr do
+      check_ def {showStatistics = Just True} do
+        n <- forAll (intR (0, 100))
+        event (if even n then "even" else "odd")
+    output `shouldSatisfy` ("Statistics" `T.isInfixOf`)
+
+-- | Run an action with 'stderr' redirected to a temporary file and return
+-- what it wrote.
+--
+-- Other tests running concurrently may write into the same capture, so
+-- callers should assert only on what their own action writes.
+captureStderr :: IO () -> IO T.Text
+captureStderr act = withSystemTempFile "stderr" \path h -> do
+  saved <- hDuplicate stderr
+  hDuplicateTo h stderr
+  act `finally` do
+    hFlush stderr
+    hDuplicateTo saved stderr
+    hClose saved
+  hClose h
+  T.readFile path

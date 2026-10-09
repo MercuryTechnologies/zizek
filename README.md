@@ -32,7 +32,10 @@ Should we ever produce an Antithesis SDK for Haskell[^2], tests written with `zi
   - [Dependent Generators](#dependent-generators)
   - [Collection Generators](#collection-generators)
   - [Recursive Generators](#recursive-generators)
+  - [Stateful Testing](#stateful-testing)
+  - [Event Statistics](#event-statistics)
   - [Integrations](#integrations)
+  - [Settings & Profiles](#settings--profiles)
 - [Generators](#generators)
 - [Development](#development)
 - [Frequently Asked Questions](#frequently-asked-questions)
@@ -76,9 +79,8 @@ For example, consider the following property that generates machine integers in 
 
 ```haskell
 import Data.Function ((&))
-import Hegel (prop)
+import Hegel (assert, prop)
 import Hegel.Gen qualified as Gen
-import Hegel.Property (assert)
 
 prop_successor :: IO ()
 prop_successor = do
@@ -89,15 +91,14 @@ prop_successor = do
 
 ### Independent Generators
 
-When the draws in a `do` block don't reference each other, and `ApplicativeDo` has been enabled, `zizek` will batch them into a single FFI call into `libhegel` for the whole tuple and the engine can shrink each component independently when a counterexample is found:
+When the draws in a `do` block don't reference each other, and `ApplicativeDo` has been enabled, `zizek` will group them as siblings under a single span so the engine can shrink each component independently when it finds a counterexample.
 
 ```haskell
 {-# LANGUAGE ApplicativeDo #-}
 
 import Data.Function ((&))
-import Hegel (Gen, prop)
+import Hegel (Gen, assert, prop)
 import Hegel.Gen qualified as Gen
-import Hegel.Property (assert)
 
 boolAndInt :: Gen (Bool, Int)
 boolAndInt = do
@@ -111,7 +112,7 @@ prop_pair = prop boolAndInt \(_, n) ->
 ```
 
 > [!NOTE]
-> The example will compile and run without `ApplicativeDo`, but `zizek` will now issue two separate FFI calls and shrinking will be dependent.
+> When the above example is compiled and run without `ApplicativeDo`, each draw is sequenced with `>>=`, which forces `zizek` to treat `n` as a draw that depends on `b`.
 
 ### Dependent Generators
 
@@ -120,10 +121,9 @@ When a later draw needs to look at an earlier one, each must be sequenced as par
 The `Hegel.Property` monad is the natural home for this: a property interleaves draws (`forAll`), effects, and assertions, and the engine shrinks across the whole interleaving. Each `forAll` is its own request, so a later draw can constrain itself with an earlier value, and `annotate` attaches context that shows up in the failure report:
 
 ```haskell
-import Data.Default.Class (def)
 import Data.Function ((&))
+import Hegel (annotate, assert, check_, def, forAll)
 import Hegel.Gen qualified as Gen
-import Hegel.Property (annotate, assert, check_, forAll)
 
 prop_intervalOrdered :: IO ()
 prop_intervalOrdered = check_ def do
@@ -154,9 +154,8 @@ interval = do
 ```haskell
 import Data.Function ((&))
 import Data.List (nub)
-import Hegel (Gen, prop)
+import Hegel (Gen, prop, (===))
 import Hegel.Gen qualified as Gen
-import Hegel.Property ((===))
 
 uniqueInts :: Gen [Int]
 uniqueInts =
@@ -179,9 +178,8 @@ Self-referential generators must wrap each recursive edge in `Gen.defer`; failin
 
 ```haskell
 import Data.Function ((&))
-import Hegel (Gen, prop)
+import Hegel (Gen, prop, (===))
 import Hegel.Gen qualified as Gen
-import Hegel.Property ((===))
 
 data Tree = Leaf Int | Branch Tree Tree
   deriving stock Show
@@ -202,8 +200,122 @@ prop_tree = prop tree \t ->
     branches (Branch l r) = 1 + branches l + branches r
 ```
 
+> [!TIP]
+> Prefer `Gen.recursive` for complex recursive types; this gives `libhegel` control over how deep the structure grows and allows it to shrink a value down to one of its subtrees:
+>
+> ```haskell
+> tree :: Gen Tree
+> tree =
+>   Gen.recursive leaf (\_ subtree -> Branch <$> subtree <*> subtree)
+>     & Gen.maxDepth 6
+>     & Gen.build
+>   where
+>     leaf = Leaf <$> (Gen.int & Gen.min 0 & Gen.max 10 & Gen.build)
+> ```
+
+### Stateful Testing
+
+A stateful test is a `Machine` consisting of:
+- an initial state
+- the `Rule`s that can act on it
+- the `Invariant`s that should hold between steps.
+
+`libhegel` chooses which rules to run and in what order, and when a run fails, it shrinks the steps down to the shortest sequence that still fails.
+
+The machine below checks a FIFO queue against a list, and the queue has a bug:
+
+```haskell
+import Data.Function ((&))
+import Hegel (check_, def, discard, forAllWithLabel, (===))
+import Hegel.Gen qualified as Gen
+import Hegel.Stateful (Machine (..))
+import Hegel.Stateful qualified as Stateful
+
+-- A FIFO queue kept as two lists: pushes go onto the back list, and pops come
+-- off the front list; the front list is refilled from the back when it runs out.
+data Queue = Queue [Int] [Int]
+
+push :: Int -> Queue -> Queue
+push x (Queue front back) = Queue front (x : back)
+
+pop :: Queue -> (Maybe Int, Queue)
+pop (Queue (x : front) back) = (Just x, Queue front back)
+pop (Queue [] []) = (Nothing, Queue [] [])
+pop (Queue [] back) = pop (Queue back []) -- BUG: should be `reverse back`
+
+-- The queue under test, paired with a list of what it should contain.
+data State = State Queue [Int]
+
+pushRule :: Stateful.Rule State IO
+pushRule = Stateful.rule "push" \(State queue model) -> do
+  x <- forAllWithLabel "x" $ Gen.int & Gen.build
+  pure $ State (push x queue) (model ++ [x])
+
+popRule :: Stateful.Rule State IO
+popRule = Stateful.rule "pop" \(State queue model) -> case model of
+  [] -> discard
+  expected : rest -> do
+    let (actual, queue') = pop queue
+    actual === Just expected
+    pure $ State queue' rest
+
+prop_queue :: IO ()
+prop_queue = check_ def $ Stateful.run Machine
+  { initial    = pure $ State (Queue [] []) []
+  , rules      = [pushRule, popRule]
+  , invariants = []
+  , stepCount  = Stateful.defaultStepCount
+  }
+```
+
+Running `prop_queue` finds the bug and shrinks it down to two pushes and a pop:
+
+```
+failed after 561 tests, including shrinking
+  Step 1: push
+    Draw 1: x=0
+  Step 2: push
+    Draw 1: x=1
+  Step 3: pop
+    ✗ === failed, values are not equal
+        (- lhs) (+ rhs)
+        - Just 1
+        + Just 0
+```
+
 > [!NOTE]
-> `Gen.defer` always falls back to interactive generation; each recursive step is a separate FFI call into `libhegel`.
+> A rule that calls `discard` is skipped for that step, so `popRule` only runs when the model has something to pop.
+
+### Event Statistics
+
+`zizek` provides two functions for collecting statistics from property runs:
+- `event`, which reports the share of test cases that recorded the given label
+- `eventValue`, which reports the distribution of the numeric values it's provided under the given label
+
+```haskell
+import Data.Function ((&))
+import Hegel (Settings (..), check_, def, event, eventValue, forAll, (===))
+import Hegel.Gen qualified as Gen
+
+prop_reverse :: IO ()
+prop_reverse = check_ def {showStatistics = Just True} do
+  xs <- forAll $ Gen.list (Gen.int & Gen.build) & Gen.build
+  event $ if null xs then "empty" else "non-empty"
+  eventValue "length" $ fromIntegral (length xs)
+  reverse (reverse xs) === xs
+```
+
+...which will produce a report like the following:
+
+```
+Statistics (over 100 test cases):
+  * empty: 7.0% of test cases
+  * non-empty: 93.0% of test cases
+  * length: count 100, min 0, median 4, mean 5.43, p90 10, max 23
+```
+
+> [!NOTE]
+> The `showStatistics` configuration option must be `True` to get a statistics report after a property run.
 
 ### Integrations
 
@@ -215,8 +327,8 @@ With `tasty`, `Hegel.Tasty.testProperty` turns a property into a `TestTree`, key
 
 ```haskell
 import Data.Function ((&))
+import Hegel (forAll, (===))
 import Hegel.Gen qualified as Gen
-import Hegel.Property (forAll, (===))
 import Hegel.Tasty (testProperty)
 import Test.Tasty (TestTree)
 
@@ -232,9 +344,9 @@ With `hspec`, `Hegel.Hspec.prop` is a drop-in for `it` that runs a property and 
 
 ```haskell
 import Data.Function ((&))
+import Hegel (forAll, (===))
 import Hegel.Gen qualified as Gen
 import Hegel.Hspec (prop)
-import Hegel.Property (forAll, (===))
 import Test.Hspec
 
 spec :: Spec
@@ -245,7 +357,7 @@ spec = describe "reverse" do
 ```
 
 > [!TIP]
-> Use `propWith` to supply `Settings`, and `propWith def` to disable counterexample persistence.
+> Use `propWith` to supply `Settings`; for example, `propWith def {database = Just DatabaseDisabled}` disables the replay database for the property.
 
 For properties written over a monad-transformer stack, `propT` takes a function that can evaluate the transformer down to the `IO` context that the engine runs in (`forall x. m x -> IO x`).
 
@@ -255,9 +367,9 @@ For a `ReaderT` stack that runner is just `runReaderT` applied to the environmen
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ask, runReaderT)
 import Data.Function ((&))
+import Hegel (assert, forAll)
 import Hegel.Gen qualified as Gen
 import Hegel.Hspec (propT)
-import Hegel.Property (assert, forAll)
 import Test.Hspec
 
 -- A property over a `ReaderT` stack; in practice the environment is typically
@@ -273,42 +385,76 @@ spec = describe "trivial reader example" do
 > [!TIP]
 > Use `propWithT` to supply custom `Settings`.
 
+### Settings & Profiles
+
+Every run starts from a profile, a named set of defaults; `def` runs the profile as-is, and `def {testCases = Just 500}` runs it with 500 test cases.
+
+`libhegel` picks one of three built-in profiles based on where the tests run:
+- `development` for local runs, which stores failures under `.hegel/` so they replay on the next run
+- `ci` on a CI server, which makes runs deterministic and stores nothing
+- `workload` inside Antithesis
+
+A `hegel.toml` file in the test's working directory, or any directory above it, adjusts these profiles and can defines new ones:
+
+```toml
+# Run more cases on CI.
+[profiles.ci]
+test_cases = 1000
+
+# A profile for longer runs, layered over whichever profile the environment picks.
+[profiles.nightly]
+test_cases = 10000
+```
+
+A property can select the profile it uses by overriding its settings `def {profile = Just "nightly"}`, `HEGEL_DEFAULT_PROFILE=nightly` can be used to set a default property for an entire run, and `Hegel.Profile.register` provides a more advanced API for defining and setting a profile in Haskell code.
+
 ## Generators
 
 | Builder                    | Produces               | Modifiers                                                                                                            |
 | -------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `bool`                     | `Bool`                 | —                                                                                                                    |
+| `bool`                     | `Bool`                 | `weighted`                                                                                                           |
 | `integral`                 | any `Integral a`       | `min`, `max`                                                                                                         |
 | `int`, `int8`…`int64`      | signed ints            | `min`, `max`                                                                                                         |
 | `word`, `word8`…`word64`   | unsigned ints          | `min`, `max`                                                                                                         |
-| `enum`                     | enumerated values      | `min`, `max`                                                                                                         |
-| `enumBounded`              | bounded enumerations   | —                                                                                                                    |
 | `float`, `double`          | floating point numbers | `min`, `max`, `exclusiveMin`, `exclusiveMax`, `disallowNan`, `disallowInfinity`                                      |
 | `binary`                   | `ByteString`           | `minSize`, `maxSize`                                                                                                 |
-| `text`                     | `Text`                 | `minSize`, `maxSize`                                                                                                 |
+| `text`                     | `Text`                 | `minSize`, `maxSize`, `alphabet`                                                                                     |
 | `char`                     | `Char`                 | `codec`, `minCodepoint`, `maxCodepoint`, `categories`, `excludeCategories`, `includeCharacters`, `excludeCharacters` |
 | `uuid`                     | `UUID`                 | `version`                                                                                                            |
 | `uri`, `uriText`           | parsed / raw URIs      | —                                                                                                                    |
+| `date`                     | `Day`                  | `min`, `max`, `minYear`, `maxYear`                                                                                   |
+| `time`                     | `TimeOfDay`            | `min`, `max`                                                                                                         |
+| `datetime`                 | `LocalTime`            | `min`, `max`, `minYear`, `maxYear`, `onDay`                                                                          |
+| `duration`                 | `NominalDiffTime`      | `min`, `max`                                                                                                         |
 | `domain`                   | domain names           | `maxLength`                                                                                                          |
+| `email`                    | email addresses        | —                                                                                                                    |
 | `regex`                    | strings matching regex | `fullMatch`, `alphabet`                                                                                              |
 | `list`                     | linked lists           | `minSize`, `maxSize`, `unique`                                                                                       |
+| `nonEmpty`                 | `NonEmpty a`           | `minSize`, `maxSize`                                                                                                 |
+| `recursive`                | self-referential data  | `maxDepth`, `maxLeaves`                                                                                              |
 | `set`, `hashSet`, `intSet` | set variants           | `minSize`, `maxSize`                                                                                                 |
 | `map`, `hashMap`, `intMap` | map variants           | `minSize`, `maxSize`                                                                                                 |
 
-| Combinator                                     | Purpose                                                                           |
-| ---------------------------------------------- | ----------------------------------------------------------------------------------|
-| `oneOf :: [Gen a] -> Gen a`                    | Choose from a list of generators; the list must be non-empty                      |
-| `element :: [a] -> Gen a`                      | Choose from a list of values; the list must be non-empty                          |
-| `frequency :: [(Int, Gen a)] -> Gen a`         | Weighted choice; all weights must be positive                                     |
-| `maybe :: Gen a -> Gen (Maybe a)`              | `Nothing` or `Just` a generated value                                             |
-| `either :: Gen a -> Gen b -> Gen (Either a b)` | `Left` from the first generator or `Right` from the second                        |
-| `assume :: Bool -> Gen ()`                     | Conditionally discard the current test case                                       |
-| `discard :: Gen a`                             | Unconditionally discard the current test case                                     |
-| `defer :: Gen a -> Gen a`                      | Force interactive generation; required on recursive edges                         |
-| `filtered :: (a -> Bool) -> Gen a -> Gen a`    | Retry until the predicate holds _or_ the retry budget exhausts                    |
-| `mapMaybe :: (a -> Maybe b) -> Gen a -> Gen b` | Retry until we draw a value that produces `Just b` _or_ the retry budget exhausts |
-| `just :: Gen (Maybe a) -> Gen a`               | Retry until we draw `Just a` _or_ the retry budget exhausts                       |
-| `enumerate :: Gen a -> Maybe [a]`              | Attempt to enumerate a finite generator's possible values                         |
+| Combinator                                     | Purpose                                                                       |
+| ---------------------------------------------- | ------------------------------------------------------------------------------|
+| `oneOf :: [Gen a] -> Gen a`                    | Choose from a list of generators; the list must be non-empty                  |
+| `element :: [a] -> Gen a`                      | Choose from a list of values; the list must be non-empty                      |
+| `enum :: Enum a => a -> a -> Gen a`            | A value between two bounds, inclusive                                         |
+| `enumBounded :: (Bounded a, Enum a) => Gen a`  | Any value of a bounded enumeration                                            |
+| `frequency :: [(Int, Gen a)] -> Gen a`         | Weighted choice; all weights must be positive                                 |
+| `maybe :: Gen a -> Gen (Maybe a)`              | `Nothing` or `Just` a generated value                                         |
+| `either :: Gen a -> Gen b -> Gen (Either a b)` | `Left` from the first generator or `Right` from the second                    |
+| `assume :: Bool -> Gen ()`                     | Conditionally discard the current test case                                   |
+| `discard :: Gen a`                             | Unconditionally discard the current test case                                 |
+| `defer :: Gen a -> Gen a`                      | Break recursion cycles in self-referential generators                         |
+| `filtered :: (a -> Bool) -> Gen a -> Gen a`    | Draw until a value satisfies the predicate, discarding after 3 attempts       |
+| `mapMaybe :: (a -> Maybe b) -> Gen a -> Gen b` | Draw until the function produces `Just b`, discarding after 3 attempts        |
+| `just :: Gen (Maybe a) -> Gen a`               | Draw until the generator produces `Just a`, discarding after 3 attempts       |
+
+> [!NOTE]
+> `oneOf`, `element`, and `frequency` do not sample uniformly, or even in proportion to their weights; `libhegel` biases towards choices that lead to inputs it hasn't seen yet, so over a run it tries to draw more from branches that can still produce new values.
+>
+> For example, `oneOf [Gen.bool, Gen.int32]` runs out of new `Bool`s early on and spends the rest of its run generating `Int32`s; similarly, `frequency`'s weights bias which branch the engine will select initially but **will not necessarily** produce a distribution that reflects these weights.
 
 ## Development
 
@@ -334,7 +480,6 @@ $ just repl              # start a GHCi session with this library in-scope
 Some work remains outstanding:
 
 * an API to seed the `Explicit` phase with hand-written examples
-* stateful/state-machine testing
 * Hackage publication
 
 ### What's up with the name?

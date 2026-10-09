@@ -452,7 +452,7 @@ invariantCadence = do
             rules = [stepping],
             stepCount = 20,
             invariants =
-              [ Stateful.alwaysInvariant "every_join_point" \_ -> liftIO (bump \c -> c {always = c.always + 1}),
+              [ Stateful.always $ Stateful.invariant "every_join_point" \_ -> liftIO (bump \c -> c {always = c.always + 1}),
                 Stateful.invariant "sampled" \_ -> liftIO (bump \c -> c {sampled = c.sampled + 1})
               ]
           }

@@ -55,7 +55,7 @@ module Hegel.Stateful
     weighted,
     Invariant (..),
     invariant,
-    alwaysInvariant,
+    always,
     Machine (..),
     defaultStepCount,
 
@@ -152,9 +152,15 @@ data Invariant s m = Invariant
 invariant :: Text -> (s -> PropertyT m ()) -> Invariant s m
 invariant name check = Invariant {name, alwaysRun = False, check}
 
--- | Construct an 'Invariant' checked at every join point.
-alwaysInvariant :: Text -> (s -> PropertyT m ()) -> Invariant s m
-alwaysInvariant name check = Invariant {name, alwaysRun = True, check}
+-- | Check an invariant at every join point instead of a sampled subset of them.
+--
+-- @
+-- balanced :: Stateful.Invariant Ledger IO
+-- balanced = Stateful.always $ Stateful.invariant "balanced" \\l ->
+--   assert (total l == 0) "the ledger balances"
+-- @
+always :: Invariant s m -> Invariant s m
+always i = i {alwaysRun = True}
 
 -- | Journal a step annotation without a source location.
 --

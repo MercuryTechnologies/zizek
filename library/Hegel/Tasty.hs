@@ -99,7 +99,7 @@ instance IsTest HegelTest where
               report <- Config.execute completed resolved overrides prop
               useColor <- resolveColor (lookupOption opts)
               pref <- Style.preference stdout
-              output <- T.unpack <$> renderReportAuto useColor pref (Config.replayInstructions True resolved overrides) report
+              output <- T.unpack <$> renderReportAuto useColor pref (Config.replayInstructions True resolved overrides report) report
               pure case report.result of
                 Ok -> testPassed output
                 _ -> testFailed output

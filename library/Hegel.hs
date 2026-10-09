@@ -29,6 +29,7 @@ module Hegel
     PropertyT,
     hoist,
     check,
+    check_,
     forAll,
     forAllWith,
     forAllWithLabel,
@@ -50,6 +51,7 @@ module Hegel
     Fork,
 
     -- * Settings and reports
+    def,
     module Hegel.Settings,
     module Hegel.Exception,
     module Hegel.Backend,
@@ -118,8 +120,11 @@ import Hegel.Seed
 import Hegel.Settings
 import Hegel.Verbosity
 
--- | 'check_' with 'defaultSettings' and 'forEach': the shortest spelling for
--- use inside a test framework's @it@\/@testCase@, where the framework owns the
--- label and reports the thrown failure.
+-- | Run @body@ against values drawn from @gen@ with 'defaultSettings' and
+-- throw on anything other than success: the shortest spelling for use inside
+-- a test framework's @it@\/@testCase@, where the framework owns the label and
+-- reports the thrown failure.
+--
+-- A passing run prints nothing.
 prop :: (HasCallStack, Show a) => Gen a -> (a -> IO ()) -> IO ()
-prop gen body = withFrozenCallStack $ check_ def (forEach gen body)
+prop gen body = withFrozenCallStack $ throwOnFailure =<< check def (forEach gen body)

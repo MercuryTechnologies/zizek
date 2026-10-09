@@ -14,7 +14,7 @@ module Hegel.Stateful.Concurrent
     weighted,
     Invariant (..),
     invariant,
-    alwaysInvariant,
+    always,
     Machine (..),
     defaultStepCount,
 
@@ -72,7 +72,7 @@ import Hegel.Property.Internal
     withScope,
   )
 import Hegel.Report (Note (..), NoteKind (Annotation, FinalBoundary, RoundBoundary, StepHeader, StepOrigin))
-import Hegel.Stateful (Invariant (..), alwaysInvariant, defaultStepCount, invariant)
+import Hegel.Stateful (Invariant (..), always, defaultStepCount, invariant)
 import UnliftIO (MonadUnliftIO, throwIO, withRunInIO)
 import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef)
 

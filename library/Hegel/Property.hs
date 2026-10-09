@@ -75,6 +75,7 @@ where
 
 import Control.Monad.IO.Class (liftIO)
 import Data.Text (Text)
+import Data.Text.IO qualified as T
 import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Assertion (assert, failure, (/==), (===))
 import Hegel.Gen.Internal (Gen)
@@ -98,14 +99,32 @@ import Hegel.Property.Internal
     resource,
     resource_,
   )
-import Hegel.Report (throwOnFailure)
+import Hegel.Report (Report (..), Result (Ok), throwOnFailure)
+import Hegel.Report.Encoding qualified as Encoding
 import Hegel.Runner (check)
 import Hegel.Settings (Settings)
+import System.IO (stderr)
 
 -- | Run a property and throw on anything other than success
 -- (via 'throwOnFailure').
+--
+-- A passing run writes whatever the engine printed, such as the block that
+-- 'Hegel.Settings.showStatistics' enables, to 'stderr'.
 check_ :: (HasCallStack) => Settings -> Property () -> IO ()
-check_ settings prop = withFrozenCallStack $ throwOnFailure =<< check settings prop
+check_ settings prop = withFrozenCallStack do
+  report <- check settings prop
+  case report.result of
+    Ok -> writeEngineOutput report.engineOutput
+    _ -> pure ()
+  throwOnFailure report
+
+-- | Write engine output lines to 'stderr', transliterated to 7-bit ASCII when
+-- 'stderr' can't encode them.
+writeEngineOutput :: [Text] -> IO ()
+writeEngineOutput [] = pure ()
+writeEngineOutput output = do
+  pref <- Encoding.preference stderr
+  mapM_ (T.hPutStrLn stderr . Encoding.cleanFor pref) output
 
 -- | Draw a value and run a test body against it, rendering drawn values via
 -- their 'Show' instance.

@@ -121,7 +121,7 @@ cancelOrder =
 -- it runs after every step and the failure lands on the step that broke it.
 reservationsMatchOrders :: Stateful.Invariant Warehouse IO
 reservationsMatchOrders =
-  Stateful.alwaysInvariant "reservations_match_orders" \w ->
+  Stateful.always $ Stateful.invariant "reservations_match_orders" \w ->
     w.reserved === Map.filter (> 0) (Map.fromListWith (+) (Map.elems w.pending))
 
 -- | Broader sanity claims, sampled at a few join points per test case and

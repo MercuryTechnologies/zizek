@@ -130,10 +130,11 @@ The `Build`, `HasMin`, `HasMax`, `HasSize`, and `HasYear` typeclasses in `Hegel.
 - uuid: `version`
 - domain: `maxLength`
 - datetime: `onDay`
-- duration: `milliseconds`, `seconds`, `minutes`, `hours`
 - bool: `weighted`
 - list: `unique`
 - recursive: `maxDepth`, `maxLeaves`
+
+The duration builder takes its bounds through `min` and `max`, and `milliseconds`, `seconds`, `minutes`, and `hours` build those bound values, as in `Gen.duration & Gen.max (Gen.minutes 5)`.
 
 Applying an inapplicable modifier (e.g. `Gen.uuid & Gen.min 0`) is a type error. There are no `*Options` records on the public API.
 
@@ -220,7 +221,7 @@ Every span a recursive value opens carries the generator's own label, so the shr
 
 A round polls the engine for the next concurrency group, then pulls rules for that group until the engine signals that the round's budget is exhausted. A sequential machine has one group and runs one rule per round. A round's draws share one `LabelStatefulRule` span, discarded when one of its rules was rejected. A rejected rule is reported back to the engine, which at concurrency 1 keeps it from counting toward the step count.
 
-Every invariant runs on the initial and final states. At each round's join point the engine decides which invariants run: every `alwaysInvariant`, and a sample of the rest, about one check per case. The `should_check_invariant` draw happens for every invariant at every join point, before any of them runs.
+Every invariant runs on the initial and final states. At each round's join point the engine decides which invariants run: every invariant marked `always`, and a sample of the rest, about one check per case. The `should_check_invariant` draw happens for every invariant at every join point, before any of them runs.
 
 A failing assertion is journaled in-band at the step that produced it. Replay alignment is load-bearing. Every draw, and every poll for the next round or the next rule, is part of the choice sequence and happens unconditionally, on replay too. Skipping one misaligns every later draw, and the counterexample stops reproducing.
 

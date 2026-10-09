@@ -265,7 +265,7 @@ behaviorSpec = describe "run (behavior)" do
             liftIO (atomicModifyIORef' touchedThisRound \s -> (Set.insert grp s, ()))
         oneGroupPerRound :: Concurrent.Invariant () IO
         oneGroupPerRound =
-          Concurrent.alwaysInvariant "one_group_per_round" \_ -> liftIO do
+          Concurrent.always $ Concurrent.invariant "one_group_per_round" \_ -> liftIO do
             groups <- atomicModifyIORef' touchedThisRound \s -> (Set.empty, s)
             when (Set.size groups > 1) (writeIORef violated True)
         machine =

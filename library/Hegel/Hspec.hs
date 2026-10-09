@@ -130,7 +130,7 @@ runProperty settings body = do
       report <- Config.execute (\_ -> pure ()) resolved o body
       useColor <- shouldUseColor
       pref <- Style.preference stdout
-      toHspecResult useColor pref (Config.replayInstructions False resolved o) report
+      toHspecResult useColor pref (Config.replayInstructions False resolved o report) report
 
 -- | A property as a keyed hspec example: a drop-in for @it@ that derives a
 -- stable example-database key from the test's @describe@ & @it@ labels (salted
