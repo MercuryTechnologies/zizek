@@ -7,6 +7,7 @@ module Main (main) where
 import Clock qualified
 import Faults qualified
 import Http qualified
+import StatefulFixture qualified
 import System.Environment (setEnv)
 import Test.Tasty (defaultMain, testGroup)
 import Test.Tasty.Hspec (testSpec)
@@ -17,4 +18,5 @@ main = do
   http <- testSpec "HTTP handler" Http.spec
   clock <- testSpec "fake clock" Clock.spec
   faults <- testSpec "injected faults" Faults.spec
-  defaultMain (testGroup "zizek:supply-spike" [http, clock, faults])
+  stateful <- testSpec "stateful fixture" StatefulFixture.spec
+  defaultMain (testGroup "zizek:supply-spike" [http, clock, faults, stateful])
