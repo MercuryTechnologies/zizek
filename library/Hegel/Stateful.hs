@@ -52,6 +52,7 @@ module Hegel.Stateful
   ( -- * Specification
     Rule (..),
     rule,
+    weighted,
     Invariant (..),
     invariant,
     alwaysInvariant,
@@ -86,7 +87,7 @@ import Hegel.Internal.DataSource
     stateMachineNextGroup,
     stopSpan,
   )
-import Hegel.Internal.StatefulRound (RoundSpan (..), RoundVerdict (..), Worker (..), lookupRule, runRound, selectInvariants, stepText)
+import Hegel.Internal.StatefulRound (RoundSpan (..), RoundVerdict (..), Worker (..), checkRuleWeights, lookupRule, runRound, selectInvariants, stepText)
 import Hegel.Property.Internal
   ( Env (..),
     PropertyT,
@@ -109,13 +110,26 @@ import UnliftIO.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 -- Use 'assume'\/'discard' at the head of 'apply' to express preconditions.
 data Rule s m = Rule
   { name :: !Text,
+    -- | How often the engine picks this rule relative to the others, which
+    -- must be finite and positive.
+    --
+    -- The engine only weighs the rules that swarm testing enabled for a test
+    -- case, so a weight guides how often a rule runs without guaranteeing it.
+    weight :: !Double,
     apply :: s -> PropertyT m s
   }
 
--- | Construct a 'Rule' from a name and its application function, for
--- symmetry with 'Hegel.Stateful.Concurrent.rule'.
+-- | Construct a 'Rule' of weight 1 from a name and its application function.
 rule :: Text -> (s -> PropertyT m s) -> Rule s m
-rule name apply = Rule {name, apply}
+rule name apply = Rule {name, weight = 1, apply}
+
+-- | Set a rule's selection 'weight'.
+--
+-- @
+-- Stateful.rule "insert" insert & Stateful.weighted 3
+-- @
+weighted :: Double -> Rule s m -> Rule s m
+weighted w r = r {weight = w}
 
 -- | A property of the model checked on the machine's initial and final
 -- states, and at the join points between rounds the engine samples.
@@ -155,7 +169,7 @@ stepNote = note Annotation Nothing
 -- that never call it render without a response segment.
 --
 -- @
--- Stateful.Rule "read" \\s -> do
+-- Stateful.rule "read" \\s -> do
 --   h <- forAll (Pool.reuse s.handles)
 --   r <- liftIO (readHandle h)
 --   Stateful.respond (T.pack (show r))
@@ -207,6 +221,7 @@ run machine = withFrozenCallStack $ do
   when (machine.stepCount < 1) $
     throwIO $
       malformedTest "Hegel.Stateful.run" "a Machine's stepCount must be at least 1" [("stepCount", T.pack (show machine.stepCount))]
+  liftIO (checkRuleWeights "Hegel.Stateful.run" (map (\r -> (r.name, r.weight)) machine.rules))
 
   env <- askEnv
   let tc = env.testCase
@@ -226,7 +241,7 @@ run machine = withFrozenCallStack $ do
   sm <-
     withRunInIO \runInIO ->
       mask_ do
-        sm <- newStateMachine tc (fromIntegral machine.stepCount) (map (.name) machine.rules) (map (\inv -> (inv.name, inv.alwaysRun)) machine.invariants)
+        sm <- newStateMachine tc (fromIntegral machine.stepCount) (map (\r -> (r.name, r.weight)) machine.rules) (map (\inv -> (inv.name, inv.alwaysRun)) machine.invariants)
         runInIO (registerFinalizer (freeStateMachine tc sm))
         pure sm
 

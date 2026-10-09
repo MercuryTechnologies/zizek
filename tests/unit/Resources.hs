@@ -34,7 +34,7 @@ import UnliftIO.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 newtype Counter = Counter Int
 
 increment :: Stateful.Rule Counter IO
-increment = Stateful.Rule "increment" \(Counter n) -> pure (Counter (n + 1))
+increment = Stateful.rule "increment" \(Counter n) -> pure (Counter (n + 1))
 
 -- | A deliberately violated invariant, giving a machine a deterministic
 -- counterexample, and thus the engine's final replay, when nothing else about
@@ -119,7 +119,7 @@ spec = describe "resource" do
     -- when it shouldn't.
     let onceRule :: Stateful.Rule Counter IO
         onceRule =
-          Stateful.Rule "acquire_once" \(Counter n) -> do
+          Stateful.rule "acquire_once" \(Counter n) -> do
             _ <- resource (pure ()) (const (pure ()))
             pure (Counter (n + 1))
         machine =
@@ -173,7 +173,7 @@ spec = describe "resource" do
     ran <- newIORef (0 :: Int)
     let bumpingRule :: Stateful.Rule Counter IO
         bumpingRule =
-          Stateful.Rule "bump_and_register" \(Counter n) -> do
+          Stateful.rule "bump_and_register" \(Counter n) -> do
             registerFinalizer (modifyIORef' ran (+ 1))
             pure (Counter (n + 1))
         machine =
@@ -229,7 +229,7 @@ spec = describe "resource" do
             }
         outerRule :: Stateful.Rule Counter IO
         outerRule =
-          Stateful.Rule "run_inner_machine" \(Counter n) -> do
+          Stateful.rule "run_inner_machine" \(Counter n) -> do
             Stateful.run innerMachine
             pure (Counter (n + 1))
         outerMachine =
@@ -246,7 +246,7 @@ spec = describe "resource" do
     it "throws MalformedTest for resource inside Branch.concurrently within a Rule's apply" do
       let bugRule :: Stateful.Rule Counter IO
           bugRule =
-            Stateful.Rule "branch_resource" \(Counter n) -> do
+            Stateful.rule "branch_resource" \(Counter n) -> do
               _ <- Branch.concurrently (resource (pure ()) (const (pure ()))) (pure ())
               pure (Counter (n + 1))
           machine =
@@ -262,7 +262,7 @@ spec = describe "resource" do
     it "throws MalformedTest for resource inside a joined Fork.spawn within a Rule's apply" do
       let bugRule :: Stateful.Rule Counter IO
           bugRule =
-            Stateful.Rule "fork_resource" \(Counter n) -> do
+            Stateful.rule "fork_resource" \(Counter n) -> do
               f <- Fork.spawn (resource (pure ()) (const (pure ())))
               Fork.join f
               pure (Counter (n + 1))

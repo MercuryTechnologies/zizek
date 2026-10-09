@@ -21,6 +21,9 @@ module Hegel.Internal.StatefulRound
     -- * Reporting
     lookupRule,
     stepText,
+
+    -- * Validation
+    checkRuleWeights,
   )
 where
 
@@ -33,7 +36,7 @@ import Data.Text qualified as T
 import Data.Traversable (for)
 import Foreign (Ptr)
 import Hegel.Exception (InvariantViolation (..))
-import Hegel.Internal.Control (AssumeRejected (..), ControlSignal (Assume, Stop), TestStopped (..), catchControl, isAborting)
+import Hegel.Internal.Control (AssumeRejected (..), ControlSignal (Assume, Stop), TestStopped (..), catchControl, isAborting, malformedTest)
 import Hegel.Internal.DataSource (Label (LabelStatefulRule), discardSpansTo, openSpanDepth, spanLabel, startSpan, stateMachineNextRule, stateMachineRuleRejected, stateMachineShouldCheckInvariant, stopSpan)
 import Hegel.Internal.Foreign.Raw (HegelStateMachine)
 import Hegel.Internal.TestCase (TestCase)
@@ -197,3 +200,17 @@ lookupRule caller ruleIndex indexedRules = case lookup ruleIndex indexedRules of
 -- e.g. @\"Step 4: restock\"@.
 stepText :: Int -> Text -> Text
 stepText idx ruleName = "Step " <> T.pack (show idx) <> ": " <> ruleName
+
+-- * Validation
+
+-- | Throw a malformed-test error naming @context@ for the first rule whose
+-- weight is not finite and positive.
+checkRuleWeights :: Text -> [(Text, Double)] -> IO ()
+checkRuleWeights context rules =
+  case filter (not . validWeight . snd) rules of
+    [] -> pure ()
+    (name, w) : _ ->
+      throwIO (malformedTest context "a Rule's weight must be finite and positive" [("rule", name), ("weight", T.pack (show w))])
+  where
+    validWeight :: Double -> Bool
+    validWeight w = not (isNaN w || isInfinite w) && w > 0

@@ -314,7 +314,7 @@ counterMachine =
   Stateful.Machine
     { initial = pure 0,
       rules =
-        [ Stateful.Rule "add" \n -> do
+        [ Stateful.rule "add" \n -> do
             d <- forAll smallInt
             pure (n + d)
         ],

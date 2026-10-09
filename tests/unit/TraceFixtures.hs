@@ -195,14 +195,14 @@ eventfulMachine =
         p <- Pool.new
         pure Model {pool = p, reused = False, consumed = False},
       rules =
-        [ Stateful.Rule "register" \m -> do
+        [ Stateful.rule "register" \m -> do
             n <- forAll (Gen.int & Gen.min 0 & Gen.max 100 & Gen.build)
             Pool.add m.pool n
             pure m,
-          Stateful.Rule "reuse" \m -> do
+          Stateful.rule "reuse" \m -> do
             _ <- forAll (Pool.reuse m.pool)
             pure m {reused = True},
-          Stateful.Rule "consume" \m -> do
+          Stateful.rule "consume" \m -> do
             _ <- forAll (Pool.consume m.pool)
             Stateful.respond "consumed ok"
             pure m {consumed = True}

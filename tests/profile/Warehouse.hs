@@ -52,7 +52,7 @@ tally sku dq = Map.filter (> 0) . Map.insertWith (+) sku dq
 
 restock :: Stateful.Rule Warehouse IO
 restock =
-  Stateful.Rule "restock" \w -> do
+  Stateful.rule "restock" \w -> do
     sku <- forAll (Gen.element skus)
     qty <- forAll (Gen.int & Gen.min 5 & Gen.max 10 & Gen.build)
     pure w {stock = tally sku qty w.stock}
@@ -60,7 +60,7 @@ restock =
 -- | Reserve stock for a new order; only as much as is unreserved.
 placeOrder :: Stateful.Rule Warehouse IO
 placeOrder =
-  Stateful.Rule "place_order" \w -> do
+  Stateful.rule "place_order" \w -> do
     sku <- forAll (Gen.element skus)
     qty <- forAll (Gen.int & Gen.min 1 & Gen.max 3 & Gen.build)
     let available =
@@ -77,7 +77,7 @@ placeOrder =
 -- | Ship an order: consumes both the stock and the reservation.
 fulfillOrder :: Stateful.Rule Warehouse IO
 fulfillOrder =
-  Stateful.Rule "fulfill_order" \w -> do
+  Stateful.rule "fulfill_order" \w -> do
     assume (not (Map.null w.pending))
     oid <- forAll (Gen.element (Map.keys w.pending))
     let (sku, qty) = w.pending Map.! oid
@@ -91,7 +91,7 @@ fulfillOrder =
 
 cancelOrder :: Bug -> Stateful.Rule Warehouse IO
 cancelOrder bug =
-  Stateful.Rule "cancel_order" \w -> do
+  Stateful.rule "cancel_order" \w -> do
     assume (not (Map.null w.pending))
     oid <- forAll (Gen.element (Map.keys w.pending))
     annotate ("canceling order #" <> renderValue oid)

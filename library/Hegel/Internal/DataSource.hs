@@ -677,28 +677,29 @@ freePool tc pool = void (hegel_pool_free tc.handle.ctx pool)
 -- | Register a sequential state machine running at most @stepCount@ steps per
 -- test case; returns its handle.
 --
--- @ruleNames@ must be non-empty and @stepCount@ positive. Each invariant
--- pairs its name with whether it runs at every join point.
-newStateMachine :: (HasCallStack) => TestCase -> Int64 -> [Text] -> [(Text, Bool)] -> IO (Ptr HegelStateMachine)
-newStateMachine tc stepCount ruleNames invariants =
+-- @rules@ must be non-empty and @stepCount@ positive. Each rule pairs its name
+-- with its selection weight, and each invariant pairs its name with whether it
+-- runs at every join point.
+newStateMachine :: (HasCallStack) => TestCase -> Int64 -> [(Text, Double)] -> [(Text, Bool)] -> IO (Ptr HegelStateMachine)
+newStateMachine tc stepCount rules invariants =
   -- One sequential group (id 0) for every rule.
-  fst <$> newConcurrentStateMachine tc ruleNames (replicate (length ruleNames) 0) invariants 1 1 stepCount
+  fst <$> newConcurrentStateMachine tc rules (replicate (length rules) 0) invariants 1 1 stepCount
 
 -- | A generalization of 'newStateMachine' that supports the @libhegel@ round
 -- protocol.
 --
--- @ruleGroups@ must hold exactly one concurrency-group ID per @ruleNames@
--- entry, in the same order; @ruleNames@ must be non-empty. Rules are weighted
--- equally. Each invariant pairs its name with whether it runs at every join
--- point.
-newConcurrentStateMachine :: (HasCallStack) => TestCase -> [Text] -> [Int64] -> [(Text, Bool)] -> Int64 -> Int64 -> Int64 -> IO (Ptr HegelStateMachine, Int)
-newConcurrentStateMachine tc ruleNames ruleGroups invariants minConcurrency maxConcurrency stepCount
-  | length ruleGroups /= length ruleNames =
+-- @ruleGroups@ must hold exactly one concurrency-group ID per @rules@ entry, in
+-- the same order, and @rules@ must be non-empty. Each rule pairs its name with
+-- its selection weight, which the engine requires to be finite and positive.
+-- Each invariant pairs its name with whether it runs at every join point.
+newConcurrentStateMachine :: (HasCallStack) => TestCase -> [(Text, Double)] -> [Int64] -> [(Text, Bool)] -> Int64 -> Int64 -> Int64 -> IO (Ptr HegelStateMachine, Int)
+newConcurrentStateMachine tc rules ruleGroups invariants minConcurrency maxConcurrency stepCount
+  | length ruleGroups /= length rules =
       throwIO
         ( malformedTest
             "Hegel.Internal.DataSource.newConcurrentStateMachine"
             "every rule name needs exactly one corresponding rule group"
-            [("rules", T.pack (show (length ruleNames))), ("ruleGroups", T.pack (show (length ruleGroups)))]
+            [("rules", T.pack (show (length rules))), ("ruleGroups", T.pack (show (length ruleGroups)))]
         )
   | otherwise =
       withMany CString.withText ruleNames \rulePtrs ->
@@ -706,29 +707,31 @@ newConcurrentStateMachine tc ruleNames ruleGroups invariants minConcurrency maxC
           withArray rulePtrs \rulesArr ->
             withArray invPtrs \invArr ->
               withArray ruleGroups \groupsArr ->
-                withArray (map fromBool alwaysChecks) \alwaysCheckArr ->
-                  withSlotOf tc.slot \outHandle ->
-                    alloca \outConcurrency -> do
-                      hegel_new_state_machine
-                        tc.handle.ctx
-                        tc.handle.ptr
-                        rulesArr
-                        groupsArr
-                        nullPtr
-                        (fromIntegral (length ruleNames))
-                        invArr
-                        alwaysCheckArr
-                        (fromIntegral (length invariantNames))
-                        minConcurrency
-                        maxConcurrency
-                        stepCount
-                        outHandle
-                        outConcurrency
-                        >>= handleReturnCode tc
-                      handle <- peek outHandle
-                      concurrency <- fromIntegral <$> (peek outConcurrency :: IO Int64)
-                      pure (handle, concurrency)
+                withArray (map realToFrac ruleWeights) \weightsArr ->
+                  withArray (map fromBool alwaysChecks) \alwaysCheckArr ->
+                    withSlotOf tc.slot \outHandle ->
+                      alloca \outConcurrency -> do
+                        hegel_new_state_machine
+                          tc.handle.ctx
+                          tc.handle.ptr
+                          rulesArr
+                          groupsArr
+                          weightsArr
+                          (fromIntegral (length ruleNames))
+                          invArr
+                          alwaysCheckArr
+                          (fromIntegral (length invariantNames))
+                          minConcurrency
+                          maxConcurrency
+                          stepCount
+                          outHandle
+                          outConcurrency
+                          >>= handleReturnCode tc
+                        handle <- peek outHandle
+                        concurrency <- fromIntegral <$> (peek outConcurrency :: IO Int64)
+                        pure (handle, concurrency)
   where
+    (ruleNames, ruleWeights) = unzip rules
     (invariantNames, alwaysChecks) = unzip invariants
 
 -- | Start the machine's next round, or 'Nothing' once the engine has

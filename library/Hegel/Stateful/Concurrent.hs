@@ -11,6 +11,7 @@ module Hegel.Stateful.Concurrent
     Rule (..),
     rule,
     grouped,
+    weighted,
     Invariant (..),
     invariant,
     alwaysInvariant,
@@ -47,7 +48,7 @@ import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Internal.Control (malformedTest)
 import Hegel.Internal.DataSource (freeStateMachine, newConcurrentStateMachine, stateMachineNextGroup)
 import Hegel.Internal.Event (Event (..))
-import Hegel.Internal.StatefulRound (RoundSpan (..), RoundVerdict (..), Worker (..), lookupRule, runRound, selectInvariants, stepText)
+import Hegel.Internal.StatefulRound (RoundSpan (..), RoundVerdict (..), Worker (..), checkRuleWeights, lookupRule, runRound, selectInvariants, stepText)
 import Hegel.Internal.TestCase (TestCase (..), withClones)
 import Hegel.Internal.Tick (Tick)
 import Hegel.Internal.Tick qualified as Tick
@@ -83,20 +84,36 @@ data Rule s m = Rule
     name :: !Text,
     -- | The concurrency group this rule belongs to.
     group :: !(Maybe Text),
+    -- | How often the engine picks this rule relative to the others in its
+    -- group, which must be finite and positive.
+    --
+    -- The engine only weighs the rules that swarm testing enabled for a
+    -- worker, so a weight guides how often a rule runs without guaranteeing
+    -- it.
+    weight :: !Double,
     -- | The action this rule performs.
     apply :: s -> PropertyT m ()
   }
 
--- | Construct a 'Rule' not associated with any named concurrency group.
+-- | Construct a 'Rule' of weight 1 not associated with any named concurrency
+-- group.
 rule :: Text -> (s -> PropertyT m ()) -> Rule s m
-rule name apply = Rule {name, group = Nothing, apply}
+rule name apply = Rule {name, group = Nothing, weight = 1, apply}
 
--- | Construct a 'Rule' in the given concurrency group.
+-- | Construct a 'Rule' of weight 1 in the given concurrency group.
 --
--- it may run concurrently with any other rule sharing that group, and never
+-- It may run concurrently with any other rule sharing that group, and never
 -- alongside a rule in a different one.
 grouped :: Text -> Text -> (s -> PropertyT m ()) -> Rule s m
-grouped name group apply = Rule {name, group = Just group, apply}
+grouped name group apply = Rule {name, group = Just group, weight = 1, apply}
+
+-- | Set a rule's selection 'weight'.
+--
+-- @
+-- Concurrent.grouped "deposit" "tellers" deposit & Concurrent.weighted 3
+-- @
+weighted :: Double -> Rule s m -> Rule s m
+weighted w r = r {weight = w}
 
 -- | A complete concurrent stateful test specification.
 data Machine s m = Machine
@@ -232,6 +249,7 @@ run bounds machine = withFrozenCallStack $ do
     throwIO (malformedTest "Hegel.Stateful.Concurrent.run" "concurrency bounds must satisfy 1 <= min <= max" [("min", T.pack (show bounds.minWorkers)), ("max", T.pack (show bounds.maxWorkers))])
   when (machine.stepCount < 1) $
     throwIO (malformedTest "Hegel.Stateful.Concurrent.run" "a Machine's stepCount must be at least 1" [("stepCount", T.pack (show machine.stepCount))])
+  liftIO (checkRuleWeights "Hegel.Stateful.Concurrent.run" (map (\r -> (r.name, r.weight)) machine.rules))
 
   env <- askEnv
   liftIO (checkCloneDepth env)
@@ -265,7 +283,7 @@ run bounds machine = withFrozenCallStack $ do
         acquired <-
           newConcurrentStateMachine
             tc
-            (map (.name) machine.rules)
+            (map (\r -> (r.name, r.weight)) machine.rules)
             groupIds
             (map (\inv -> (inv.name, inv.alwaysRun)) machine.invariants)
             (fromIntegral bounds.minWorkers)

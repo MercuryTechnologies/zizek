@@ -1,9 +1,11 @@
 -- | Unit tests for 'Hegel.Pool' and 'Hegel.Stateful'.
 module Stateful (spec) where
 
+import Control.Exception (fromException)
 import Control.Monad (forever, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Default.Class (def)
+import Data.Foldable (for_)
 import Data.Function ((&))
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import Data.Maybe (isNothing)
@@ -11,6 +13,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Hegel (Gen)
+import Hegel.Exception (Diagnostic (..), MalformedTest (..))
 import Hegel.Gen qualified as Gen
 import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Pool (Pool)
@@ -18,6 +21,7 @@ import Hegel.Pool qualified as Pool
 import Hegel.Property (assert, assume, forAll, forAllSilent)
 import Hegel.Report (Abort (..), FailureEvidence (..), FailureOutcome (..), Note (..), NoteKind (..), Report (..), Result (..), isFailureNote, renderReportRich)
 import Hegel.Runner (check, replay)
+import Hegel.Seed (Seed (..))
 import Hegel.Settings (Settings (..))
 import Hegel.Stateful qualified as Stateful
 import Test.Hspec
@@ -34,7 +38,7 @@ newtype Counter = Counter Int
 
 increment :: Stateful.Rule Counter IO
 increment =
-  Stateful.Rule "increment" \(Counter n) ->
+  Stateful.rule "increment" \(Counter n) ->
     pure (Counter (n + 1))
 
 -- | Run a single-rule machine and return the number of steps each test case
@@ -51,7 +55,7 @@ stepRecorder failAssumption steps settings = do
           [] -> ([1], ())
       recording :: Stateful.Rule Counter IO
       recording =
-        Stateful.Rule "step" \s -> do
+        Stateful.rule "step" \s -> do
           liftIO bump
           when failAssumption (assume False)
           pure s
@@ -88,7 +92,7 @@ pushValue = Gen.int & Gen.min (-100) & Gen.max 100 & Gen.build
 
 push :: Stateful.Rule Stack IO
 push =
-  Stateful.Rule "push" \(Stack xs) -> do
+  Stateful.rule "push" \(Stack xs) -> do
     n <- forAll pushValue
     pure (Stack (n : xs))
 
@@ -96,7 +100,7 @@ push =
 -- draw. The counterexample therefore depends on a specific drawn value.
 pushNonZeroBug :: Stateful.Rule Stack IO
 pushNonZeroBug =
-  Stateful.Rule "push_nonzero_bug" \(Stack xs) -> do
+  Stateful.rule "push_nonzero_bug" \(Stack xs) -> do
     n <- forAll pushValue
     assert (n == 0) "drawn value is zero (bug)"
     pure (Stack (n : xs))
@@ -277,10 +281,46 @@ statefulSpec = describe "Machine" do
       Aborted _ -> pure ()
       other -> expectationFailure ("expected Aborted, got: " <> show other)
 
+  it "a rule weight that is not finite and positive is a malformed test" do
+    for_ [0, -1, 0 / 0, 1 / 0] \w -> do
+      let machine :: Stateful.Machine Counter IO
+          machine =
+            Stateful.Machine
+              { initial = pure (Counter 0),
+                rules = [increment & Stateful.weighted w],
+                stepCount = Stateful.defaultStepCount,
+                invariants = []
+              }
+      report <- check def (Stateful.run machine)
+      case report.result of
+        Aborted (Errored e) | Just (MalformedTest d) <- fromException e -> do
+          d.detail `shouldBe` "a Rule's weight must be finite and positive"
+          lookup "weight" d.values `shouldBe` Just (T.pack (show w))
+        other -> expectationFailure ("expected a malformed-test abort, got: " <> show other)
+
+  it "a heavier rule is dispatched more often" do
+    counts <- newIORef (0 :: Int, 0 :: Int)
+    let heavy, light :: Stateful.Rule Counter IO
+        heavy = Stateful.rule "heavy" \s -> liftIO (atomicModifyIORef' counts \(h, l) -> ((h + 1, l), ())) >> pure s
+        light = Stateful.rule "light" \s -> liftIO (atomicModifyIORef' counts \(h, l) -> ((h, l + 1), ())) >> pure s
+        machine =
+          Stateful.Machine
+            { initial = pure (Counter 0),
+              rules = [heavy & Stateful.weighted 1000, light],
+              stepCount = Stateful.defaultStepCount,
+              invariants = []
+            }
+    report <- check def {testCases = Just 100, seed = Just (SeedFixed 7)} (Stateful.run machine)
+    case report.result of
+      Ok -> pure ()
+      other -> expectationFailure ("expected Ok, got: " <> show other)
+    (h, l) <- readIORef counts
+    h `shouldSatisfy` (> 2 * l)
+
   it "an overrun inside a rule's draw is a health-check abort, not a fabricated counterexample" do
     let overrunning :: Stateful.Rule Counter IO
         overrunning =
-          Stateful.Rule "overrun" \s -> do
+          Stateful.rule "overrun" \s -> do
             _ <- forever (forAll intGen >> pure ())
             pure s
         machine =
@@ -335,7 +375,7 @@ data Model = Model
 -- | Draw a value and add it to the pool, recording it in the mirror.
 register :: Stateful.Rule Model IO
 register =
-  Stateful.Rule "register" \m -> do
+  Stateful.rule "register" \m -> do
     n <- forAll intGen
     Pool.add m.pool n
     pure m {registered = Set.insert n m.registered}
@@ -343,7 +383,7 @@ register =
 -- | Draw a value from the pool without removing it; it must be one we added.
 useReusable :: Stateful.Rule Model IO
 useReusable =
-  Stateful.Rule "use_reusable" \m -> do
+  Stateful.rule "use_reusable" \m -> do
     v <- forAll (Pool.reuse m.pool)
     assert (Set.member v m.registered) "reusable draw was previously registered"
     pure m
@@ -351,7 +391,7 @@ useReusable =
 -- | Consume a value from the pool; it must be one we added.
 useConsumed :: Stateful.Rule Model IO
 useConsumed =
-  Stateful.Rule "use_consumed" \m -> do
+  Stateful.rule "use_consumed" \m -> do
     v <- forAll (Pool.consume m.pool)
     assert (Set.member v m.registered) "consumed draw was previously registered"
     pure m
@@ -401,7 +441,7 @@ invariantCadence = do
         [] -> ([], ())
       stepping :: Stateful.Rule Counter IO
       stepping =
-        Stateful.Rule "step" \(Counter n) -> do
+        Stateful.rule "step" \(Counter n) -> do
           liftIO (bump \c -> c {steps = c.steps + 1})
           pure (Counter (n + 1))
       machine =

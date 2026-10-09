@@ -97,7 +97,7 @@ multipleProperty = do
           Pool.add pool (7 :: Int)
           pure pool,
         rules =
-          [ Stateful.Rule "inspect" \pool -> do
+          [ Stateful.rule "inspect" \pool -> do
               value <- forAll (Pool.reuse pool)
               footnote (if branch == 0 then "first diagnostic" else "second diagnostic")
               if branch == 0 then firstDiff value else secondDiff value

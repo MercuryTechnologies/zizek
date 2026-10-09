@@ -151,7 +151,7 @@ fanOutSpec = describe "runRound (real engine, several workers)" do
     report <- check def {testCases = Just 5} do
       env <- askEnv
       let tc = env.testCase
-      (sm, _concurrency) <- liftIO (newConcurrentStateMachine tc ["increment"] [0] [] n n 300)
+      (sm, _concurrency) <- liftIO (newConcurrentStateMachine tc [("increment", 1)] [0] [] n n 300)
       registerFinalizer (freeStateMachine tc sm)
       liftIO $ withClones (fromIntegral n) tc \clones -> do
         let mkWorker i clone =
@@ -196,7 +196,7 @@ fanOutSpec = describe "runRound (real engine, several workers)" do
     report <- check def {testCases = Just 1} do
       env <- askEnv
       let tc = env.testCase
-      (sm, _concurrency) <- liftIO (newConcurrentStateMachine tc ["stall"] [0] [] n n n)
+      (sm, _concurrency) <- liftIO (newConcurrentStateMachine tc [("stall", 1)] [0] [] n n n)
       registerFinalizer (freeStateMachine tc sm)
       liftIO $ withClones (fromIntegral n) tc \clones -> do
         let mkWorker clone =

@@ -92,6 +92,13 @@ validationSpec = describe "run (validation)" do
     report <- check def (Concurrent.run (Concurrent.fixed 1) machine)
     report.result `shouldSatisfy` isMalformedTestAbort "stepCount must be at least 1"
 
+  it "a rule weight that is not finite and positive is a malformed test" do
+    let noop :: Concurrent.Rule Counter IO
+        noop = Concurrent.rule "noop" \_ -> pure ()
+        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [noop & Concurrent.weighted (0 / 0)], invariants = [], stepCount = Concurrent.defaultStepCount}
+    report <- check def (Concurrent.run (Concurrent.fixed 1) machine)
+    report.result `shouldSatisfy` isMalformedTestAbort "weight must be finite and positive"
+
   it "invalid concurrency bounds are a malformed test" do
     let noop :: Concurrent.Rule Counter IO
         noop = Concurrent.rule "noop" \_ -> pure ()

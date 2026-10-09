@@ -364,13 +364,13 @@ transferMachine =
         closed <- Pool.named "c"
         pure (open, closed),
       rules =
-        [ Stateful.Rule "open" \m@(open, _) -> do
+        [ Stateful.rule "open" \m@(open, _) -> do
             Pool.add open 1
             pure m,
-          Stateful.Rule "close" \m@(open, closed) -> do
+          Stateful.rule "close" \m@(open, closed) -> do
             _ <- forAll (Pool.transfer open closed)
             pure m,
-          Stateful.Rule "read_closed" \m@(_, closed) -> do
+          Stateful.rule "read_closed" \m@(_, closed) -> do
             _ <- forAll (Pool.reuse closed)
             assert False "reads of closed handles always fail (bug)"
             pure m

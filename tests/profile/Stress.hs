@@ -78,14 +78,14 @@ audited tag w = w {audit = (tag <> ": " <> snapshot w) : w.audit}
 
 restock :: Stateful.Rule Ledger IO
 restock =
-  Stateful.Rule "restock" \w -> do
+  Stateful.rule "restock" \w -> do
     sku <- forAll (Gen.element skus)
     qty <- forAll (Gen.int & Gen.min 50 & Gen.max 100 & Gen.build)
     pure (audited "restock" w {stock = tally sku qty w.stock})
 
 placeOrder :: Stateful.Rule Ledger IO
 placeOrder =
-  Stateful.Rule "place_order" \w -> do
+  Stateful.rule "place_order" \w -> do
     sku <- forAll (Gen.element skus)
     qty <- forAll (Gen.int & Gen.min 1 & Gen.max 10 & Gen.build)
     let available =
@@ -106,7 +106,7 @@ placeOrder =
 
 fulfillOrder :: Stateful.Rule Ledger IO
 fulfillOrder =
-  Stateful.Rule "fulfill_order" \w -> do
+  Stateful.rule "fulfill_order" \w -> do
     assume (not (Map.null w.pending))
     oid <- forAll (Gen.element (Map.keys w.pending))
     let (sku, qty) = w.pending Map.! oid
@@ -123,7 +123,7 @@ fulfillOrder =
 
 cancelOrder :: Stateful.Rule Ledger IO
 cancelOrder =
-  Stateful.Rule "cancel_order" \w -> do
+  Stateful.rule "cancel_order" \w -> do
     assume (not (Map.null w.pending))
     oid <- forAll (Gen.element (Map.keys w.pending))
     annotate ("canceling order #" <> renderValue oid)

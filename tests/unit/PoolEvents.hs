@@ -84,7 +84,7 @@ spec = describe "pool-event stream" do
         machine =
           Stateful.Machine
             { initial = pure (0 :: Int),
-              rules = [Stateful.Rule "increment" \n -> pure (n + 1)],
+              rules = [Stateful.rule "increment" \n -> pure (n + 1)],
               stepCount = Stateful.defaultStepCount,
               invariants =
                 [ Stateful.invariant "never_above_five" \n ->

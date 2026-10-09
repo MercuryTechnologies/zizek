@@ -51,7 +51,7 @@ machine bug =
         contents <- newIORef Map.empty
         pure FileModel {openHandles, closedHandles, nextHandle, contents},
       rules =
-        [ Stateful.Rule "open" \m -> do
+        [ Stateful.rule "open" \m -> do
             h <- liftIO do
               h <- readIORef m.nextHandle
               modifyIORef' m.nextHandle (+ 1)
@@ -60,13 +60,13 @@ machine bug =
             Pool.add m.openHandles h
             Stateful.respond "ok"
             pure m,
-          Stateful.Rule "write" \m -> do
+          Stateful.rule "write" \m -> do
             h <- forAll (Pool.reuse m.openHandles)
             v <- forAll (Gen.text & Gen.minSize 1 & Gen.maxSize 4 & Gen.build)
             liftIO (modifyIORef' m.contents (Map.insert h v))
             Stateful.respond "ok"
             pure m,
-          Stateful.Rule "close" \m -> do
+          Stateful.rule "close" \m -> do
             h <- forAll (Pool.transfer m.openHandles m.closedHandles)
             liftIO case bug of
               -- BUG: the buffer is left behind on close.
@@ -74,7 +74,7 @@ machine bug =
               Fixed -> modifyIORef' m.contents (Map.insert h "")
             Stateful.respond "ok"
             pure m,
-          Stateful.Rule "read_closed" \m -> do
+          Stateful.rule "read_closed" \m -> do
             h <- forAll (Pool.reuse m.closedHandles)
             r <- liftIO (Map.findWithDefault "" h <$> readIORef m.contents)
             Stateful.respondShow r
