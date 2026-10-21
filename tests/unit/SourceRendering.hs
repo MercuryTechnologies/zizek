@@ -5,7 +5,7 @@ module SourceRendering (spec) where
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Hegel.Report.Ann (Ann, Style (..))
-import Hegel.Report.Discovery (Pos (..), Position (..), findDeclarations)
+import Hegel.Report.Discovery (Pos (..), Position (..), findDeclarations, loadDeclarations)
 import Hegel.Report.Source
   ( Context (..),
     Declaration (..),
@@ -13,15 +13,18 @@ import Hegel.Report.Source
     InlineRole (..),
     Line (..),
     applyContext,
+    lookupDeclarationSpan,
     mergeDeclarations,
     mergeFileDeclarations,
     ppDeclaration,
     renderListings,
   )
-import Hegel.Report.Span (LineNo (..))
+import Hegel.Report.Span (LineNo (..), Span (..))
 import Prettyprinter (Doc)
 import Prettyprinter qualified as PP
 import Prettyprinter.Render.Text qualified as PP.Text
+import System.Directory (getTemporaryDirectory, removeFile)
+import System.IO (hClose, hPutStr, openTempFile)
 import Test.Hspec
 
 -- * Helpers
@@ -118,6 +121,20 @@ spec = do
           decls = findDeclarations src
       Map.member "foo" decls `shouldBe` True
       Map.member "Foo" decls `shouldBe` False
+
+  describe "Discovery.lookupDeclarationSpan" $ do
+    it "keeps same-named declarations apart with their own line numbers" $ do
+      let contents = unlines ["foo :: Int", "bar = 1", "foo = 2", "baz = 3"]
+      tmp <- getTemporaryDirectory
+      (path, h) <- openTempFile tmp "same-name.hs"
+      hPutStr h contents
+      hClose h
+      decls <- loadDeclarations [path]
+      removeFile path
+      let at n = lookupDeclarationSpan decls (Span path (LineNo n) (LineNo n))
+          sourceOf n = fmap (\d -> (d.declarationName, d.declarationLine, [(k, l.lineSource) | (k, l) <- Map.toList d.declarationSource])) (at n)
+      sourceOf 1 `shouldBe` Just ("foo", 1, [(1, "foo :: Int")])
+      sourceOf 3 `shouldBe` Just ("foo", 3, [(3, "foo = 2")])
 
   describe "applyContext" $ do
     it "FullContext keeps all lines" $ do

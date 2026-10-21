@@ -18,6 +18,7 @@ module Hegel.Report.Discovery
 
     -- * Lower-level building blocks (exposed for testing)
     findDeclarations,
+    scanDeclarations,
     Pos (..),
     Position (..),
   )
@@ -160,10 +161,9 @@ declName src = case words src of
   w : _ -> w
 
 -- | Partition a classified character stream into top-level declarations.
-declarations :: [Classified (Pos Char)] -> Map String (Pos String)
+declarations :: [Classified (Pos Char)] -> [(String, Pos String)]
 declarations =
-  Map.fromListWith (<>)
-    . loop
+  loop
     . dropWhile (not . isDeclaration)
   where
     loop :: [Classified (Pos Char)] -> [(String, Pos String)]
@@ -174,10 +174,16 @@ declarations =
             pos@(Pos _ src) = reconstitute first (trimEnd body)
          in (declName src, pos) : loop remainder
 
+-- | Find all top-level declarations in a Haskell source string, in source
+-- order, one entry per declaration.
+scanDeclarations :: String -> [(String, Pos String)]
+scanDeclarations = declarations . classified . positioned
+
 -- | Find all top-level declarations in a Haskell source string, keyed by
--- binding name.
+-- binding name. Declarations sharing a name are concatenated under the
+-- earliest one's position.
 findDeclarations :: String -> Map String (Pos String)
-findDeclarations = declarations . classified . positioned
+findDeclarations = Map.fromListWith (<>) . scanDeclarations
 
 -- * Declaration cache
 
@@ -215,7 +221,7 @@ declarationsByLine :: String -> Map LineNo (String, Pos String)
 declarationsByLine contents =
   Map.fromList
     [ (p.posPosition.posLine, (name, p))
-    | (name, p) <- Map.toList (findDeclarations contents)
+    | (name, p) <- scanDeclarations contents
     ]
 
 -- | Read a file's contents strictly, returning @'Nothing'@ on any

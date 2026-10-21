@@ -269,6 +269,7 @@ test-suite unit
     TraceModel
 
   build-depends:
+    directory,
     filepath ^>=1.5,
     hspec ^>=2.11,
     tasty-hspec ^>=1.2,
