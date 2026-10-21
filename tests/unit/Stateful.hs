@@ -298,14 +298,18 @@ statefulSpec = describe "Machine" do
           lookup "weight" d.values `shouldBe` Just (T.pack (show w))
         other -> expectationFailure ("expected a malformed-test abort, got: " <> show other)
 
+  -- A weight only applies among the rules swarm testing enabled for a case, and
+  -- swarm testing disables the heavy rule in about half of all cases. Among the
+  -- cases where the heavy rule ran, it should take nearly every step.
   it "a heavier rule is dispatched more often" do
-    counts <- newIORef (0 :: Int, 0 :: Int)
-    let heavy, light :: Stateful.Rule Counter IO
-        heavy = Stateful.rule "heavy" \s -> liftIO (atomicModifyIORef' counts \(h, l) -> ((h + 1, l), ())) >> pure s
-        light = Stateful.rule "light" \s -> liftIO (atomicModifyIORef' counts \(h, l) -> ((h, l + 1), ())) >> pure s
+    counts <- newIORef ([] :: [(Int, Int)])
+    let bump f = liftIO (atomicModifyIORef' counts \case (c : cs) -> (f c : cs, ()); [] -> ([], ()))
+        heavy, light :: Stateful.Rule Counter IO
+        heavy = Stateful.rule "heavy" \s -> bump (\(h, l) -> (h + 1, l)) >> pure s
+        light = Stateful.rule "light" \s -> bump (\(h, l) -> (h, l + 1)) >> pure s
         machine =
           Stateful.Machine
-            { initial = pure (Counter 0),
+            { initial = liftIO (atomicModifyIORef' counts \cs -> ((0, 0) : cs, ())) >> pure (Counter 0),
               rules = [heavy & Stateful.weighted 1000, light],
               stepCount = Stateful.defaultStepCount,
               invariants = []
@@ -314,8 +318,9 @@ statefulSpec = describe "Machine" do
     case report.result of
       Ok -> pure ()
       other -> expectationFailure ("expected Ok, got: " <> show other)
-    (h, l) <- readIORef counts
-    h `shouldSatisfy` (> 2 * l)
+    withHeavy <- filter (\(h, _) -> h > 0) <$> readIORef counts
+    withHeavy `shouldSatisfy` (not . null)
+    sum (map fst withHeavy) `shouldSatisfy` (> 10 * sum (map snd withHeavy))
 
   it "an overrun inside a rule's draw is a health-check abort, not a fabricated counterexample" do
     let overrunning :: Stateful.Rule Counter IO

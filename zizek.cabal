@@ -10,7 +10,9 @@ license: MPL-2.0
 license-file: LICENSE
 tested-with: ghc ^>=9.10 || ^>=9.12
 build-type: Simple
-extra-source-files: licenses/hedgehog.LICENSE
+extra-source-files:
+  cbits/zizek_shim.h
+  licenses/hedgehog.LICENSE
 
 -- Tracks live HegelStringGenerator handle counts for the string-gen-handles
 -- regression suite and profile-hegel's strgen-reclaim scenario.
@@ -86,7 +88,10 @@ library
   import: library
   hs-source-dirs: library
   pkgconfig-depends: hegel
-  c-sources: cbits/datetime_shim.c
+  c-sources:
+    cbits/datetime_shim.c
+    cbits/string_shim.c
+
   -- cabal-gild: discover library
   exposed-modules:
     Hegel
@@ -131,8 +136,8 @@ library
     Hegel.Internal.DataSource
     Hegel.Internal.DatabaseKey
     Hegel.Internal.Event
-    Hegel.Internal.Foreign.CString
     Hegel.Internal.Foreign.Raw
+    Hegel.Internal.Foreign.String
     Hegel.Internal.Replay
     Hegel.Internal.RunnerConfig
     Hegel.Internal.Settings

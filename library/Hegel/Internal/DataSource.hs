@@ -83,7 +83,7 @@ module Hegel.Internal.DataSource
 where
 
 import Control.Exception (finally, throwIO)
-import Control.Monad (void, when)
+import Control.Monad (unless, void, when)
 import Data.Bits (bit, shiftL, shiftR, testBit, xor, (.&.))
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
@@ -93,7 +93,8 @@ import Hegel.Exception (InvariantViolation (..))
 #ifdef HEGEL_CENSUS
 import Data.Foldable (traverse_)
 #endif
-import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
+import Control.Concurrent.MVar (MVar, newMVar, withMVar)
+import Data.IORef (IORef, atomicModifyIORef', atomicWriteIORef, modifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
@@ -102,15 +103,17 @@ import Data.Text.Encoding qualified as TE
 import Data.Time.Calendar (Day, fromGregorianValid, toGregorian)
 import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), makeTimeOfDayValid)
 import Data.Vector.Unboxed qualified as Vector.Unboxed
+import Data.Version (showVersion)
 import Data.Word (Word32, Word64, Word8)
-import Foreign (ForeignPtr, Ptr, alloca, allocaBytes, castPtr, fromBool, nullPtr, peek, with, withArray, withForeignPtr, withMany)
-import Foreign.C.String (CString)
+import Foreign (ForeignPtr, Ptr, alloca, allocaBytes, castPtr, fromBool, nullPtr, peek, with, withArray, withForeignPtr)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt, CSize (..))
 import Foreign.Concurrent qualified as Concurrent
+import GHC.Unicode (unicodeVersion)
 import Hegel.Internal.Control (AssumeRejected (..), AttemptMispriced (..), LeafBudgetExceeded (..), TestStopped (..), malformedTest)
 import Hegel.Internal.Event qualified as Event
-import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
+import Hegel.Internal.Foreign.String (HegelString)
+import Hegel.Internal.Foreign.String qualified as String
 import Hegel.Internal.TestCase (Handle (..), TestCase (..), recordDraw)
 import Hegel.Internal.Tick qualified as Tick
 import System.IO.Unsafe (unsafePerformIO)
@@ -371,10 +374,7 @@ drawString tc genFP =
       -- See 'drawBytes's comment: 'finally' guards the same
       -- draw-then-free-the-engine-buffer window against a throwing
       -- 'BS.packCStringLen' or an async exception.
-      let unpack = do
-            result <- peek outResult
-            BS.packCStringLen (result.resultData, fromIntegral result.resultLen)
-      bs <- unpack `finally` void (hegel_generate_string_result_free tc.handle.ctx outResult)
+      bs <- String.peekBytes outResult `finally` void (hegel_owned_string_free tc.handle.ctx outResult)
       case TE.decodeUtf8' bs of
         Right t -> pure t
         Left err ->
@@ -453,6 +453,35 @@ dropCensus :: IO ()
 dropCensus = pure ()
 #endif
 
+-- | Whether 'followHostUnicode' has already pointed @libhegel@ at the Unicode
+-- version 'Data.Char' follows.
+hostUnicodeSet :: IORef Bool
+hostUnicodeSet = unsafePerformIO (newIORef False)
+{-# NOINLINE hostUnicodeSet #-}
+
+-- | Held while 'followHostUnicode' sets the version, so no other thread builds
+-- a generator until it is set.
+hostUnicodeLock :: MVar ()
+hostUnicodeLock = unsafePerformIO (newMVar ())
+{-# NOINLINE hostUnicodeLock #-}
+
+-- | Make the text and regex generators classify characters by the Unicode
+-- version 'Data.Char' follows, so a drawn character's category agrees with
+-- 'Data.Char.generalCategory'.
+--
+-- @libhegel@ reads the version when a generator is built, so every builder
+-- calls this first.
+followHostUnicode :: Ptr HegelContext -> IO ()
+followHostUnicode ctx = do
+  set <- readIORef hostUnicodeSet
+  -- The flag is read again under the lock, so a thread that waited on another
+  -- thread's call doesn't set the version a second time.
+  unless set $ withMVar hostUnicodeLock \() -> do
+    setMeanwhile <- readIORef hostUnicodeSet
+    unless setMeanwhile do
+      String.withText (T.pack (showVersion unicodeVersion)) (hegel_set_unicode_version ctx) >>= throwOnError ctx
+      atomicWriteIORef hostUnicodeSet True
+
 data TextSpec = TextSpec
   { minSize :: !Word64,
     maxSize :: !Word64,
@@ -470,30 +499,29 @@ data TextSpec = TextSpec
 buildTextGen :: TextSpec -> IO (ForeignPtr HegelStringGenerator)
 buildTextGen spec =
   withContext \ctx ->
-    withNullableText spec.codec \codecPtr ->
-      withNullableTextArray spec.categories \(catsPtr, catsLen) ->
-        withNullableTextArray spec.excludeCategories \(exclCatsPtr, exclCatsLen) ->
-          withNullableUtf8 spec.includeCharacters \(inclPtr, inclLen) ->
-            withNullableUtf8 spec.excludeCharacters \(exclPtr, exclLen) ->
-              alloca \outGen -> do
-                hegel_string_generator_text
-                  ctx
-                  spec.minSize
-                  spec.maxSize
-                  codecPtr
-                  spec.minCodepoint
-                  spec.maxCodepoint
-                  catsPtr
-                  catsLen
-                  exclCatsPtr
-                  exclCatsLen
-                  inclPtr
-                  inclLen
-                  exclPtr
-                  exclLen
-                  outGen
-                  >>= throwOnError ctx
-                peek outGen >>= wrapStringGenerator
+    followHostUnicode ctx
+      *> String.withOptText spec.codec \codecPtr ->
+        withOptTexts spec.categories \catsPtr catsLen ->
+          withOptTexts spec.excludeCategories \exclCatsPtr exclCatsLen ->
+            String.withText (fromMaybe "" spec.includeCharacters) \inclPtr ->
+              String.withText (fromMaybe "" spec.excludeCharacters) \exclPtr ->
+                alloca \outGen -> do
+                  hegel_string_generator_text
+                    ctx
+                    spec.minSize
+                    spec.maxSize
+                    codecPtr
+                    spec.minCodepoint
+                    spec.maxCodepoint
+                    catsPtr
+                    catsLen
+                    exclCatsPtr
+                    exclCatsLen
+                    inclPtr
+                    exclPtr
+                    outGen
+                    >>= throwOnError ctx
+                  peek outGen >>= wrapStringGenerator
 
 -- | Build a __regex__ string generator.
 --
@@ -502,12 +530,13 @@ buildTextGen spec =
 buildRegexGen :: Text -> Bool -> Maybe (ForeignPtr HegelStringGenerator) -> IO (ForeignPtr HegelStringGenerator)
 buildRegexGen pat fullmatch mAlphabet =
   withContext \ctx ->
-    BS.useAsCStringLen (TE.encodeUtf8 pat) \(patPtr, patLen) ->
-      withNullableAlphabet mAlphabet \alphaPtr ->
-        alloca \outGen -> do
-          hegel_string_generator_regex ctx (castPtr patPtr) (fromIntegral patLen) (CBool (if fullmatch then 1 else 0)) alphaPtr outGen
-            >>= throwOnError ctx
-          peek outGen >>= wrapStringGenerator
+    followHostUnicode ctx
+      *> String.withText pat \patPtr ->
+        withNullableAlphabet mAlphabet \alphaPtr ->
+          alloca \outGen -> do
+            hegel_string_generator_regex ctx patPtr (CBool (if fullmatch then 1 else 0)) alphaPtr outGen
+              >>= throwOnError ctx
+            peek outGen >>= wrapStringGenerator
   where
     withNullableAlphabet :: Maybe (ForeignPtr HegelStringGenerator) -> (Ptr HegelStringGenerator -> IO a) -> IO a
     withNullableAlphabet Nothing k = k nullPtr
@@ -539,25 +568,11 @@ buildDomainGen maxLen =
       hegel_string_generator_domain ctx maxLen outGen >>= throwOnError ctx
       peek outGen >>= wrapStringGenerator
 
--- | Marshal a nullable 'Text' to a NUL-terminated 'CString', or 'nullPtr'
--- for 'Nothing'.
-withNullableText :: Maybe Text -> (CString -> IO a) -> IO a
-withNullableText Nothing k = k nullPtr
-withNullableText (Just t) k = CString.withText t k
-
--- | Marshal a nullable list of NUL-terminated UTF-8 names to an array pointer
--- & length.
-withNullableTextArray :: Maybe [Text] -> ((Ptr CString, CSize) -> IO a) -> IO a
-withNullableTextArray Nothing k = k (nullPtr, 0)
-withNullableTextArray (Just ts) k =
-  withMany CString.withText ts \ptrs ->
-    withArray ptrs \arr -> k (arr, fromIntegral (length ts))
-
--- | Marshal a nullable 'Text' to its raw UTF-8 bytes.
-withNullableUtf8 :: Maybe Text -> ((Ptr Word8, CSize) -> IO a) -> IO a
-withNullableUtf8 Nothing k = k (nullPtr, 0)
-withNullableUtf8 (Just t) k =
-  BS.useAsCStringLen (TE.encodeUtf8 t) \(p, len) -> k (castPtr p, fromIntegral len)
+-- | Pass an optional list of strings as an array and its length, or @NULL@
+-- with length zero for 'Nothing'.
+withOptTexts :: Maybe [Text] -> (Ptr HegelString -> CSize -> IO a) -> IO a
+withOptTexts Nothing k = k nullPtr 0
+withOptTexts (Just ts) k = String.withTexts ts k
 
 -- * Collections
 
@@ -589,7 +604,7 @@ collectionReject tc coll mWhy =
     Nothing -> do
       result <- hegel_collection_reject tc.handle.ctx tc.handle.ptr coll nullPtr
       handleReturnCode tc result
-    Just why -> CString.withText why \p -> do
+    Just why -> String.withText why \p -> do
       result <- hegel_collection_reject tc.handle.ctx tc.handle.ptr coll p
       handleReturnCode tc result
 
@@ -706,34 +721,32 @@ newConcurrentStateMachine tc rules ruleGroups invariants minConcurrency maxConcu
             [("rules", T.pack (show (length rules))), ("ruleGroups", T.pack (show (length ruleGroups)))]
         )
   | otherwise =
-      withMany CString.withText ruleNames \rulePtrs ->
-        withMany CString.withText invariantNames \invPtrs ->
-          withArray rulePtrs \rulesArr ->
-            withArray invPtrs \invArr ->
-              withArray ruleGroups \groupsArr ->
-                withArray (map realToFrac ruleWeights) \weightsArr ->
-                  withArray (map fromBool alwaysChecks) \alwaysCheckArr ->
-                    withSlotOf tc.slot \outHandle ->
-                      alloca \outConcurrency -> do
-                        hegel_new_state_machine
-                          tc.handle.ctx
-                          tc.handle.ptr
-                          rulesArr
-                          groupsArr
-                          weightsArr
-                          (fromIntegral (length ruleNames))
-                          invArr
-                          alwaysCheckArr
-                          (fromIntegral (length invariantNames))
-                          minConcurrency
-                          maxConcurrency
-                          stepCount
-                          outHandle
-                          outConcurrency
-                          >>= handleReturnCode tc
-                        handle <- peek outHandle
-                        concurrency <- fromIntegral <$> (peek outConcurrency :: IO Int64)
-                        pure (handle, concurrency)
+      String.withTexts ruleNames \rulesArr _ ->
+        String.withTexts invariantNames \invArr _ ->
+          withArray ruleGroups \groupsArr ->
+            withArray (map realToFrac ruleWeights) \weightsArr ->
+              withArray (map fromBool alwaysChecks) \alwaysCheckArr ->
+                withSlotOf tc.slot \outHandle ->
+                  alloca \outConcurrency -> do
+                    hegel_new_state_machine
+                      tc.handle.ctx
+                      tc.handle.ptr
+                      rulesArr
+                      groupsArr
+                      weightsArr
+                      (fromIntegral (length ruleNames))
+                      invArr
+                      alwaysCheckArr
+                      (fromIntegral (length invariantNames))
+                      minConcurrency
+                      maxConcurrency
+                      stepCount
+                      outHandle
+                      outConcurrency
+                      >>= handleReturnCode tc
+                    handle <- peek outHandle
+                    concurrency <- fromIntegral <$> (peek outConcurrency :: IO Int64)
+                    pure (handle, concurrency)
   where
     (ruleNames, ruleWeights) = unzip rules
     (invariantNames, alwaysChecks) = unzip invariants
@@ -865,14 +878,14 @@ freeRecursion tc recursion = void (hegel_recursion_free tc.handle.ctx recursion)
 -- statistics block.
 event :: TestCase -> Text -> IO ()
 event tc label =
-  CString.withText label \p ->
+  String.withText label \p ->
     hegel_event tc.handle.ctx tc.handle.ptr p >>= handleReturnCode tc
 
 -- | Record a numeric observation under @label@ for the end-of-run statistics
 -- block. The engine rejects a non-finite @value@.
 eventValue :: TestCase -> Text -> Double -> IO ()
 eventValue tc label value =
-  CString.withText label \p ->
+  String.withText label \p ->
     hegel_event_value tc.handle.ctx tc.handle.ptr (realToFrac value) p >>= handleReturnCode tc
 
 -- * Spans

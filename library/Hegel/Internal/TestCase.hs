@@ -36,8 +36,8 @@ import Data.Word (Word32)
 import Foreign (Ptr, alloca, nullPtr, peek)
 import Hegel.Internal.Control (AssumeRejected (..), TestStopped (..))
 import Hegel.Internal.Event (Event, Var)
-import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
+import Hegel.Internal.Foreign.String qualified as String
 import Hegel.Internal.Tick qualified as Tick
 import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef)
 import Witch qualified
@@ -169,7 +169,7 @@ markComplete tc status = do
   -- 'Interesting' case also carries an origin string, passed separately.
   rc <- case status of
     Interesting origin ->
-      CString.withText origin (hegel_mark_complete tc.handle.ctx tc.handle.ptr (Witch.into @Word32 status))
+      String.withText origin (hegel_mark_complete tc.handle.ctx tc.handle.ptr (Witch.into @Word32 status))
     _ -> hegel_mark_complete tc.handle.ctx tc.handle.ptr (Witch.into @Word32 status) nullPtr
   case rc of
     HEGEL_OK -> pure ()

@@ -1,4 +1,4 @@
-#include <hegel.h>
+#include "zizek_shim.h"
 
 hegel_result_t hegel_zizek_generate_date(hegel_context_t *ctx,
                                           hegel_test_case_t *tc,

@@ -20,14 +20,17 @@ import Data.Default.Class (def)
 import Data.Either (isLeft)
 import Data.Function ((&))
 import Data.Int (Int64)
+import Data.Set qualified as Set
+import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Word (Word64, Word8)
 import Foreign (Ptr, alloca, castPtr, nullPtr, peek, poke)
-import Foreign.C.String (withCString)
 import Foreign.C.Types (CBool (..), CDouble (..))
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Internal (draw)
 import Hegel.Internal.Control (TestStopped (..))
 import Hegel.Internal.Foreign.Raw
+import Hegel.Internal.Foreign.String qualified as String
 import Hegel.Internal.TestCase (Handle (..), Status (..), mkTestCase)
 import Hegel.Internal.TestCase qualified as TC
 import Hegel.Internal.Tick qualified as Tick
@@ -49,6 +52,7 @@ spec = do
   completionSpec
   asyncTeardownSpec
   slotSpec
+  stringAbiSpec
   wireEnumCoverageSpec
 
 -- * Helpers over the out-parameter calling convention
@@ -59,7 +63,7 @@ configure :: Ptr HegelContext -> Ptr HegelSettings -> Word64 -> IO ()
 configure ctx s n = do
   hegel_settings_set_test_cases ctx s n >>= throwOnError ctx
   hegel_settings_set_verbosity ctx s HEGEL_VERBOSITY_QUIET >>= throwOnError ctx
-  withCString "" (hegel_settings_set_database ctx s) >>= throwOnError ctx
+  String.withText "" (hegel_settings_set_database ctx s) >>= throwOnError ctx
 
 -- | Pull the next test case (or 'nullPtr' when the run is finished).
 nextTestCase :: Ptr HegelContext -> Ptr HegelRun -> IO (Ptr HegelTestCase)
@@ -125,7 +129,7 @@ rawCApiSpec = describe "raw C API" $ do
                 _ <- drawBooleanRaw ctx tc
                 if markFirst
                   then do
-                    rc <- withCString "smoke:0" $ \p ->
+                    rc <- String.withText "smoke:0" $ \p ->
                       hegel_mark_complete ctx tc HEGEL_STATUS_INTERESTING p
                     case rc of
                       HEGEL_E_STOP_TEST -> pure () -- normal continue signal
@@ -153,7 +157,7 @@ rawCApiSpec = describe "raw C API" $ do
                     case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError ctx rc
                   Just v
                     | v >= threshold ->
-                        withCString "smoke:0" $ \p -> do
+                        String.withText "smoke:0" $ \p -> do
                           rc <- hegel_mark_complete ctx tc HEGEL_STATUS_INTERESTING p
                           case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError ctx rc
                     | otherwise -> hegel_mark_complete ctx tc HEGEL_STATUS_VALID nullPtr >>= throwOnError ctx
@@ -216,7 +220,7 @@ genMachinerySpec = describe "Gen machinery" $ do
                   Left TestStopped -> TC.markComplete tc Overrun
                   Right n ->
                     if n >= (42 :: Int)
-                      then withCString "smoke:0" $ \p -> do
+                      then String.withText "smoke:0" $ \p -> do
                         rc <- hegel_mark_complete ctx tcPtr HEGEL_STATUS_INTERESTING p
                         case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError ctx rc
                       else TC.markComplete tc Valid
@@ -303,3 +307,87 @@ slotSpec = describe "Slot capacity guard" $ do
   it "withSlotBytes rejects a size larger than the slot's capacity" $ do
     slot <- newSlot
     (withSlotBytes 17 slot (\_ -> pure ()) :: IO ()) `shouldThrow` anyErrorCall
+
+-- | Strings cross the boundary as @hegel_string_t@ in both directions. These
+-- cases send strings in and read them back out, so a binding whose layout or
+-- calling convention disagrees with @hegel.h@ fails here.
+stringAbiSpec :: Spec
+stringAbiSpec = describe "hegel_string_t round trips" $ do
+  it "reads back a non-ASCII origin from the failure it was marked with" $
+    runInBoundThread $
+      withContext \ctx -> withSettings ctx \s -> do
+        configure ctx s 5
+        let origin = "smoke:ünïcødé ✓" :: Text
+            loop run = do
+              tc <- nextTestCase ctx run
+              if tc == nullPtr
+                then pure ()
+                else do
+                  rc <- String.withText origin (hegel_mark_complete ctx tc HEGEL_STATUS_INTERESTING)
+                  case rc of HEGEL_OK -> pure (); HEGEL_E_STOP_TEST -> pure (); _ -> throwOnError ctx rc
+                  loop run
+        withRun ctx s Nothing \run -> do
+          loop run
+          res <- runResult ctx run
+          failure <- alloca \out -> do
+            throwOnError ctx =<< hegel_run_result_failure ctx res 0 out
+            peek out
+          failure `shouldNotBe` nullPtr
+          got <- alloca \out -> do
+            throwOnError ctx =<< hegel_failure_origin ctx failure out
+            String.peekText out
+          _ <- hegel_failure_free ctx failure
+          _ <- hegel_run_result_free ctx res
+          got `shouldBe` origin
+
+  it "accepts an event label with an interior NUL" $
+    runInBoundThread $
+      withContext \ctx -> withSettings ctx \s -> do
+        configure ctx s 1
+        withRun ctx s Nothing \run -> do
+          tc <- nextTestCase ctx run
+          tc `shouldNotBe` nullPtr
+          String.withText "a\0b" (hegel_event ctx tc) `shouldReturn` HEGEL_OK
+          hegel_mark_complete ctx tc HEGEL_STATUS_VALID nullPtr >>= throwOnError ctx
+
+  it "reads back the default, disabled, and directory databases" $
+    withContext \ctx -> withSettings ctx \s -> do
+      let readDatabase = alloca \out -> do
+            throwOnError ctx =<< hegel_settings_get_database ctx s out
+            String.peekOptText =<< peek out
+      hegel_settings_set_database ctx s nullPtr >>= throwOnError ctx
+      readDatabase `shouldReturn` Nothing
+      String.withText "" (hegel_settings_set_database ctx s) >>= throwOnError ctx
+      readDatabase `shouldReturn` Just ""
+      String.withText "zizek-ffi-db" (hegel_settings_set_database ctx s) >>= throwOnError ctx
+      readDatabase `shouldReturn` Just "zizek-ffi-db"
+
+  it "sets and clears the default profile, and reports a rejected name" $
+    withContext \ctx -> do
+      let clear = String.withText "" (hegel_set_default_profile ctx) >>= throwOnError ctx
+      -- The default profile is process-wide, so it is cleared even when an
+      -- assertion fails, leaving later specs unaffected.
+      ( do
+          String.withText "ci" (hegel_set_default_profile ctx) >>= throwOnError ctx
+          clear
+          rc <- String.withText "default" (hegel_set_default_profile ctx)
+          rc `shouldBe` HEGEL_E_INVALID_ARG
+          lastErrorMessage ctx >>= (`shouldSatisfy` maybe False (not . T.null))
+        )
+        `finally` clear
+
+  -- A text generator with no include or exclude set passes empty strings for
+  -- both, which the engine must read as no restriction.
+  it "reads an empty include and exclude string as no restriction" do
+    let distinct gen = Set.size . Set.fromList . concatMap T.unpack <$> Runner.samples def 200 gen
+    unrestricted <- distinct (Gen.text & Gen.minSize 1 & Gen.build)
+    restricted <- distinct (Gen.text & Gen.minSize 1 & Gen.alphabet (Gen.char & Gen.includeCharacters "ab" & Gen.categories []) & Gen.build)
+    restricted `shouldSatisfy` (<= 2)
+    unrestricted `shouldSatisfy` (> 20)
+
+  it "reads the engine version" $
+    withContext \ctx -> do
+      version <- alloca \out -> do
+        throwOnError ctx =<< hegel_version ctx out
+        String.peekText out
+      version `shouldSatisfy` (not . T.null)

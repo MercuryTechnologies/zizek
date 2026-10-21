@@ -14,6 +14,11 @@
 -- @hegel_test_case_printer@, and the @hegel_printer_*@ and
 -- @hegel_reflow_options_*@ families.
 --
+-- __Strings__: every string crosses the boundary as a @hegel_string_t@,
+-- marshalled by "Hegel.Internal.Foreign.String". GHC's FFI cannot pass a C
+-- struct by value, so a function taking one is bound to its @hegel_zizek_*@
+-- shim in @cbits/@, which takes the struct by pointer.
+--
 -- __Calling convention__: every @libhegel@ entry point takes a
 -- @hegel_context_t*@ as its first argument and returns a @hegel_result_t@,
 -- where 'HEGEL_OK' is zero and negatives are errors.
@@ -50,7 +55,7 @@ module Hegel.Internal.Foreign.Raw
     -- * Typed-draw result structs
     -- $typedrawresults
     HegelBytesResult (..),
-    HegelStringResult (..),
+    HegelOwnedString,
     HegelDate (..),
     HegelTime (..),
     HegelDatetime (..),
@@ -72,6 +77,7 @@ module Hegel.Internal.Foreign.Raw
     pattern HEGEL_E_INTERNAL,
     pattern HEGEL_E_CONCURRENT_USE,
     pattern HEGEL_E_RETRY,
+    pattern HEGEL_E_NOT_FOUND,
 
     -- * State-machine termination sentinel
     -- $statemachine
@@ -152,6 +158,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_settings_set_print_blob,
     hegel_settings_register_profile,
     hegel_set_default_profile,
+    hegel_set_unicode_version,
     hegel_settings_get_test_cases,
     hegel_settings_get_verbosity,
     hegel_settings_get_seed,
@@ -228,7 +235,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_string_generator_domain,
     hegel_string_generator_free,
     hegel_generate_string,
-    hegel_generate_string_result_free,
+    hegel_owned_string_free,
 
     -- * Failure reproduction
     -- $reproduction
@@ -253,7 +260,7 @@ module Hegel.Internal.Foreign.Raw
     -- * Haskell helpers
     -- $helpers
     throwOnError,
-    peekUtf8,
+    lastErrorMessage,
     withContext,
     withSettings,
     withProfileSettings,
@@ -274,15 +281,15 @@ import Control.Exception (bracket, finally, mask, throwIO, try)
 import Hegel.Exception (HegelError (..))
 import Control.Monad (void)
 import Data.ByteString (ByteString)
-import Data.ByteString qualified as BS
 import Data.Int (Int32, Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Data.Word (Word32, Word64, Word8)
 import Foreign (ForeignPtr, FunPtr, Ptr, Storable (..), alloca, castPtr, freeHaskellFunPtr, mallocForeignPtrBytes, nullFunPtr, nullPtr, withForeignPtr)
 import Foreign.C.String (CString)
 import Foreign.C.Types (CBool (..), CDouble (..), CInt (..), CSize (..))
+import Hegel.Internal.Foreign.String (HegelString)
+import Hegel.Internal.Foreign.String qualified as String
 
 -- $handles
 --
@@ -360,23 +367,9 @@ instance Storable HegelBytesResult where
     (#poke hegel_generate_bytes_result_t, data) p v.resultData
     (#poke hegel_generate_bytes_result_t, len) p v.resultLen
 
--- | Mirrors @hegel_generate_string_result_t@. The buffer is UTF-8 (per the
--- engine's guarantee), not NUL-terminated; decode exactly 'resultLen' bytes.
-data HegelStringResult = HegelStringResult
-  { resultData :: !CString,
-    resultLen :: !CSize
-  }
-
-instance Storable HegelStringResult where
-  sizeOf _ = (#size hegel_generate_string_result_t)
-  alignment _ = (#alignment hegel_generate_string_result_t)
-  peek p =
-    HegelStringResult
-      <$> (#peek hegel_generate_string_result_t, data) p
-      <*> (#peek hegel_generate_string_result_t, len) p
-  poke p v = do
-    (#poke hegel_generate_string_result_t, data) p v.resultData
-    (#poke hegel_generate_string_result_t, len) p v.resultLen
+-- | Mirrors @hegel_owned_string_t@: a string @libhegel@ allocated and handed to
+-- the caller, who releases it with 'hegel_owned_string_free'.
+type HegelOwnedString = HegelString
 
 -- | Mirrors @hegel_date_t@: a proleptic Gregorian calendar date, with @year@
 -- in @[-999999, 999999]@, @month@ in @[1, 12]@, and @day@ bounded by the
@@ -505,6 +498,12 @@ pattern HEGEL_E_CONCURRENT_USE = (#const HEGEL_E_CONCURRENT_USE)
 -- 'Hegel.Gen.Recursive' catches at the point it opened the recursion scope.
 pattern HEGEL_E_RETRY :: CInt
 pattern HEGEL_E_RETRY = (#const HEGEL_E_RETRY)
+
+-- | Marks the end of a grammar builder's file list. This library binds no
+-- grammar functions, so it never receives it, but the closed-world guard in
+-- @cbits/wire_enum_guard.c@ still checks it against @hegel.h@.
+pattern HEGEL_E_NOT_FOUND :: CInt
+pattern HEGEL_E_NOT_FOUND = (#const HEGEL_E_NOT_FOUND)
 
 -- $statemachine
 --
@@ -654,14 +653,15 @@ foreign import ccall unsafe "hegel_context_new"
 foreign import ccall unsafe "hegel_context_free"
   hegel_context_free :: Ptr HegelContext -> IO CInt
 
--- | The most recent error message recorded on the context, or the empty
--- string if the most recent call succeeded; @NULL@ only when the context
--- itself is @NULL@.
+-- | Write the most recent error message recorded on the context into
+-- @*out_error@, or the empty string if the most recent call succeeded. Calls
+-- through @cbits/string_shim.c@, which writes the by-value result through an
+-- out-pointer.
 --
--- The returned pointer borrows the context's buffer and is invalidated by the
--- next libhegel call on the same context — copy the bytes before another call.
-foreign import ccall unsafe "hegel_context_last_error"
-  hegel_context_last_error :: Ptr HegelContext -> IO CString
+-- The string borrows the context's buffer and is invalidated by the next
+-- @libhegel@ call on the same context, so copy it before another call.
+foreign import ccall unsafe "hegel_zizek_context_last_error"
+  hegel_context_last_error :: Ptr HegelContext -> Ptr HegelString -> IO ()
 
 -- $settings
 --
@@ -686,8 +686,8 @@ foreign import ccall unsafe "hegel_settings_new"
 --
 -- Returns 'HEGEL_E_INVALID_ARG' when the profile is unknown or resolution
 -- fails as it can for 'hegel_settings_new'.
-foreign import ccall unsafe "hegel_settings_new_for_profile"
-  hegel_settings_new_for_profile :: Ptr HegelContext -> CString -> Ptr (Ptr HegelSettings) -> IO CInt
+foreign import ccall unsafe "hegel_zizek_settings_new_for_profile"
+  hegel_settings_new_for_profile :: Ptr HegelContext -> Ptr HegelString -> Ptr (Ptr HegelSettings) -> IO CInt
 
 -- | Free a settings handle; safe to call with @NULL@.
 foreign import ccall unsafe "hegel_settings_free"
@@ -731,26 +731,28 @@ foreign import ccall unsafe "hegel_settings_set_show_statistics"
 -- | Record where the test under these settings is defined, which the engine
 -- uses to report each run's verdict inside Antithesis.
 --
--- Returns 'HEGEL_E_INVALID_ARG' for a NULL or non-UTF-8 string.
-foreign import ccall unsafe "hegel_settings_set_test_location"
+-- Returns 'HEGEL_E_INVALID_ARG' for a non-UTF-8 string.
+foreign import ccall unsafe "hegel_zizek_settings_set_test_location"
   hegel_settings_set_test_location
     :: Ptr HegelContext
     -> Ptr HegelSettings
-    -> CString -- ^ @file@
-    -> Word32  -- ^ @begin_line@
-    -> CString -- ^ @class_name@
-    -> CString -- ^ @function@
+    -> Ptr HegelString -- ^ @file@
+    -> Word32          -- ^ @begin_line@
+    -> Ptr HegelString -- ^ @class_name@
+    -> Ptr HegelString -- ^ @function@
     -> IO CInt
 
 -- | Configure the on-disk example database.
 --
--- Pass @\"\"@ to disable, or @nullPtr@ for the default store under @.hegel/@.
+-- Pass an empty string to disable, or @nullPtr@ for the default store under
+-- @.hegel/@.
 foreign import ccall unsafe "hegel_settings_set_database"
-  hegel_settings_set_database :: Ptr HegelContext -> Ptr HegelSettings -> CString -> IO CInt
+  hegel_settings_set_database :: Ptr HegelContext -> Ptr HegelSettings -> Ptr HegelString -> IO CInt
 
--- | Set the database key used to scope stored / replayed examples.
+-- | Set the database key used to scope stored and replayed examples, or clear
+-- it with @nullPtr@.
 foreign import ccall unsafe "hegel_settings_set_database_key"
-  hegel_settings_set_database_key :: Ptr HegelContext -> Ptr HegelSettings -> CString -> IO CInt
+  hegel_settings_set_database_key :: Ptr HegelContext -> Ptr HegelSettings -> Ptr HegelString -> IO CInt
 
 -- | Enable the phases listed in a @HEGEL_PHASE_*@ bitmask (default: all).
 foreign import ccall unsafe "hegel_settings_set_phases"
@@ -771,13 +773,14 @@ foreign import ccall unsafe "hegel_settings_set_nondeterminism_strictness"
 foreign import ccall unsafe "hegel_settings_set_print_blob"
   hegel_settings_set_print_blob :: Ptr HegelContext -> Ptr HegelSettings -> CBool -> IO CInt
 
--- | Read the database a handle resolved to: @NULL@ for the default store,
--- @\"\"@ for disabled, else the root directory.
+-- | Read the database a handle resolved to: @NULL@ for the default store, a
+-- pointer to an empty string for disabled, else a pointer to the root
+-- directory.
 --
 -- The string borrows the handle and is valid until its next
 -- 'hegel_settings_set_database' or 'hegel_settings_free'.
 foreign import ccall unsafe "hegel_settings_get_database"
-  hegel_settings_get_database :: Ptr HegelContext -> Ptr HegelSettings -> Ptr CString -> IO CInt
+  hegel_settings_get_database :: Ptr HegelContext -> Ptr HegelSettings -> Ptr (Ptr HegelString) -> IO CInt
 
 -- | Read whether a handle asks for failures to carry a reproduction line.
 foreign import ccall unsafe "hegel_settings_get_print_blob"
@@ -832,15 +835,24 @@ foreign import ccall unsafe "hegel_settings_get_nondeterminism_strictness"
 --
 -- Returns 'HEGEL_E_INVALID_ARG' for a reserved name or one outside ASCII
 -- letters, digits, @-@, and @_@. The snapshot leaves out the database key.
-foreign import ccall unsafe "hegel_settings_register_profile"
-  hegel_settings_register_profile :: Ptr HegelContext -> CString -> Ptr HegelSettings -> IO CInt
+foreign import ccall unsafe "hegel_zizek_settings_register_profile"
+  hegel_settings_register_profile :: Ptr HegelContext -> Ptr HegelString -> Ptr HegelSettings -> IO CInt
 
 -- | Make the named profile the one @default@ resolves to for the whole
--- process, or clear an earlier choice with @NULL@.
+-- process, or clear an earlier choice with an empty string.
 --
 -- Returns 'HEGEL_E_INVALID_ARG' for an invalid name or for @default@ itself.
-foreign import ccall unsafe "hegel_set_default_profile"
-  hegel_set_default_profile :: Ptr HegelContext -> CString -> IO CInt
+foreign import ccall unsafe "hegel_zizek_set_default_profile"
+  hegel_set_default_profile :: Ptr HegelContext -> Ptr HegelString -> IO CInt
+
+-- | Set, for the whole process, the Unicode version whose tables the text and
+-- regex generators built afterwards classify characters by, such as
+-- @\"16.0.0\"@. An empty string selects the engine's newest tables.
+--
+-- Returns 'HEGEL_E_INVALID_ARG' for a version older than the engine's oldest
+-- tables.
+foreign import ccall unsafe "hegel_zizek_set_unicode_version"
+  hegel_set_unicode_version :: Ptr HegelContext -> Ptr HegelString -> IO CInt
 
 -- $run
 --
@@ -881,11 +893,11 @@ foreign import ccall unsafe "hegel_run_start"
 -- its own, while a run with no failures means the blob is stale. Returns
 -- 'HEGEL_E_INVALID_ARG' and starts no run for a corrupt, non-UTF-8, or
 -- incompatible blob.
-foreign import ccall unsafe "hegel_run_start_blob"
+foreign import ccall unsafe "hegel_zizek_run_start_blob"
   hegel_run_start_blob
     :: Ptr HegelContext
     -> Ptr HegelSettings
-    -> CString -- ^ @blob@: base64 failure blob from 'hegel_failure_reproduction_blob'
+    -> Ptr HegelString -- ^ @blob@: base64 failure blob from 'hegel_failure_reproduction_blob'
     -> FunPtr OutputSink
     -> Ptr ()
     -> Ptr (Ptr HegelRun)
@@ -982,8 +994,8 @@ foreign import ccall unsafe "hegel_stop_span"
 
 -- | Write the span label for a generator identified by @name@ into
 -- @*out_label@: the 64-bit FNV-1a hash of the name's bytes.
-foreign import ccall unsafe "hegel_label_from_name"
-  hegel_label_from_name :: Ptr HegelContext -> CString -> Ptr Word64 -> IO CInt
+foreign import ccall unsafe "hegel_zizek_label_from_name"
+  hegel_label_from_name :: Ptr HegelContext -> Ptr HegelString -> Ptr Word64 -> IO CInt
 
 -- | Write the order-sensitive combination of @len@ labels into
 -- @*out_label@, for a generator built from component generators.
@@ -1029,7 +1041,7 @@ foreign import ccall unsafe "hegel_collection_reject"
     :: Ptr HegelContext
     -> Ptr HegelTestCase
     -> Ptr HegelCollection -- ^ @collection@ (borrowed)
-    -> CString             -- ^ @why@ (optional, may be @NULL@)
+    -> Ptr HegelString     -- ^ @why@ (optional, may be @NULL@)
     -> IO CInt
 
 -- | Release a collection handle from 'hegel_new_collection'. Safe to call
@@ -1079,8 +1091,8 @@ foreign import ccall unsafe "hegel_pool_free"
 -- | Register an engine-owned state machine for swarm-based stateful testing,
 -- sequential or concurrent.
 --
--- @rule_names@ and @invariant_names@ are arrays of NUL-terminated UTF-8
--- strings; @rule_groups@ is a parallel array of concurrency-group ids, one
+-- @rule_names@ and @invariant_names@ are arrays of UTF-8 strings;
+-- @rule_groups@ is a parallel array of concurrency-group ids, one
 -- per rule, and @rule_weights@ a parallel array of finite, strictly positive
 -- selection weights, or @NULL@ for equal weights. @invariant_always_check@
 -- is an array parallel to @invariant_names@, or @NULL@ for all-false: a
@@ -1102,11 +1114,11 @@ foreign import ccall unsafe "hegel_new_state_machine"
   hegel_new_state_machine
     :: Ptr HegelContext
     -> Ptr HegelTestCase
-    -> Ptr CString  -- ^ @rule_names@
+    -> Ptr HegelString -- ^ @rule_names@
     -> Ptr Int64    -- ^ @rule_groups@ (parallel to @rule_names@)
     -> Ptr CDouble  -- ^ @rule_weights@ (parallel to @rule_names@, or @NULL@)
     -> CSize        -- ^ @num_rules@
-    -> Ptr CString  -- ^ @invariant_names@
+    -> Ptr HegelString -- ^ @invariant_names@
     -> Ptr CBool    -- ^ @invariant_always_check@ (parallel to @invariant_names@, or @NULL@)
     -> CSize        -- ^ @num_invariants@
     -> Int64        -- ^ @min_concurrency@
@@ -1463,49 +1475,47 @@ foreign import ccall unsafe "hegel_zizek_generate_datetime"
 -- @[min_size, max_size]@ whose characters are drawn from the described
 -- alphabet (@codec@, codepoint bounds, Unicode general categories,
 -- explicit include\/exclude character sets — see @hegel.h@ for the full
--- semantics). @codec@ may be @NULL@ (all of Unicode); the category and
--- character-set arguments may be @NULL@\/zero-length for \"no restriction\".
+-- semantics). @codec@ may be @NULL@ for all of Unicode, the category arrays
+-- may be @NULL@ with zero length, and an empty include or exclude string
+-- means no restriction.
 --
 -- On success writes a caller-owned handle into @*out_generator@; release with
 -- 'hegel_string_generator_free'. Returns 'HEGEL_E_INVALID_ARG' for
 -- @min_size > max_size@, an unknown codec\/category, non-UTF-8 string
 -- arguments, include\/exclude conflicts, or constraints leaving no characters
 -- while @max_size > 0@.
-foreign import ccall unsafe "hegel_string_generator_text"
+foreign import ccall unsafe "hegel_zizek_string_generator_text"
   hegel_string_generator_text
     :: Ptr HegelContext
     -> Word64          -- ^ @min_size@
     -> Word64          -- ^ @max_size@
-    -> CString         -- ^ @codec@ (nullable)
+    -> Ptr HegelString -- ^ @codec@ (nullable)
     -> Word32          -- ^ @min_codepoint@
     -> Word32          -- ^ @max_codepoint@
-    -> Ptr CString     -- ^ @categories@ (nullable)
+    -> Ptr HegelString -- ^ @categories@ (nullable)
     -> CSize           -- ^ @categories_len@
-    -> Ptr CString     -- ^ @exclude_categories@ (nullable)
+    -> Ptr HegelString -- ^ @exclude_categories@ (nullable)
     -> CSize           -- ^ @exclude_categories_len@
-    -> Ptr Word8       -- ^ @include_characters@ (UTF-8 bytes, nullable)
-    -> CSize           -- ^ @include_characters_len@
-    -> Ptr Word8       -- ^ @exclude_characters@ (UTF-8 bytes, nullable)
-    -> CSize           -- ^ @exclude_characters_len@
+    -> Ptr HegelString -- ^ @include_characters@ (empty for no restriction)
+    -> Ptr HegelString -- ^ @exclude_characters@ (empty for no restriction)
     -> Ptr (Ptr HegelStringGenerator) -- ^ out: caller-owned handle
     -> IO CInt
 
--- | Build a __regex__ string generator: strings matching the @pattern_len@
--- UTF-8 bytes at @pattern@, in Python-@re@ syntax, which may contain NUL.
--- When @fullmatch@ is true the whole string matches the pattern; otherwise
--- the match may be padded on either side. @alphabet@
--- (optional, @NULL@ for none) must be a __text__ generator constraining the
--- padding and wildcard characters.
+-- | Build a __regex__ string generator: strings matching the UTF-8
+-- @pattern@, in Python-@re@ syntax, which may contain NUL. When @fullmatch@
+-- is true the whole string matches the pattern; otherwise the match may be
+-- padded on either side. @alphabet@, which may be @NULL@, must be a __text__
+-- generator, and every character of a drawn string comes from it.
 --
 -- On success writes a caller-owned handle into @*out_generator@; release with
 -- 'hegel_string_generator_free'. Returns 'HEGEL_E_INVALID_ARG' for a
--- non-UTF-8 or unparseable @pattern@, or an @alphabet@ that is not a text
--- generator.
-foreign import ccall unsafe "hegel_string_generator_regex"
+-- non-UTF-8 or unparseable @pattern@, a variable-width lookbehind, a pattern
+-- no string matches or the alphabet cannot satisfy, or an @alphabet@ that is
+-- not a text generator.
+foreign import ccall unsafe "hegel_zizek_string_generator_regex"
   hegel_string_generator_regex
     :: Ptr HegelContext
-    -> Ptr Word8                      -- ^ @pattern@ (UTF-8 bytes; @NULL@ with length 0 is the empty pattern)
-    -> CSize                          -- ^ @pattern_len@
+    -> Ptr HegelString                -- ^ @pattern@
     -> CBool                          -- ^ @fullmatch@
     -> Ptr HegelStringGenerator       -- ^ @alphabet@ (borrowed, nullable)
     -> Ptr (Ptr HegelStringGenerator) -- ^ out: caller-owned handle
@@ -1540,8 +1550,8 @@ foreign import ccall unsafe "hegel_string_generator_free"
 
 -- | Draw a string described by @generator@.
 --
--- On success fills @*out_result@ with an engine-allocated UTF-8 buffer the
--- caller owns; release with 'hegel_generate_string_result_free'.
+-- On success fills @*out_result@ with an engine-allocated UTF-8 string the
+-- caller owns; release with 'hegel_owned_string_free'.
 --
 -- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted, and
 -- 'HEGEL_E_ASSUME' when the draw rejected itself (e.g. an email exceeding the
@@ -1562,31 +1572,30 @@ foreign import ccall safe "hegel_generate_string"
     :: Ptr HegelContext
     -> Ptr HegelTestCase
     -> Ptr HegelStringGenerator -- ^ @generator@ (borrowed)
-    -> Ptr HegelStringResult    -- ^ out: engine-allocated buffer
+    -> Ptr HegelOwnedString     -- ^ out: engine-allocated string
     -> IO CInt
 
--- | Release a buffer returned by 'hegel_generate_string' and reset the struct
+-- | Release a string returned by 'hegel_generate_string' and reset the struct
 -- to @{NULL, 0}@. Safe to call with an already-freed (zeroed) struct.
-foreign import ccall unsafe "hegel_generate_string_result_free"
-  hegel_generate_string_result_free :: Ptr HegelContext -> Ptr HegelStringResult -> IO CInt
+foreign import ccall unsafe "hegel_owned_string_free"
+  hegel_owned_string_free :: Ptr HegelContext -> Ptr HegelOwnedString -> IO CInt
 
 -- | Record a numeric observation for the targeting phase to hill-climb toward.
 --
--- @label@ must be non-@NULL@ valid UTF-8, and each label may be recorded at
--- most once per test case. The call has no effect unless the target phase is
--- enabled.
-foreign import ccall unsafe "hegel_target"
-  hegel_target :: Ptr HegelContext -> Ptr HegelTestCase -> CDouble -> CString -> IO CInt
+-- @label@ must be valid UTF-8, and each label may be recorded at most once
+-- per test case. The call has no effect unless the target phase is enabled.
+foreign import ccall unsafe "hegel_zizek_target"
+  hegel_target :: Ptr HegelContext -> Ptr HegelTestCase -> CDouble -> Ptr HegelString -> IO CInt
 
 -- | Record that @label@ occurred in this test case, for the statistics block
 -- the engine prints at the end of a run with @show_statistics@ on.
-foreign import ccall unsafe "hegel_event"
-  hegel_event :: Ptr HegelContext -> Ptr HegelTestCase -> CString -> IO CInt
+foreign import ccall unsafe "hegel_zizek_event"
+  hegel_event :: Ptr HegelContext -> Ptr HegelTestCase -> Ptr HegelString -> IO CInt
 
 -- | Record a finite numeric observation under @label@ for the statistics
 -- block. A label may be observed any number of times per test case.
-foreign import ccall unsafe "hegel_event_value"
-  hegel_event_value :: Ptr HegelContext -> Ptr HegelTestCase -> CDouble -> CString -> IO CInt
+foreign import ccall unsafe "hegel_zizek_event_value"
+  hegel_event_value :: Ptr HegelContext -> Ptr HegelTestCase -> CDouble -> Ptr HegelString -> IO CInt
 
 -- | Mark the test case complete.
 --
@@ -1600,8 +1609,8 @@ foreign import ccall unsafe "hegel_mark_complete"
   hegel_mark_complete
     :: Ptr HegelContext
     -> Ptr HegelTestCase
-    -> Word32  -- ^ @status@ (@HEGEL_STATUS_*@)
-    -> CString -- ^ @origin@ (@NULL@ unless 'HEGEL_STATUS_INTERESTING')
+    -> Word32          -- ^ @status@ (@HEGEL_STATUS_*@)
+    -> Ptr HegelString -- ^ @origin@ (@NULL@ unless 'HEGEL_STATUS_INTERESTING')
     -> IO CInt
 
 -- | Clone a test case, writing a caller-owned handle onto an independent
@@ -1653,11 +1662,11 @@ foreign import ccall unsafe "hegel_test_case_should_capture"
 --
 -- A blob whose choice sequence no longer matches the caller's generators
 -- returns 'HEGEL_E_STOP_TEST' on the overrunning draw.
-foreign import ccall unsafe "hegel_test_case_from_blob"
+foreign import ccall unsafe "hegel_zizek_test_case_from_blob"
   hegel_test_case_from_blob
     :: Ptr HegelContext
     -> Ptr HegelSettings
-    -> CString -- ^ @blob@: base64 failure blob from 'hegel_failure_reproduction_blob'
+    -> Ptr HegelString -- ^ @blob@: base64 failure blob from 'hegel_failure_reproduction_blob'
     -> FunPtr OutputSink -- ^ @callback@ (@NULL@ leaves output on stderr)
     -> Ptr ()  -- ^ @user_data@ threaded through to @callback@
     -> Ptr (Ptr HegelTestCase) -- ^ out: caller-owned test case
@@ -1684,10 +1693,11 @@ foreign import ccall unsafe "hegel_test_case_free"
 foreign import ccall unsafe "hegel_run_result_status"
   hegel_run_result_status :: Ptr HegelContext -> Ptr HegelRunResult -> Ptr CInt -> IO CInt
 
--- | Write the run-level error message into @*out_error@ (or @NULL@ when the
--- run completed normally rather than erroring). Valid until 'hegel_run_result_free'.
+-- | Write a pointer to the run-level error message into @*out_error@, or
+-- @NULL@ when the run completed normally rather than erroring. Valid until
+-- 'hegel_run_result_free'.
 foreign import ccall unsafe "hegel_run_result_error"
-  hegel_run_result_error :: Ptr HegelContext -> Ptr HegelRunResult -> Ptr CString -> IO CInt
+  hegel_run_result_error :: Ptr HegelContext -> Ptr HegelRunResult -> Ptr (Ptr HegelString) -> IO CInt
 
 -- | Write the number of distinct failures (by origin) into @*out_count@.
 foreign import ccall unsafe "hegel_run_result_failure_count"
@@ -1709,25 +1719,25 @@ foreign import ccall unsafe "hegel_failure_free"
 -- | Write the stable origin string passed to 'hegel_mark_complete' into
 -- @*out_origin@.
 foreign import ccall unsafe "hegel_failure_origin"
-  hegel_failure_origin :: Ptr HegelContext -> Ptr HegelFailure -> Ptr CString -> IO CInt
+  hegel_failure_origin :: Ptr HegelContext -> Ptr HegelFailure -> Ptr HegelString -> IO CInt
 
 -- | Write a base64-encoded string with a failing test's choice sequence
 -- (a minimal counterexample), or a nondeterministic failure's replay state,
--- into @*out_blob@; 'hegel_run_start_blob' replays either kind.
+-- through @*out_blob@; 'hegel_run_start_blob' replays either kind.
 --
--- Writes @NULL@ when the engine produced no blob for this failure, such as an
+-- Writes a @NULL@ pointer when the engine produced no blob for this failure, such as an
 -- unconfirmed nondeterministic failure or one found by replaying a blob.
 --
 -- The written pointer is borrowed (see the section notes above);
 -- 'failureReproductionBlob' copies it out.
 foreign import ccall unsafe "hegel_failure_reproduction_blob"
-  hegel_failure_reproduction_blob :: Ptr HegelContext -> Ptr HegelFailure -> Ptr CString -> IO CInt
+  hegel_failure_reproduction_blob :: Ptr HegelContext -> Ptr HegelFailure -> Ptr (Ptr HegelString) -> IO CInt
 
--- | Write the failure's confirmation caveat into @*out_caveat@, describing how
--- reliably a nondeterministic failure reproduced, or @NULL@ for a
--- deterministic failure.
+-- | Write a pointer to the failure's confirmation caveat into @*out_caveat@,
+-- describing how reliably a nondeterministic failure reproduced, or @NULL@
+-- for a failure that was never seen not to reproduce.
 foreign import ccall unsafe "hegel_failure_caveat"
-  hegel_failure_caveat :: Ptr HegelContext -> Ptr HegelFailure -> Ptr CString -> IO CInt
+  hegel_failure_caveat :: Ptr HegelContext -> Ptr HegelFailure -> Ptr (Ptr HegelString) -> IO CInt
 
 -- $globals
 --
@@ -1736,36 +1746,19 @@ foreign import ccall unsafe "hegel_failure_caveat"
 -- | Write the static version string into @*out_version@; valid for the
 -- program's lifetime.
 foreign import ccall unsafe "hegel_version"
-  hegel_version :: Ptr HegelContext -> Ptr CString -> IO CInt
+  hegel_version :: Ptr HegelContext -> Ptr HegelString -> IO CInt
 
 -- $helpers
 --
 -- Idiomatic Haskell wrappers over the FFI bindings.
 
--- | Read the @libhegel@ error buffer recorded on the context.
+-- | Read the @libhegel@ error message recorded on the context, or 'Nothing'
+-- when the most recent call succeeded.
 lastErrorMessage :: Ptr HegelContext -> IO (Maybe Text)
-lastErrorMessage ctx = do
-  msgPtr <- hegel_context_last_error ctx
-  if msgPtr == nullPtr
-    then pure Nothing
-    else do
-      msg <- peekUtf8 msgPtr
-      pure (if T.null msg then Nothing else Just msg)
-
--- | Decode a borrowed UTF-8 C string from @libhegel@.
---
--- @libhegel@ strings (origins, diagnostics, error messages) are UTF-8
--- regardless of the process locale, so decode them explicitly rather than via
--- the locale-sensitive 'Foreign.C.String.peekCString'.
---
--- Decoding is lenient: a malformed byte becomes U+FFFD, so reporting a failure
--- can never itself crash the runner.
---
--- A @NULL@ pointer decodes to @\"\"@.
-peekUtf8 :: CString -> IO Text
-peekUtf8 p
-  | p == nullPtr = pure ""
-  | otherwise = TE.decodeUtf8Lenient <$> BS.packCString p
+lastErrorMessage ctx = alloca \out -> do
+  hegel_context_last_error ctx out
+  msg <- String.peekText out
+  pure (if T.null msg then Nothing else Just msg)
 
 -- | Check a @libhegel@ return code; throws 'HegelError' on any non-zero
 -- value, attaching the diagnostic recorded on the context.
@@ -1791,19 +1784,17 @@ withSettings ctx = bracket acquire release
     release s = void (hegel_settings_free ctx s)
 
 -- | Acquire a settings handle resolved from the named profile, or from the
--- default profile when @profile@ is 'nullPtr', pass it to the action, and free
--- it on exit.
+-- default profile for 'Nothing', pass it to the action, and free it on exit.
 --
 -- Returns the engine's 'HegelError' without running the action when resolution
 -- fails, as it does with 'HEGEL_E_INVALID_ARG' for an unknown profile or a
 -- malformed @hegel.toml@ or environment variable.
-withProfileSettings :: Ptr HegelContext -> CString -> (Ptr HegelSettings -> IO a) -> IO (Either HegelError a)
+withProfileSettings :: Ptr HegelContext -> Maybe Text -> (Ptr HegelSettings -> IO a) -> IO (Either HegelError a)
 withProfileSettings ctx profile action = mask $ \restore -> do
   acquired <- alloca \out -> do
-    rc <-
-      if profile == nullPtr
-        then hegel_settings_new ctx out
-        else hegel_settings_new_for_profile ctx profile out
+    rc <- case profile of
+      Nothing -> hegel_settings_new ctx out
+      Just name -> String.withText name \p -> hegel_settings_new_for_profile ctx p out
     if rc == HEGEL_OK
       then Right <$> peek out
       else lastErrorMessage ctx >>= \msg -> pure (Left HegelError {code = rc, message = msg})
@@ -1834,7 +1825,7 @@ withRun ctx s sink action =
 withBlobRun :: Ptr HegelContext -> Ptr HegelSettings -> ByteString -> Maybe OutputSink -> (Ptr HegelRun -> IO a) -> IO (Either HegelError a)
 withBlobRun ctx s blob sink action =
   withOutputSink sink \callback -> mask $ \restore -> do
-    started <- try (BS.useAsCString blob \blobPtr -> startRun ctx \out -> hegel_run_start_blob ctx s blobPtr callback nullPtr out)
+    started <- try (String.withBytes blob \blobPtr -> startRun ctx \out -> hegel_run_start_blob ctx s blobPtr callback nullPtr out)
     case started of
       Left e -> pure (Left e)
       Right run -> Right <$> (restore (action run) `finally` void (hegel_run_free ctx run))
@@ -1873,27 +1864,21 @@ failureReproductionBlob :: Ptr HegelContext -> Ptr HegelFailure -> IO (Maybe Byt
 failureReproductionBlob ctx f =
   alloca $ \out -> do
     throwOnError ctx =<< hegel_failure_reproduction_blob ctx f out
-    ptr <- peek out
-    if ptr == nullPtr
-      then pure Nothing
-      else Just <$> BS.packCString ptr
+    String.peekOptBytes =<< peek out
 
--- | Copy the failure's confirmation caveat, or return 'Nothing' for a
--- deterministic failure.
+-- | Copy the failure's confirmation caveat, or return 'Nothing' for a failure
+-- that was never seen not to reproduce.
 failureCaveat :: Ptr HegelContext -> Ptr HegelFailure -> IO (Maybe Text)
 failureCaveat ctx f =
   alloca $ \out -> do
     throwOnError ctx =<< hegel_failure_caveat ctx f out
-    ptr <- peek out
-    if ptr == nullPtr
-      then pure Nothing
-      else Just <$> peekUtf8 ptr
+    String.peekOptText =<< peek out
 
 -- | Reusable pinned block that a test case's per-call out-parameters write
 -- through, in place of a fresh 'alloca' every call. Covers single-word
 -- out-params (rule\/group indices, collection\/pool\/state-machine handles, primitive booleans,
 -- integers, floats), the two-word @{ptr, len}@ result structs
--- ('HegelBytesResult', 'HegelStringResult'), and the raw 16-byte UUID buffer.
+-- ('HegelBytesResult', 'HegelOwnedString'), and the raw 16-byte UUID buffer.
 -- Allocated once per test case ('Hegel.Internal.TestCase.mkTestCase') and
 -- reused across every call.
 --

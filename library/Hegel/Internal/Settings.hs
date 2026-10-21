@@ -19,14 +19,14 @@ import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Word (Word32)
-import Foreign (Ptr, Storable, alloca, castPtr, fromBool, nullPtr, peek)
-import Foreign.C.Types (CBool (..), CChar, CInt)
+import Foreign (Ptr, Storable, alloca, fromBool, nullPtr, peek)
+import Foreign.C.Types (CBool (..), CInt)
 import GHC.Stack (HasCallStack, callStack)
 import Hegel.Database (Database (..))
 import Hegel.Exception (Diagnostic (..), SettingsError (..))
 import Hegel.HealthCheck (HealthCheck)
-import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
+import Hegel.Internal.Foreign.String qualified as String
 import Hegel.Phase (Phase)
 import Hegel.Seed (Seed (..))
 import Hegel.Settings (Settings (..))
@@ -51,13 +51,12 @@ data Resolved = Resolved
 -- malformed.
 withResolvedSettings :: (HasCallStack) => Ptr HegelContext -> Settings -> (Resolved -> Ptr HegelSettings -> IO a) -> IO a
 withResolvedSettings ctx settings action =
-  maybe ($ nullPtr) CString.withText settings.profile \name ->
-    withProfileSettings ctx name configured >>= \case
-      Right a -> pure a
-      Left e
-        | e.code == HEGEL_E_INVALID_ARG ->
-            throwIO (settingsError "Hegel.Settings.profile" e [("profile", fromMaybe "default" settings.profile)])
-        | otherwise -> throwIO e
+  withProfileSettings ctx settings.profile configured >>= \case
+    Right a -> pure a
+    Left e
+      | e.code == HEGEL_E_INVALID_ARG ->
+          throwIO (settingsError "Hegel.Settings.profile" e [("profile", fromMaybe "default" settings.profile)])
+      | otherwise -> throwIO e
   where
     configured s = do
       applySettings ctx settings s
@@ -134,16 +133,16 @@ readSettings ctx settings s = do
     fromBitmask :: (Enum a, Bounded a, Witch.From a Word32) => Word32 -> [a]
     fromBitmask mask = filter (\a -> mask .&. Witch.into @Word32 a /= 0) [minBound .. maxBound]
 
--- | Read the database a handle resolved to: @NULL@ is the default store and
--- @\"\"@ a disabled one.
+-- | Read the database a handle resolved to: @NULL@ is the default store and an
+-- empty string a disabled one.
 readDatabase :: Ptr HegelContext -> Ptr HegelSettings -> IO Database
 readDatabase ctx s = do
-  database <- readOut ctx (hegel_settings_get_database ctx s)
-  if database == nullPtr
-    then pure DatabaseDefault
-    else do
-      first <- peek (castPtr database :: Ptr CChar)
-      if first == 0 then pure DatabaseDisabled else DatabaseDirectory . T.unpack <$> peekUtf8 database
+  database <- String.peekOptText =<< readOut ctx (hegel_settings_get_database ctx s)
+  pure case database of
+    Nothing -> DatabaseDefault
+    Just dir
+      | T.null dir -> DatabaseDisabled
+      | otherwise -> DatabaseDirectory (T.unpack dir)
 
 readBool :: Ptr HegelContext -> (Ptr CBool -> IO CInt) -> IO Bool
 readBool ctx get = (\(CBool b) -> b /= 0) <$> readOut ctx get
@@ -171,16 +170,16 @@ applySettings ctx s ptr = do
   for_ s.unboundedChoices \b -> chk $ hegel_settings_set_unbounded_choices ctx ptr (fromBool b)
   for_ s.showStatistics \b -> chk $ hegel_settings_set_show_statistics ctx ptr (fromBool b)
   for_ s.testLocation \loc ->
-    CString.withText loc.file \file -> CString.withText loc.scope \scope -> CString.withText loc.function \function ->
+    String.withText loc.file \file -> String.withText loc.scope \scope -> String.withText loc.function \function ->
       chk $ hegel_settings_set_test_location ctx ptr file (fromIntegral loc.line) scope function
   for_ s.nondeterminism \n -> chk $ hegel_settings_set_nondeterminism_strictness ctx ptr (Witch.into @Word32 n)
   for_ s.printBlob \b -> chk $ hegel_settings_set_print_blob ctx ptr (fromBool b)
   for_ s.database \case
     DatabaseDefault -> chk $ hegel_settings_set_database ctx ptr nullPtr
-    DatabaseDisabled -> CString.withFilePath "" \p -> chk $ hegel_settings_set_database ctx ptr p
-    DatabaseDirectory dir -> CString.withFilePath dir \p -> chk $ hegel_settings_set_database ctx ptr p
+    DatabaseDisabled -> String.withText "" \p -> chk $ hegel_settings_set_database ctx ptr p
+    DatabaseDirectory dir -> String.withText (T.pack dir) \p -> chk $ hegel_settings_set_database ctx ptr p
   for_ s.databaseKey \key ->
-    CString.withText key \p -> chk $ hegel_settings_set_database_key ctx ptr p
+    String.withText key \p -> chk $ hegel_settings_set_database_key ctx ptr p
   where
     chk io = io >>= throwOnError ctx
 

@@ -9,16 +9,16 @@
 
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "libhegel";
-  version = "0.45.1";
+  version = "0.48.0";
 
   src = fetchFromGitHub {
     owner = "hegeldev";
-    repo = "hegel-rust";
-    rev = "libhegel-v${finalAttrs.version}";
-    hash = "sha256-frVXawTMpSYJQkPwBBKYzw6KasIynp580U5vJNva+gQ=";
+    repo = "hegel";
+    tag = "libhegel/${finalAttrs.version}";
+    hash = "sha256-+2VGGf50mc8ierfH3RZ5WKrZCknSHUjibck/cE10L/U=";
   };
 
-  cargoHash = "sha256-Jr8H9yZbm6EsGTmCyoXwD2hloT2bfGj1dM8oMtqV9Og=";
+  cargoHash = "sha256-RwFvwKnCyMNv7mqh8Mk/5gbjK2tzikwIQf2oiKs/oxs=";
 
   # Build only the C-binding crate.
   cargoBuildFlags = [ "--package" "hegeltest-c" ];
@@ -58,7 +58,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
     # Install cbindgen-generated C header and pkg-config file to $dev.
     mkdir -p $dev/include $dev/lib/pkgconfig
-    install -m644 hegel-c/include/hegel.h $dev/include/
+    install -m644 libhegel/include/hegel.h $dev/include/
     substituteAll ${./hegel.pc.in} $dev/lib/pkgconfig/hegel.pc
 
     runHook postInstall
@@ -68,8 +68,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
   meta = {
     description = "Native Hypothesis engine C library (hegeltest-c)";
-    homepage = "https://github.com/hegeldev/hegel-rust";
-    changelog = "https://github.com/hegeldev/hegel-rust/releases/tag/libhegel-v${finalAttrs.version}";
+    homepage = "https://github.com/hegeldev/hegel";
+    changelog = "https://github.com/hegeldev/hegel/releases/tag/libhegel/${finalAttrs.version}";
     license = lib.licenses.mit;
     platforms = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
     pkgConfigModules = [ "hegel" ];

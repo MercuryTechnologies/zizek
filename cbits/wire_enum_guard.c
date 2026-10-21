@@ -5,7 +5,7 @@
  * hegel_result_t's error-code pattern synonyms in Hegel.Internal.Foreign.Raw).
  *
  * Each function is an EXHAUSTIVE switch with no `default:`. Compiled with
- * `-Werror=switch-enum -Werror=switch`, the build FAILS if hegel-rust adds a
+ * `-Werror=switch-enum -Werror=switch`, the build FAILS if libhegel adds a
  * new enumerator we don't handle — naming the missing value — so a libhegel
  * bump can't silently widen an enum out from under the closed ADTs. Both
  * flags matter on clang: a missing case with no `default:` is diagnosed
@@ -109,6 +109,7 @@ int hegel_guard_result(int x) {
     case HEGEL_E_INTERNAL:
     case HEGEL_E_CONCURRENT_USE:
     case HEGEL_E_RETRY:
+    case HEGEL_E_NOT_FOUND:
       return 0;
   }
   return -1;

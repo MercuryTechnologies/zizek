@@ -2,7 +2,7 @@
 -- the libhegel enums.
 --
 -- The compile-time half of the guard lives in @cbits/wire_enum_guard.c@
--- (exhaustive @switch@es under @-Werror=switch-enum@): if hegel-rust /adds/ an
+-- (exhaustive @switch@es under @-Werror=switch-enum@): if libhegel /adds/ an
 -- enumerator, this test target fails to build. This module is the runtime half:
 -- it feeds every value our 'Witch.From' instances produce to the matching guard
 -- and asserts it is recognized (returns @0@), catching /value drift/ — a
@@ -11,7 +11,6 @@
 -- derivation.
 module WireEnumCoverage (wireEnumCoverageSpec) where
 
-import Data.ByteString qualified as BS
 import Data.Foldable (for_, traverse_)
 import Data.Int (Int64)
 import Data.List (nub)
@@ -22,6 +21,7 @@ import Hegel.Backend (Backend (..))
 import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Internal.DataSource (Label (..), combineLabels, labelName)
 import Hegel.Internal.Foreign.Raw
+import Hegel.Internal.Foreign.String qualified as String
 import Hegel.Internal.TestCase (Status (..))
 import Hegel.Nondeterminism (Nondeterminism (..))
 import Hegel.Phase (Phase (..))
@@ -65,7 +65,7 @@ wireEnumCoverageSpec = describe "wire enum coverage (conversion values vs hegel.
     it "derives every label the way hegel_label_from_name does" $
       withContext \ctx ->
         for_ [minBound .. maxBound :: Label] \label -> do
-          engine <- BS.useAsCString (labelName label) \name ->
+          engine <- String.withBytes (labelName label) \name ->
             alloca \out -> do
               hegel_label_from_name ctx name out >>= throwOnError ctx
               peek out
@@ -97,5 +97,7 @@ wireEnumCoverageSpec = describe "wire enum coverage (conversion values vs hegel.
         HEGEL_E_ALREADY_COMPLETE,
         HEGEL_E_NOT_COMPLETE,
         HEGEL_E_INTERNAL,
-        HEGEL_E_CONCURRENT_USE
+        HEGEL_E_CONCURRENT_USE,
+        HEGEL_E_RETRY,
+        HEGEL_E_NOT_FOUND
       ]

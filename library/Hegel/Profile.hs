@@ -24,12 +24,12 @@ where
 
 import Control.Exception (throwIO, try)
 import Data.Text (Text)
-import Foreign (Ptr, nullPtr)
-import Foreign.C.String (CString)
+import Foreign (Ptr)
 import Foreign.C.Types (CInt)
 import GHC.Stack (HasCallStack, withFrozenCallStack)
-import Hegel.Internal.Foreign.CString qualified as CString
 import Hegel.Internal.Foreign.Raw
+import Hegel.Internal.Foreign.String (HegelString)
+import Hegel.Internal.Foreign.String qualified as String
 import Hegel.Internal.Settings (readSettings, settingsError, withResolvedSettings)
 import Hegel.Settings (Settings (..))
 import Hegel.Settings qualified as Settings
@@ -47,7 +47,7 @@ import Hegel.Settings qualified as Settings
 register :: (HasCallStack) => Text -> Settings -> IO ()
 register name settings =
   validated settings *> withContext \ctx -> withResolvedSettings ctx settings \_ s ->
-    CString.withText name \p ->
+    String.withText name \p ->
       rejecting ctx "Hegel.Profile.register" name =<< hegel_settings_register_profile ctx p s
 
 -- | Make @name@ the default profile, the one a 'Settings' with no 'profile'
@@ -59,14 +59,14 @@ register name settings =
 --
 -- Throws 'Hegel.Exception.SettingsError' for an invalid name or for @default@ itself.
 setDefault :: (HasCallStack) => Text -> IO ()
-setDefault name = withContext \ctx -> CString.withText name \p -> setDefaultTo ctx name p
+setDefault name = withContext \ctx -> String.withText name \p -> setDefaultTo ctx name p
 
 -- | Undo 'setDefault', so the default profile is chosen from the environment
 -- again.
 clearDefault :: (HasCallStack) => IO ()
-clearDefault = withContext \ctx -> setDefaultTo ctx "" nullPtr
+clearDefault = withContext \ctx -> String.withText "" (setDefaultTo ctx "")
 
-setDefaultTo :: (HasCallStack) => Ptr HegelContext -> Text -> CString -> IO ()
+setDefaultTo :: (HasCallStack) => Ptr HegelContext -> Text -> Ptr HegelString -> IO ()
 setDefaultTo ctx name p = rejecting ctx "Hegel.Profile.setDefault" name =<< hegel_set_default_profile ctx p
 
 -- | The settings a run under @settings@ would use, with every engine setting

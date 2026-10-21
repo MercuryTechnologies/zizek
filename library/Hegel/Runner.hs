@@ -11,7 +11,7 @@ where
 import Control.Concurrent.Async (wait, withAsyncBound)
 import Control.Exception (SomeException, bracket, finally, mask, toException, try)
 import Control.Exception qualified as E
-import Control.Monad (unless, void)
+import Control.Monad (mfilter, unless, void)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Foldable (traverse_)
@@ -32,6 +32,7 @@ import Hegel.Database (Database (..))
 import Hegel.Gen.Internal (Gen, draw)
 import Hegel.Internal.Control (ControlSignal (..), FinalizerFailed (..), NoBacktrace (..), catchControl, isAborting)
 import Hegel.Internal.Foreign.Raw
+import Hegel.Internal.Foreign.String qualified as String
 import Hegel.Internal.Replay qualified as Replay
 import Hegel.Internal.Settings (Resolved (..), withResolvedSettings)
 import Hegel.Internal.TestCase (Handle (..), Status (..), TestCase (..), markComplete, mkTestCase)
@@ -414,7 +415,7 @@ readFailure ctx res index = bracket
       else do
         org <- alloca \out -> do
           throwOnError ctx =<< hegel_failure_origin ctx f out
-          peekUtf8 =<< peek out
+          String.peekText out
         blob <- failureReproductionBlob ctx f
         caveat <- failureCaveat ctx f
         pure Failure {origin = org, reproductionBlob = blob, caveat}
@@ -424,17 +425,13 @@ readRunError :: Ptr HegelContext -> Ptr HegelRunResult -> IO (Maybe Text)
 readRunError ctx res =
   alloca \out -> do
     throwOnError ctx =<< hegel_run_result_error ctx res out
-    ptr <- peek out
-    if ptr == nullPtr
-      then pure Nothing
-      else do
-        msg <- peekUtf8 ptr
-        pure (if T.null msg then Nothing else Just msg)
+    msg <- String.peekOptText =<< peek out
+    pure (mfilter (not . T.null) msg)
 
 engineVersion :: Ptr HegelContext -> IO Text
 engineVersion ctx = alloca \out -> do
   throwOnError ctx =<< hegel_version ctx out
-  peekUtf8 =<< peek out
+  String.peekText out
 
 -- * Captures
 
