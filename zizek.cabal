@@ -250,6 +250,7 @@ test-suite unit
     KeyedProperties
     LogRendering
     PoolEvents
+    PoolFilters
     PropertyChecks
     RecursiveGenerators
     ReportRendering

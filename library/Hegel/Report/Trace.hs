@@ -208,6 +208,7 @@ isTouch = \case
   Born _ -> True
   Reused -> True
   Consumed -> True
+  Restored -> True
   Named _ -> False
 
 -- | Fold the event stream into per-value identities, in birth order.
@@ -230,6 +231,7 @@ identitiesOf events = reverse (foldl' apply [] events)
           : is
       Reused -> is
       Consumed -> is
+      Restored -> is
       Named _ -> is
 
 -- * Queries

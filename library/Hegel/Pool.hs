@@ -42,6 +42,7 @@ where
 
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar, withMVar)
 import Control.Exception (throwIO)
+import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
@@ -51,10 +52,11 @@ import Foreign (Ptr)
 import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Exception (InvariantViolation (..))
 import Hegel.Gen.Internal (Gen (..))
-import Hegel.Internal.Control (AssumeRejected (..))
-import Hegel.Internal.DataSource (HegelPool, Label (LabelPoolConsume, LabelPoolReuse, LabelPoolTransfer), freePool, freshPoolIdentity, labelPool, newPool, poolAdd, poolAddFrom, poolGenerate, spanLabel)
+import Hegel.Internal.Control (AssumeRejected (..), malformedTest)
+import Hegel.Internal.DataSource (HegelPool, Label (LabelPoolConsume, LabelPoolReuse, LabelPoolTransfer), freePool, freshPoolIdentity, labelPool, newPool, poolAdd, poolAddFrom, poolGenerate, poolRestore, spanLabel)
 import Hegel.Internal.Event (Var (..))
 import Hegel.Internal.TestCase (TestCase)
+import Hegel.Internal.TestCase qualified as TestCase
 import Hegel.Property.Internal (Env (..), PropertyT, askEnv, resource)
 
 -- | Opaque handle to a @libhegel@-managed pool of values of type @a@.
@@ -133,9 +135,22 @@ reuse pool = Draw (spanLabel LabelPoolReuse) \tc ->
 -- value so it is never drawn again.
 --
 -- Drawing from an empty pool is equivalent to @assume False@, as the module
--- header describes.
+-- header describes. Under 'Hegel.Gen.filtered' or 'Hegel.Gen.mapMaybe', every
+-- rejected attempt's value goes back once the attempts are over, so only the
+-- kept value is consumed.
 consume :: Pool a -> Gen a
-consume pool = Draw (spanLabel LabelPoolConsume) \tc -> snd <$> drawConsuming "consume" pool tc
+consume pool = Draw (spanLabel LabelPoolConsume) \tc -> do
+  (vid, v) <- drawConsuming "consume" pool tc
+  TestCase.recordUndo tc (restore pool tc vid v)
+  pure v
+
+-- | Undo a consuming draw of @v@ under the variable id @vid@.
+restore :: Pool a -> TestCase -> Int -> a -> IO ()
+restore pool tc vid v = do
+  modifyMVar_ pool.values \m -> do
+    poolRestore tc pool.handle pool.identity vid
+    pure (IntMap.insert vid v m)
+  TestCase.forgetDraw tc Var {pool = pool.identity, id = vid}
 
 -- | The consuming draw shared by 'consume' and 'transfer': draw a
 -- vid from the engine (removing it there) and pop the mirrored value.
@@ -161,9 +176,14 @@ drawConsuming caller pool tc =
 -- resource.
 --
 -- The move is not atomic across the two pools, and is therefore not safe to
--- retry.
+-- retry. Drawing it inside a 'Hegel.Gen.filtered' or 'Hegel.Gen.mapMaybe'
+-- attempt throws 'MalformedTest', since a rejected attempt could not undo the
+-- move.
 transfer :: Pool a -> Pool a -> Gen a
 transfer src dst = Draw (spanLabel LabelPoolTransfer) \tc -> do
+  nested <- TestCase.inAttempt tc
+  when nested $
+    throwIO (malformedTest "Hegel.Pool.transfer" "a transfer cannot be drawn inside a filter attempt, which cannot undo the move" [])
   (vid, v) <- drawConsuming "transfer" src tc
   modifyMVar_ dst.values \m -> do
     vid' <- poolAddFrom tc dst.handle dst.identity Var {pool = src.identity, id = vid}

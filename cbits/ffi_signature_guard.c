@@ -60,6 +60,7 @@ hegel_result_t (*const zizek_guard_hegel_owned_string_free)(hegel_context_t *ctx
 hegel_result_t (*const zizek_guard_hegel_pool_add)(hegel_context_t *ctx, hegel_test_case_t *tc, hegel_pool_t *pool, int64_t *out_variable_id) = hegel_pool_add;
 hegel_result_t (*const zizek_guard_hegel_pool_free)(hegel_context_t *ctx, hegel_pool_t *pool) = hegel_pool_free;
 hegel_result_t (*const zizek_guard_hegel_pool_generate)(hegel_context_t *ctx, hegel_test_case_t *tc, hegel_pool_t *pool, bool consume, int64_t *out_variable_id) = hegel_pool_generate;
+hegel_result_t (*const zizek_guard_hegel_pool_restore)(hegel_context_t *ctx, hegel_test_case_t *tc, hegel_pool_t *pool, int64_t variable_id) = hegel_pool_restore;
 hegel_result_t (*const zizek_guard_hegel_recursion_branch)(hegel_context_t *ctx, hegel_test_case_t *tc, HegelRecursion *recursion, uint64_t depth, bool *out_branch) = hegel_recursion_branch;
 hegel_result_t (*const zizek_guard_hegel_recursion_finish)(hegel_context_t *ctx, hegel_test_case_t *tc, HegelRecursion *recursion) = hegel_recursion_finish;
 hegel_result_t (*const zizek_guard_hegel_recursion_free)(hegel_context_t *ctx, HegelRecursion *recursion) = hegel_recursion_free;

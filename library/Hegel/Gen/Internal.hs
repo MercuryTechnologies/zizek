@@ -38,6 +38,7 @@ import Hegel.Exception (Diagnostic (..), InvariantViolation (..), ValidationErro
 import Hegel.Internal.Control (AssumeRejected (..))
 import Hegel.Internal.DataSource (Label (..), combineLabels, drawInteger, spanLabel, startSpan, stopSpan)
 import Hegel.Internal.TestCase (TestCase)
+import Hegel.Internal.TestCase qualified as TestCase
 import Prelude hiding (either, maybe)
 
 -- | A generator that produces values of type @a@.
@@ -176,19 +177,22 @@ discard = Draw (spanLabel LabelJust) \_ -> throwIO AssumeRejected
 --
 -- Each attempt runs in its own span, closed as discarded when the attempt
 -- misses, so the shrinker can delete it.
+--
+-- A pool value that a missed attempt consumed through 'Hegel.Pool.consume'
+-- stays out of the pool until the attempts are over, so no later attempt
+-- draws it again, and then goes back, so a filter consumes only the value it
+-- keeps.
 mapMaybe :: (a -> Prelude.Maybe b) -> Gen a -> Gen b
-mapMaybe f g = Draw (combineLabels [spanLabel LabelFilter, labelOf g]) \tc -> go tc (3 :: Int)
+mapMaybe f g = Draw (combineLabels [spanLabel LabelFilter, labelOf g]) \tc ->
+  TestCase.attempts tc 3 (attempt tc) >>= \case
+    Prelude.Just b -> pure b
+    Prelude.Nothing -> throwIO AssumeRejected
   where
-    go tc n = do
+    attempt tc = do
       startSpan tc (spanLabel LabelFilterAttempt)
-      v <- draw tc g
-      case f v of
-        Prelude.Just b -> stopSpan tc False *> pure b
-        Prelude.Nothing -> do
-          stopSpan tc True
-          if n > 1
-            then go tc (n - 1)
-            else throwIO AssumeRejected
+      r <- f <$> draw tc g
+      stopSpan tc (null r)
+      pure r
 
 -- | Draw a 'Just' value from a 'Maybe' generator, discarding test cases where
 -- 'Nothing' is drawn.

@@ -44,6 +44,7 @@ module Hegel.Internal.DataSource
     poolAddFrom,
     labelPool,
     poolGenerate,
+    poolRestore,
     freePool,
     freshPoolIdentity,
 
@@ -685,6 +686,15 @@ poolGenerate tc pool identity consume = do
   -- this pool 'Var' (see Note [Draw provenance]).
   recordDraw tc var
   pure vid
+
+-- | Put back the variable @vid@, which a consuming 'poolGenerate' removed.
+--
+-- Throws 'TestStopped' if the engine gives up.
+poolRestore :: TestCase -> Ptr HegelPool -> Int -> Int -> IO ()
+poolRestore tc pool identity vid = do
+  hegel_pool_restore tc.handle.ctx tc.handle.ptr pool (fromIntegral vid) >>= handleReturnCode tc
+  Tick.record tc.recording tc.events \c ->
+    Event.Event {clock = c, var = Event.Var {pool = identity, id = vid}, kind = Event.Restored}
 
 -- | Release a pool handle from 'newPool'. Each handle must be freed exactly
 -- once.

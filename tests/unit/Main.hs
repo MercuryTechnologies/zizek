@@ -13,6 +13,7 @@ import Integrations qualified
 import KeyedProperties qualified
 import LogRendering qualified
 import PoolEvents qualified
+import PoolFilters qualified
 import PropertyChecks qualified
 import RecursiveGenerators qualified
 import ReportRendering qualified
@@ -51,6 +52,7 @@ main = do
   finalizers <- testSpec "finalizers" Finalizers.spec
   resources <- testSpec "resources" Resources.spec
   poolEvents <- testSpec "pool events" PoolEvents.spec
+  poolFilters <- testSpec "pool filters" PoolFilters.spec
   traceModel <- testSpec "trace model" TraceModel.spec
   ledger <- testSpec "event-log rendering" LogRendering.spec
   testCaseClone <- testSpec "TestCase cloning" TestCaseClone.spec
@@ -82,6 +84,7 @@ main = do
           finalizers,
           resources,
           poolEvents,
+          poolFilters,
           traceModel,
           ledger,
           testCaseClone,

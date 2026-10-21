@@ -20,6 +20,12 @@ module Hegel.Internal.TestCase
     -- * Draw provenance
     recordDraw,
     takeDraws,
+    forgetDraw,
+
+    -- * Filter attempts
+    recordUndo,
+    inAttempt,
+    attempts,
 
     -- * Completion
     Status (..),
@@ -27,19 +33,21 @@ module Hegel.Internal.TestCase
   )
 where
 
-import Control.Exception (bracket, throwIO)
+import Control.Exception (bracket, onException, throwIO)
 import Control.Monad (void)
+import Data.List qualified as List
+import Data.Maybe (fromMaybe, isJust)
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
 import Data.Word (Word32)
 import Foreign (Ptr, alloca, nullPtr, peek)
-import Hegel.Internal.Control (AssumeRejected (..), TestStopped (..))
+import Hegel.Internal.Control (AssumeRejected (..), ControlSignal (..), TestStopped (..), catchControl)
 import Hegel.Internal.Event (Event, Var)
 import Hegel.Internal.Foreign.Raw
 import Hegel.Internal.Foreign.String qualified as String
 import Hegel.Internal.Tick qualified as Tick
-import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef)
+import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Witch qualified
 
 -- * Construction
@@ -56,7 +64,8 @@ mkTestCase recording handle = do
   events <- newIORef Seq.empty
   draws <- newIORef []
   spanDepth <- newIORef 0
-  pure TestCase {handle, slot, recording, events, draws, spanDepth}
+  undo <- newIORef Nothing
+  pure TestCase {handle, slot, recording, events, draws, spanDepth, undo}
 
 -- | Clone @src@ and run @action@ against the clone, freeing it on every
 -- exit, including an exception.
@@ -135,7 +144,11 @@ data TestCase = TestCase
     draws :: !(IORef [Var]),
     -- | How many spans this case has open, so a caller that recovers from an
     -- unwind can close or forget the spans it left behind.
-    spanDepth :: !(IORef Int)
+    spanDepth :: !(IORef Int),
+    -- | Actions that restore what this case's draws took since the innermost
+    -- open filter attempt began, newest first, or 'Nothing' outside any
+    -- attempt. See 'attempts'.
+    undo :: !(IORef (Maybe [IO ()]))
   }
 
 -- * Draw provenance
@@ -153,6 +166,59 @@ takeDraws tc = case tc.recording of
   Tick.Silent -> pure []
   Tick.Active _ -> atomicModifyIORef' tc.draws \vs -> ([], reverse vs)
 {-# INLINE takeDraws #-}
+
+-- | Drop the pending provenance for 'Var' @v@, whose draw was undone.
+forgetDraw :: TestCase -> Var -> IO ()
+forgetDraw tc v = case tc.recording of
+  Tick.Silent -> pure ()
+  Tick.Active _ -> modifyIORef' tc.draws (List.delete v)
+
+-- * Filter attempts
+
+-- | Register an action that restores what a draw just took, which runs if the
+-- filter attempt enclosing the draw is rejected. Outside any filter attempt it
+-- is dropped.
+recordUndo :: TestCase -> IO () -> IO ()
+recordUndo tc act = modifyIORef' tc.undo (fmap (act :))
+
+-- | Is a filter attempt open on this case?
+inAttempt :: TestCase -> IO Bool
+inAttempt tc = isJust <$> readIORef tc.undo
+
+-- | Run @attempt@ up to @n@ times until it returns 'Just', yielding that result
+-- or 'Nothing' once every attempt has been rejected.
+--
+-- What a rejected attempt's draws took stays taken until the attempts are
+-- over, so no later attempt draws it again, and is then put back. A kept
+-- attempt's restores pass to the enclosing attempt, so they still run if that
+-- attempt is rejected. An attempt that throws 'AssumeRejected' rejects the
+-- whole loop, putting back everything the attempts took before the exception
+-- propagates.
+attempts :: TestCase -> Int -> IO (Maybe a) -> IO (Maybe a)
+attempts tc n attempt = do
+  outer <- readIORef tc.undo
+  (result, kept, rejected) <- go n [] `onException` writeIORef tc.undo outer
+  writeIORef tc.undo outer
+  sequence_ rejected
+  modifyIORef' tc.undo (fmap (kept <>))
+  pure result
+  where
+    taken = fromMaybe [] <$> readIORef tc.undo
+    go k rejected = do
+      writeIORef tc.undo (Just [])
+      result <-
+        attempt `catchControl` \case
+          Assume -> do
+            undos <- taken
+            sequence_ (undos <> rejected)
+            throwIO AssumeRejected
+          Stop -> throwIO TestStopped
+      undos <- taken
+      case result of
+        Just _ -> pure (result, undos, rejected)
+        Nothing
+          | k > 1 -> go (k - 1) (undos <> rejected)
+          | otherwise -> pure (Nothing, [], undos <> rejected)
 
 -- * Completion
 

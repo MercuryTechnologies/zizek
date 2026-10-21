@@ -210,6 +210,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_new_pool,
     hegel_pool_add,
     hegel_pool_generate,
+    hegel_pool_restore,
     hegel_pool_free,
     hegel_new_state_machine,
     hegel_state_machine_next_group,
@@ -1121,6 +1122,20 @@ foreign import ccall unsafe "hegel_pool_generate"
     -> Ptr HegelPool -- ^ @pool@ (borrowed)
     -> CBool         -- ^ @consume@ (remove from pool)
     -> Ptr Int64     -- ^ out: @variable_id@
+    -> IO CInt
+
+-- | Put back @variable_id@, which a consuming 'hegel_pool_generate' removed
+-- from the pool, so it can be drawn again. Any handle of the test-case family
+-- may put it back.
+--
+-- Returns 'HEGEL_E_INVALID_ARG' when @variable_id@ is not a consumed variable
+-- of the pool.
+foreign import ccall unsafe "hegel_pool_restore"
+  hegel_pool_restore
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Ptr HegelPool -- ^ @pool@ (borrowed)
+    -> Int64         -- ^ @variable_id@
     -> IO CInt
 
 -- | Release a pool handle from 'hegel_new_pool'. Safe to call with @NULL@,

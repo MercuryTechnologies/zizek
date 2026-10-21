@@ -35,7 +35,8 @@ data Event = Event
 -- | What the pool operation was.
 --
 -- __NOTE__: @libhegel@ does not provide a primitive for tracking variable
--- "death", so the only way a value leaves a pool is via a consuming draw.
+-- "death", so the only way a value leaves a pool is via a consuming draw that
+-- no later 'Restored' event puts back.
 data Operation
   = -- | A value is registered via 'Hegel.Pool.add'.
     Born !(Maybe Var)
@@ -43,6 +44,8 @@ data Operation
     Reused
   | -- | Drawn and removed via 'Hegel.Pool.consume'.
     Consumed
+  | -- | Put back in the pool after a rejected filter attempt consumed it.
+    Restored
   | -- | Labeled via 'Hegel.Pool.named'.
     Named !Text
   deriving stock (Show, Eq)
