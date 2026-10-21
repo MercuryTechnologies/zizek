@@ -36,7 +36,7 @@ data RowKind
     NodeRow
   | -- | A dim detail line under a step: a free draw or an annotation.
     DetailRow
-  | -- | @N steps elided@ between two rendered steps.
+  | -- | @N steps elided@ in place of a run of steps that were left out.
     ElisionRow
   deriving stock (Show, Eq)
 
@@ -76,7 +76,7 @@ relevantRoots trace =
 -- unconditionally, so a higher-numbered step from another worker in that
 -- same round can be kept after it.
 layoutRows :: Style -> Trace -> [Row]
-layoutRows opts trace = preludeRows <> go Nothing kept
+layoutRows opts trace = preludeRows <> go 0 kept
   where
     roots = relevantRoots trace
     relevantStep s = s.failed || null roots || any onRoot s.touches
@@ -88,17 +88,17 @@ layoutRows opts trace = preludeRows <> go Nothing kept
     kept = filter relevantStep realSteps
     preludeRows = concatMap detailRows [s | s <- trace.steps, s.index == 0]
 
-    go _ [] = []
-    go mLo (s : rest) =
-      elisionBetween mLo s.index
+    go lo [] = elisionBetween lo maxBound
+    go lo (s : rest) =
+      elisionBetween lo s.index
         <> (stepRow s : detailRows s)
-        <> go (Just s.index) rest
+        <> go s.index rest
 
-    -- Elision rows for the gap between the previous kept step and this one.
-    elisionBetween mLo hi =
+    -- The elision row for the steps strictly between two kept steps, or
+    -- before the first or after the last when 0 or 'maxBound' stands in.
+    elisionBetween lo hi =
       [ Row {kind = ElisionRow, gutter = Blank, stepNo = Nothing, call = elisionLabel between, origin = Nothing}
-      | lo <- maybe [] pure mLo,
-        let between = [st | st <- realSteps, st.index > lo, st.index < hi],
+      | let between = [st | st <- realSteps, st.index > lo, st.index < hi],
         not (null between)
       ]
     -- Names the value(s) the elided run touched. Nothing when the run

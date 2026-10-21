@@ -113,6 +113,27 @@ spec = do
       out `shouldNotSatisfy` T.isInfixOf "write v..."
 
   describe "layoutRows" do
+    it "elides an irrelevant run before the first and after the last kept step" do
+      -- noop(1) is irrelevant and precedes the step that births the value;
+      -- noop(4) trails the failing step, as a concurrent round's fold can
+      -- leave it.
+      let notes =
+            [ header (Tick 1) 1 "noop",
+              header (Tick 2) 2 "open",
+              noteAt (Tick 4) 1 (Drawn [h1]) "h",
+              header (Tick 5) 3 "read",
+              noteAt (Tick 7) 1 (Failure Nothing) "boom",
+              header (Tick 8) 4 "noop"
+            ]
+          events = [eventAt (Tick 3) h1 (Born Nothing), eventAt (Tick 6) h1 Reused]
+          rows = Layout.layoutRows (defaultStyle Style.unicode) (Trace.build notes events)
+      fmap (\r -> (r.kind, r.stepNo, r.call)) rows
+        `shouldBe` [ (Layout.ElisionRow, Nothing, "1 step elided"),
+                     (Layout.NodeRow, Just 2, "open v₁"),
+                     (Layout.NodeRow, Just 3, "read v₁"),
+                     (Layout.ElisionRow, Nothing, "1 step elided")
+                   ]
+
     it "puts the failing row last (chronological)" do
       -- Chronological: the oldest step leads, the failing step is the last row.
       -- (The event log carries no diff — the composed report's splice does.)
