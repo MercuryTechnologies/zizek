@@ -28,6 +28,8 @@ module Hegel.Property.Internal
     -- * Events
     event,
     eventValue,
+    target,
+    targetWithLabel,
 
     -- * Discards
     assume,
@@ -81,7 +83,7 @@ import Control.Monad.Trans.Reader (ReaderT (..), ask, local)
 import Data.Foldable (for_, toList, traverse_)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
-import Data.Maybe (catMaybes, listToMaybe)
+import Data.Maybe (catMaybes, fromMaybe, listToMaybe)
 import Data.Sequence ((|>))
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
@@ -89,11 +91,12 @@ import Data.Text qualified as T
 import GHC.Stack (CallStack, HasCallStack, SrcLoc, callStack, withFrozenCallStack)
 import Hegel.Assertion (AssertionFailure (..), callSite)
 import Hegel.Diff (Diff)
-import Hegel.Exception (Diagnostic (..), ValidationError (..))
+import Hegel.Exception (Diagnostic (..), HegelError (..), ValidationError (..))
 import Hegel.Gen.Internal (AssumeRejected (..), Gen, draw)
 import Hegel.Internal.Control (MalformedTest (..), NoBacktrace (..), isControlSignal, isFailure, malformedTest, onFailure)
 import Hegel.Internal.DataSource qualified as DataSource
 import Hegel.Internal.Event qualified as Event
+import Hegel.Internal.Foreign.Raw (pattern HEGEL_E_INVALID_ARG)
 import Hegel.Internal.TestCase (TestCase (..))
 import Hegel.Internal.TestCase qualified as TestCase
 import Hegel.Internal.Tick qualified as Tick
@@ -347,6 +350,39 @@ eventValue label value
   | otherwise = PropertyT do
       env <- ask
       liftIO (DataSource.eventValue env.testCase label value)
+
+-- | Steer generation toward test cases that produce a higher @score@,
+-- recorded under the empty label.
+--
+-- Higher scores are more interesting, so negate a score to minimize it. The
+-- score must be finite, and it has no effect unless the
+-- 'Hegel.Phase.Target' phase is enabled.
+--
+-- A label may be recorded at most once per test case, counting every branch,
+-- fork, and stateful worker, so a repeat aborts the run as a malformed test.
+-- To target a per-step metric of a stateful machine, keep its running maximum
+-- in an 'IORef' and target it once after 'Hegel.Stateful.run' returns.
+target :: (HasCallStack, MonadIO m) => Double -> PropertyT m ()
+target = withFrozenCallStack (targetWithLabel "")
+
+-- | 'target' a @score@ under @label@, where each label is an independent goal.
+targetWithLabel :: (HasCallStack, MonadIO m) => Text -> Double -> PropertyT m ()
+targetWithLabel label score
+  | isNaN score || isInfinite score =
+      liftIO . E.throwIO $
+        malformedTest "Hegel.Property.target" "a target score must be finite" [("label", label), ("value", T.pack (show score))]
+  | otherwise = PropertyT do
+      env <- ask
+      liftIO $ DataSource.target env.testCase label score `E.catch` rejected
+  where
+    -- The engine's only invalid-argument rejection here, once the score is
+    -- finite, is a label recorded twice.
+    rejected :: HegelError -> IO ()
+    rejected e
+      | e.code == HEGEL_E_INVALID_ARG =
+          let detail = fromMaybe "a label was recorded twice in one test case" e.message
+           in E.throwIO $ malformedTest "Hegel.Property.target" detail [("label", label)]
+      | otherwise = E.throwIO e
 
 -- | Discard the current test case when the condition is 'False'.
 --

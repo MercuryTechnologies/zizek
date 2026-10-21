@@ -47,6 +47,10 @@ module Hegel.Property
     event,
     eventValue,
 
+    -- * Targeting
+    target,
+    targetWithLabel,
+
     -- * Discards
     assume,
     discard,
@@ -98,6 +102,8 @@ import Hegel.Property.Internal
     registerFinalizer,
     resource,
     resource_,
+    target,
+    targetWithLabel,
   )
 import Hegel.Report (Report (..), Result (Ok), throwOnFailure)
 import Hegel.Report.Encoding qualified as Encoding

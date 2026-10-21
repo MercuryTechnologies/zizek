@@ -39,6 +39,8 @@ module Hegel
     footnote,
     event,
     eventValue,
+    target,
+    targetWithLabel,
     assume,
     discard,
 
@@ -112,6 +114,8 @@ import Hegel.Property
     registerFinalizer,
     resource,
     resource_,
+    target,
+    targetWithLabel,
   )
 import Hegel.Replay
 import Hegel.Report

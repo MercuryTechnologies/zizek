@@ -21,7 +21,7 @@ import Hegel.Hspec qualified as Hspec
 import Hegel.Internal.RunnerConfig qualified as Config
 import Hegel.Phase (Phase (..))
 import Hegel.Profile qualified as Profile
-import Hegel.Property (Property, assert, assume, event, eventValue, forAll, registerFinalizer)
+import Hegel.Property (Property, assert, assume, event, eventValue, forAll, registerFinalizer, target, targetWithLabel)
 import Hegel.Property.Branch qualified as Branch
 import Hegel.Replay (encodeReplayToken)
 import Hegel.Report (Abort (..), FailureOutcome (..), Report (..), Result (..))
@@ -156,6 +156,52 @@ spec = do
       Profile.register "zizek-unit-invalid" invalid `shouldThrow` rejected
       Profile.resolve invalid `shouldThrow` rejected
       Profile.resolve defaultSettings {profile = Just "zizek-unit-invalid"} `shouldThrow` \(SettingsError d) -> d.context == "Hegel.Settings.profile"
+
+  describe "targeting" do
+    let targeted = defaultSettings {testCases = Just 200, database = Just DatabaseDisabled}
+        -- Only (500, 500) fails, and the score rises toward it from anywhere.
+        peak :: Property ()
+        peak = do
+          m <- forAll (Gen.int & Gen.min 0 & Gen.max 1000 & Gen.build)
+          n <- forAll (Gen.int & Gen.min 0 & Gen.max 1000 & Gen.build)
+          target . negate . fromIntegral $ (m - 500) ^ (2 :: Int) + (n - 500) ^ (2 :: Int)
+          assert (m /= 500 || n /= 500) "never at the peak"
+        malformedTarget :: Report -> Expectation
+        malformedTarget report = case report.result of
+          Aborted (Errored e) | Just (MalformedTest d) <- fromException e -> d.context `shouldBe` "Hegel.Property.target"
+          other -> expectationFailure $ "expected a malformed-test abort, got: " <> show other
+
+    it "climbs to a narrow maximum" do
+      report <- Runner.check targeted peak
+      report.result `shouldSatisfy` \case
+        Failures {} -> True
+        _ -> False
+
+    it "misses the same maximum without the target phase" do
+      report <- Runner.check targeted {seed = Just (SeedFixed 7), phases = Just [Generate, Shrink]} peak
+      report.result `shouldSatisfy` \case
+        Ok -> True
+        _ -> False
+
+    it "accepts the empty label and many distinct labels in one case" do
+      report <- Runner.check targeted do
+        n <- forAll (Gen.int & Gen.min 1 & Gen.max 20 & Gen.build)
+        target (fromIntegral n)
+        for_ [1 .. n] \i -> targetWithLabel (T.pack (show i)) (fromIntegral i)
+      report.result `shouldSatisfy` \case
+        Ok -> True
+        _ -> False
+
+    it "rejects a non-finite score as a malformed test" do
+      malformedTarget =<< Runner.check targeted (target (1 / 0))
+
+    it "rejects a label recorded twice in one case" do
+      malformedTarget =<< Runner.check targeted (targetWithLabel "x" 1 >> targetWithLabel "x" 2)
+
+    it "counts a branch's labels against the whole case" do
+      malformedTarget =<< Runner.check targeted do
+        targetWithLabel "x" 1
+        Branch.concurrently_ (targetWithLabel "x" 2) (pure ())
 
   describe "runner configuration" do
     it "validates effective programmatic settings after overrides" do

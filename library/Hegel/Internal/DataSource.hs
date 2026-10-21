@@ -68,6 +68,7 @@ module Hegel.Internal.DataSource
     -- * Events
     event,
     eventValue,
+    target,
 
     -- * Spans
     Label (..),
@@ -897,6 +898,15 @@ eventValue :: TestCase -> Text -> Double -> IO ()
 eventValue tc label value =
   String.withText label \p ->
     hegel_event_value tc.handle.ctx tc.handle.ptr (realToFrac value) p >>= handleReturnCode tc
+
+-- | Record a score under @label@ for the targeting phase to climb toward.
+--
+-- The engine rejects a non-finite @value@, and a @label@ recorded twice in
+-- one test case, counting every clone of it.
+target :: TestCase -> Text -> Double -> IO ()
+target tc label value =
+  String.withText label \p ->
+    hegel_target tc.handle.ctx tc.handle.ptr (realToFrac value) p >>= handleReturnCode tc
 
 -- * Spans
 
