@@ -75,10 +75,15 @@ type CodepointRange = (Int, Int)
 -- where possible; only reach for 'ranges' when the alphabet spans more than
 -- one block, since a single min\/max pair can only express one contiguous
 -- range.
+--
+-- Only codepoints that are Unicode scalar values count, so surrogates and
+-- values beyond @0x10FFFF@ in a range are left out of the alphabet.
 ranges :: [CodepointRange] -> CharBuilder
 ranges rs = char & categories [] & includeCharacters (T.pack (concatMap expand rs))
   where
-    expand (lo, hi) = map Char.chr [lo .. hi]
+    expand (lo, hi) = map Char.chr (filter isScalar [lo .. hi])
+    isScalar :: Int -> Bool
+    isScalar n = n >= 0 && n <= 0x10FFFF && (n < 0xD800 || n > 0xDFFF)
 
 -- | ASCII characters, codepoints @[0x00, 0x7F]@.
 ascii :: CharBuilder

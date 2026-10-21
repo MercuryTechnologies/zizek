@@ -95,6 +95,14 @@ spec = describe "Hegel.Alphabet" do
       prop (Alphabet.ranges [(0x41, 0x42), (0x61, 0x62)] & Gen.build) $ \c ->
         c `shouldSatisfy` (`elem` ("ABab" :: String))
 
+    it "leaves surrogates out of a range that straddles them" $ do
+      seen <- sample 200 (Alphabet.ranges [(0xD7FF, 0xE000)])
+      seen `shouldBe` Set.fromList "\xD7FF\xE000"
+
+    it "leaves codepoints beyond the last code point out of a range" $ do
+      seen <- sample 50 (Alphabet.ranges [(0x10FFFF, 0x110000)])
+      seen `shouldBe` Set.fromList "\x10FFFF"
+
     it "spans every given range" $ do
       seen <- sample 500 (Alphabet.ranges [(0x41, 0x42), (0x61, 0x62)])
       seen `shouldBe` Set.fromList "ABab"
