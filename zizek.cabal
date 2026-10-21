@@ -125,6 +125,7 @@ library
     Hegel.Gen.NonEmpty
     Hegel.Gen.Recursive
     Hegel.Gen.Regex
+    Hegel.Gen.Sequence
     Hegel.Gen.Set
     Hegel.Gen.Text
     Hegel.Gen.Time
@@ -257,6 +258,7 @@ test-suite unit
     Resources
     RunnerConfiguration
     Sampling
+    SequenceGenerators
     SourceRendering
     StandardGenerators
     Stateful

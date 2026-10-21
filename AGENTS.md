@@ -134,12 +134,13 @@ The `Build`, `HasMin`, `HasMax`, `HasSize`, and `HasYear` typeclasses in `Hegel.
 - bool: `weighted`
 - list: `unique`
 - recursive: `maxDepth`, `maxLeaves`
+- sample: `withReplacement`, `withoutReplacement`
 
 The duration builder takes its bounds through `min` and `max`, and `milliseconds`, `seconds`, `minutes`, and `hours` build those bound values, as in `Gen.duration & Gen.max (Gen.minutes 5)`.
 
 Applying an inapplicable modifier (e.g. `Gen.uuid & Gen.min 0`) is a type error. There are no `*Options` records on the public API.
 
-Builder families beyond the sample above: `text`, `char`, `regex`, `uuid`, `uri`/`uriText`, `domain`, `email`, `date`, `time`, `datetime`, `duration`, `recursive`, and the collections (`list`, `nonEmpty`, `set`/`hashSet`/`intSet`, `map`/`hashMap`/`intMap`). Choice and conditional combinators (`oneOf`, `element`, `frequency`, `filtered`, `mapMaybe`, `just`, `defer`, `enum`/`enumBounded`, `maybe`, `either`) are not builders. They produce `Gen` values directly, with no `& Gen.build`.
+Builder families beyond the sample above: `text`, `char`, `regex`, `uuid`, `uri`/`uriText`, `domain`, `email`, `date`, `time`, `datetime`, `duration`, `recursive`, and the collections (`list`, `nonEmpty`, `set`/`hashSet`/`intSet`, `map`/`hashMap`/`intMap`), plus the sequence builders `subsequence` and `sample` over a fixed list. Choice and conditional combinators (`oneOf`, `element`, `permutation`, `frequency`, `filtered`, `mapMaybe`, `just`, `defer`, `enum`/`enumBounded`, `maybe`, `either`) are not builders. They produce `Gen` values directly, with no `& Gen.build`.
 
 ## Documentation & Comment Style
 

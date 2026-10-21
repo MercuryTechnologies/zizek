@@ -965,6 +965,9 @@ data Label
   | LabelDuration
   | LabelJust
   | LabelSampledFrom
+  | LabelPermutation
+  | LabelSubsequence
+  | LabelSample
   | LabelList
   | LabelSet
   | LabelMap
@@ -1003,6 +1006,9 @@ labelName = \case
   LabelDuration -> "zizek.duration"
   LabelJust -> "zizek.just"
   LabelSampledFrom -> "zizek.sampled_from"
+  LabelPermutation -> "zizek.permutation"
+  LabelSubsequence -> "zizek.subsequence"
+  LabelSample -> "zizek.sample"
   LabelList -> "zizek.list"
   LabelSet -> "zizek.set"
   LabelMap -> "zizek.map"

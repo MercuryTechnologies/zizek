@@ -268,6 +268,36 @@ spec = do
         prop (Gen.list (Gen.bool & Gen.build) & Gen.minSize 10 & Gen.maxSize 5 & Gen.build) (\_ -> pure ())
           `shouldThrow` messageContains "Hegel.Gen.List"
 
+    describe "Gen.subsequence" $ do
+      it "rejects a negative minSize" $ do
+        prop (Gen.subsequence "abc" & Gen.minSize (-1) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Sequence"
+
+      it "rejects an inverted minSize/maxSize" $ do
+        prop (Gen.subsequence "abc" & Gen.minSize 2 & Gen.maxSize 1 & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Sequence"
+
+      it "rejects a minSize larger than its input" $ do
+        prop (Gen.subsequence "abc" & Gen.minSize 4 & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Sequence"
+
+    describe "Gen.sample" $ do
+      it "rejects an inverted minSize/maxSize" $ do
+        prop (Gen.sample "abc" & Gen.minSize 2 & Gen.maxSize 1 & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Sequence"
+
+      it "rejects a nonempty sample of an empty input" $ do
+        prop (Gen.sample ([] :: [Int]) & Gen.minSize 1 & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Sequence"
+
+      it "rejects a minSize larger than its input without replacement" $ do
+        prop (Gen.sample "abc" & Gen.withoutReplacement & Gen.minSize 4 & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Sequence"
+
+      it "allows a minSize larger than its input with replacement" $ do
+        prop (Gen.sample "abc" & Gen.minSize 4 & Gen.maxSize 4 & Gen.build) \xs ->
+          length xs `shouldBe` 4
+
     describe "Gen.nonEmpty" $ do
       it "rejects a minSize of 0" $ do
         prop (Gen.nonEmpty (Gen.bool & Gen.build) & Gen.minSize 0 & Gen.build) (\_ -> pure ())

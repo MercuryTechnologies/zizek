@@ -73,6 +73,15 @@ module Hegel.Gen
     list,
     unique,
 
+    -- * Sequence
+    permutation,
+    SubsequenceBuilder,
+    subsequence,
+    SampleBuilder,
+    sample,
+    withReplacement,
+    withoutReplacement,
+
     -- * NonEmpty
     NonEmptyBuilder,
     nonEmpty,
@@ -264,6 +273,15 @@ import Hegel.Gen.Map (MapBuilder, map)
 import Hegel.Gen.NonEmpty (NonEmptyBuilder, nonEmpty)
 import Hegel.Gen.Recursive (RecursionContext (..), RecursiveBuilder, maxDepth, maxLeaves, recursive)
 import Hegel.Gen.Regex (RegexBuilder, fullMatch, regex)
+import Hegel.Gen.Sequence
+  ( SampleBuilder,
+    SubsequenceBuilder,
+    permutation,
+    sample,
+    subsequence,
+    withReplacement,
+    withoutReplacement,
+  )
 import Hegel.Gen.Set (SetBuilder, set)
 import Hegel.Gen.Text (TextBuilder, text)
 import Hegel.Gen.Time (TimeBuilder, time)

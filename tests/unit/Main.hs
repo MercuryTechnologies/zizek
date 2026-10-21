@@ -20,6 +20,7 @@ import ReportRendering qualified
 import Resources qualified
 import RunnerConfiguration qualified
 import Sampling qualified
+import SequenceGenerators qualified
 import SourceRendering qualified
 import StandardGenerators qualified
 import Stateful qualified
@@ -60,6 +61,7 @@ main = do
   forkProperties <- testSpec "fork combinators" ForkProperties.spec
   sampling <- testSpec "sampling" Sampling.spec
   recursiveGenerators <- testSpec "recursive generators" RecursiveGenerators.spec
+  sequenceGenerators <- testSpec "sequence generators" SequenceGenerators.spec
   runnerConfiguration <- testSpec "runner configuration" RunnerConfiguration.spec
   defaultMain
     ( testGroup
@@ -91,6 +93,7 @@ main = do
           branchProperties,
           forkProperties,
           sampling,
-          recursiveGenerators
+          recursiveGenerators,
+          sequenceGenerators
         ]
     )
