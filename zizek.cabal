@@ -243,6 +243,7 @@ test-suite unit
     ConcurrentStateful
     ControlSignals
     DatabaseReplay
+    DiffRendering
     Finalizers
     ForkProperties
     GenValidation

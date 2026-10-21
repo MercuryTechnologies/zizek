@@ -221,10 +221,12 @@ mkLineDiff indent0 prefix0 dd =
         DocAdded indent x -> [LineAdded $ T.pack (mkLinePrefix indent ++ x)]
         DocOpen indent x -> [LineSame $ T.pack (mkLinePrefix indent ++ x)]
         DocItem _ _ [] -> []
-        DocItem indent prefix (x@DocRemoved {} : y@DocAdded {} : xs) ->
-          mkLineDiff (mkLineIndent indent) prefix x
-            ++ mkLineDiff (mkLineIndent indent) prefix y
-            ++ concatMap (mkLineDiff (mkLineIndent (indent + length prefix)) "") xs
+        DocItem indent prefix (x@DocRemoved {} : xs)
+          | (continued, y@DocAdded {} : ys) <- span isRemoved xs ->
+              mkLineDiff (mkLineIndent indent) prefix x
+                ++ concatMap (mkLineDiff (mkLineIndent (indent + length prefix)) "") continued
+                ++ mkLineDiff (mkLineIndent indent) prefix y
+                ++ concatMap (mkLineDiff (mkLineIndent (indent + length prefix)) "") ys
         DocItem indent prefix (x : xs) ->
           mkLineDiff (mkLineIndent indent) prefix x
             ++ concatMap (mkLineDiff (mkLineIndent (indent + length prefix)) "") xs
@@ -274,3 +276,7 @@ added indent = fmap (DocAdded indent) . lines
 
 spaces :: Int -> String
 spaces n = replicate n ' '
+
+isRemoved :: DocDiff -> Bool
+isRemoved DocRemoved {} = True
+isRemoved _ = False

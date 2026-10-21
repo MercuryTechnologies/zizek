@@ -6,6 +6,7 @@ import BranchProperties qualified
 import ConcurrentStateful qualified
 import ControlSignals qualified
 import DatabaseReplay qualified
+import DiffRendering qualified
 import Finalizers qualified
 import ForkProperties qualified
 import GenValidation qualified
@@ -62,6 +63,7 @@ main = do
   sampling <- testSpec "sampling" Sampling.spec
   recursiveGenerators <- testSpec "recursive generators" RecursiveGenerators.spec
   sequenceGenerators <- testSpec "sequence generators" SequenceGenerators.spec
+  diffRendering <- testSpec "diff rendering" DiffRendering.spec
   runnerConfiguration <- testSpec "runner configuration" RunnerConfiguration.spec
   defaultMain
     ( testGroup
@@ -94,6 +96,7 @@ main = do
           forkProperties,
           sampling,
           recursiveGenerators,
-          sequenceGenerators
+          sequenceGenerators,
+          diffRendering
         ]
     )
