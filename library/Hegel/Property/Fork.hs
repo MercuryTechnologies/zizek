@@ -3,9 +3,12 @@
 --
 -- 'spawn' returns a handle immediately, without waiting for it. 'join' waits
 -- for its result, 'cancel' abandons it, and 'poll' checks its status without
--- discharging the join-or-cancel obligation. Every fork must be joined or
--- cancelled before its scope ends; one left open aborts the run as a
--- malformed test, since an unjoined fork is a defect in the test itself.
+-- discharging the join-or-cancel obligation. A body that returns normally must
+-- have joined or cancelled every fork it spawned, and one left open aborts the
+-- run as a malformed test.
+--
+-- A body that fails or discards before reaching its joins has its open forks
+-- cancelled silently, so the failure or discard is reported as usual.
 --
 -- A joined fork's failure rethrows bare, so it shrinks as an ordinary
 -- counterexample.

@@ -569,9 +569,13 @@ runTestCase ctx action captures tcPtr = do
               pure . Interesting $ originOf e
       -- Must settle every fork before markComplete: one still drawing
       -- against its clone when the family completes fails with an engine
-      -- error of its own, rather than the well-formed 'MalformedTest'
-      -- 'closeOpenForks' produces here.
-      closeOpenForks forks
+      -- error of its own, rather than the well-formed `MalformedTest`
+      -- `closeOpenForks` produces here. A case that ended early, by a
+      -- failure or a discard, leaves its forks to be abandoned silently,
+      -- since the body never reached their join.
+      case status of
+        Valid -> closeOpenForks forks
+        _ -> void (collectLeaks forks)
       markComplete tc status
       pure status
 

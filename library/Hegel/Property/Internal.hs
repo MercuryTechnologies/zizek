@@ -650,7 +650,9 @@ runBranch runBase parentEnv testCase body = E.mask \restore -> do
     tryProperty (restore (runBase (runPropertyT branchEnv body)))
       `E.onException` void (collectLeaks openForks)
       `E.finally` void (drainFinalizers finalizers)
-  closeOpenForks openForks
+  -- A body that exited early never reached its joins, so only a body that
+  -- returned normally can have leaked a fork.
+  either (const (void (collectLeaks openForks))) (const (closeOpenForks openForks)) eRes
   notes <- drainNotes
   failureNotes <- case (branchJournal, eRes) of
     (Recording _, Left e) | isFailure e -> do

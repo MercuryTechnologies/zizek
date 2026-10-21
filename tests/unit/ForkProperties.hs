@@ -18,6 +18,7 @@ import Hegel.Property
     Property,
     annotateShow,
     assert,
+    assume,
     check,
     forAll,
   )
@@ -205,6 +206,34 @@ spec = describe "Hegel.Property.Fork" do
         Aborted (Errored e) ->
           T.pack (displayException e) `shouldSatisfy` T.isInfixOf "fork failed before anyone joined it"
         other -> expectationFailure ("expected Aborted Errored, got: " <> show other)
+
+  describe "forks open when the body exits early" do
+    it "reports an assertion failure raised before the join" do
+      report <- check def do
+        f <- Fork.spawn (pure ())
+        assert False "failed before the join"
+        Fork.join f
+      case singleCapturedEvidence report.result of
+        Just FailureEvidence {message} -> message `shouldBe` "failed before the join"
+        other -> expectationFailure ("expected failure, got: " <> show other)
+
+    it "treats a discard before the join as a discard" do
+      report <- check def do
+        f <- Fork.spawn (pure ())
+        x <- forAll (intR (0, 10))
+        assume (x > 5)
+        Fork.join f
+      report.result `shouldSatisfy` isOk
+
+    it "reports a branch's assertion failure raised before its fork is joined" do
+      report <- check def do
+        Branch.replicateConcurrently_ 2 do
+          f <- Fork.spawn (pure ())
+          assert False "branch failed before the join"
+          Fork.join f
+      case report.result of
+        Failures _ -> pure ()
+        other -> expectationFailure ("expected failure, got: " <> show other)
 
   describe "clone-depth guard" do
     it "fails the case when Fork.spawn nests past maxCloneDepth" do
