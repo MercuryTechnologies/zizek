@@ -9,6 +9,7 @@ module GenValidation (spec) where
 import Control.Exception (evaluate, fromException, throwIO)
 import Control.Monad (void)
 import Control.Monad.IO.Class (liftIO)
+import Data.Char (GeneralCategory (UppercaseLetter))
 import Data.Foldable (for_, traverse_)
 import Data.Function ((&))
 import Data.IORef
@@ -74,6 +75,10 @@ spec = do
     it "treats a maxCodepoint beyond the last code point as no upper limit" do
       cs <- Runner.samples defaultSettings {seed = Just (SeedFixed 7)} 50 (Gen.char & Gen.minCodepoint 70 & Gen.maxCodepoint 4294967361 & Gen.build)
       cs `shouldSatisfy` all (>= 'F')
+
+    it "rejects categories combined with excludeCategories instead of ignoring the exclusion" do
+      Runner.sample defaultSettings (void (Gen.char & Gen.categories [UppercaseLetter] & Gen.excludeCategories [UppercaseLetter] & Gen.build)) `shouldThrow` \(ValidationError d) ->
+        d.context == "Hegel.Gen.Char" && d.detail == "categories and excludeCategories are mutually exclusive"
 
     it "shrinks generated invalid bounds and replays the smallest failing input" do
       let body :: Property.Property ()
