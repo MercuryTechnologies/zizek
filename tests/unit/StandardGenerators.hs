@@ -1,6 +1,7 @@
 module StandardGenerators (spec) where
 
 import Data.ByteString qualified as BS
+import Data.Char (GeneralCategory (OtherLetter), generalCategory)
 import Data.Foldable (traverse_)
 import Data.Function ((&))
 import Data.Text qualified as T
@@ -201,6 +202,13 @@ spec = do
   describe "Gen.char" $ do
     it "draws Char values" $ do
       check_ (defaultSettings {testCases = Just 1}) $ forEach (Gen.char & Gen.build) $ \_ -> pure ()
+
+    -- The range spans CJK Extension H, letters since Unicode 15, and
+    -- Extension J, letters since Unicode 17. A drawn letter is unassigned by
+    -- Data.Char's reckoning whenever the engine classifies by newer tables.
+    it "classifies characters by the Unicode version Data.Char follows" $
+      prop (Gen.char & Gen.minCodepoint 0x31350 & Gen.maxCodepoint 0x3347F & Gen.categories [OtherLetter] & Gen.build) $ \c ->
+        generalCategory c `shouldBe` OtherLetter
 
   describe "Gen.regex" $ do
     it "draws Text values" $ do

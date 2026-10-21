@@ -10,6 +10,7 @@ module Hegel.Internal.Foreign.String
     withBytes,
     withOptText,
     withTexts,
+    withOptTexts,
     peekText,
     peekBytes,
     peekOptText,
@@ -69,6 +70,12 @@ withTexts :: [Text] -> (Ptr HegelString -> CSize -> IO a) -> IO a
 withTexts ts k =
   withMany (BS.useAsCStringLen . TE.encodeUtf8) ts \cstrs ->
     withArrayLen (fromCStringLen <$> cstrs) \n arr -> k arr (fromIntegral n)
+
+-- | Pass an optional list of strings as a nullable array and its length,
+-- where 'Nothing' is @NULL@ with length zero.
+withOptTexts :: Maybe [Text] -> (Ptr HegelString -> CSize -> IO a) -> IO a
+withOptTexts Nothing k = k nullPtr 0
+withOptTexts (Just ts) k = withTexts ts k
 
 fromCStringLen :: CStringLen -> HegelString
 fromCStringLen (p, n) = HegelString {strData = p, strLen = fromIntegral n}

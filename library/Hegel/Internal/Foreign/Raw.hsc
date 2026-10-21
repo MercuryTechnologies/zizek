@@ -297,7 +297,7 @@ where
 
 import Control.Exception (bracket, finally, mask, throwIO, try)
 import Hegel.Exception (HegelError (..))
-import Control.Monad (void)
+import Control.Monad (mfilter, void)
 import Data.ByteString (ByteString)
 import Data.Int (Int32, Int64)
 import Data.Text (Text)
@@ -360,13 +360,12 @@ data HegelRecursion
 
 -- $typedrawresults
 --
--- Caller-owned buffers filled in by 'hegel_generate_bytes' \/
--- 'hegel_generate_string'. Both are @{ pointer, length }@ pairs: the byte
--- buffer is never NUL-terminated (a text buffer may contain interior NULs —
--- the drawn alphabet can include U+0000), so always read exactly 'len' bytes
--- and never treat 'CString'\/'Ptr' 'Word8' fields as C strings. Each must be
--- released exactly once with its matching @_result_free@, which also zeroes
--- the struct in place.
+-- Caller-owned pointer and length pairs filled in by 'hegel_generate_bytes'
+-- and 'hegel_generate_string'. Always read exactly the given length, because a
+-- byte buffer has no terminator and a drawn string may contain U+0000.
+--
+-- Release each exactly once, with 'hegel_generate_bytes_result_free' or
+-- 'hegel_owned_string_free', which also zeroes the struct in place.
 
 -- | Mirrors @hegel_generate_bytes_result_t@.
 data HegelBytesResult = HegelBytesResult
@@ -699,9 +698,7 @@ foreign import ccall unsafe "hegel_context_free"
   hegel_context_free :: Ptr HegelContext -> IO CInt
 
 -- | Write the most recent error message recorded on the context into
--- @*out_error@, or the empty string if the most recent call succeeded. Calls
--- through @cbits/string_shim.c@, which writes the by-value result through an
--- out-pointer.
+-- @*out_error@, or the empty string if the most recent call succeeded.
 --
 -- The string borrows the context's buffer and is invalidated by the next
 -- @libhegel@ call on the same context, so copy it before another call.
@@ -1182,17 +1179,17 @@ foreign import ccall unsafe "hegel_new_state_machine"
     :: Ptr HegelContext
     -> Ptr HegelTestCase
     -> Ptr HegelString -- ^ @rule_names@
-    -> Ptr Int64    -- ^ @rule_groups@ (parallel to @rule_names@)
-    -> Ptr CDouble  -- ^ @rule_weights@ (parallel to @rule_names@, or @NULL@)
-    -> CSize        -- ^ @num_rules@
+    -> Ptr Int64       -- ^ @rule_groups@ (parallel to @rule_names@)
+    -> Ptr CDouble     -- ^ @rule_weights@ (parallel to @rule_names@, or @NULL@)
+    -> CSize           -- ^ @num_rules@
     -> Ptr HegelString -- ^ @invariant_names@
-    -> Ptr CBool    -- ^ @invariant_always_check@ (parallel to @invariant_names@, or @NULL@)
-    -> CSize        -- ^ @num_invariants@
-    -> Int64        -- ^ @min_concurrency@
-    -> Int64        -- ^ @max_concurrency@
-    -> Int64        -- ^ @step_count@
+    -> Ptr CBool       -- ^ @invariant_always_check@ (parallel to @invariant_names@, or @NULL@)
+    -> CSize           -- ^ @num_invariants@
+    -> Int64           -- ^ @min_concurrency@
+    -> Int64           -- ^ @max_concurrency@
+    -> Int64           -- ^ @step_count@
     -> Ptr (Ptr HegelStateMachine) -- ^ out: caller-owned handle
-    -> Ptr Int64    -- ^ out: drawn @concurrency@ level
+    -> Ptr Int64       -- ^ out: drawn @concurrency@ level
     -> IO CInt
 
 
@@ -1491,8 +1488,7 @@ foreign import ccall unsafe "hegel_generate_uuid"
 
 -- | Draw a Gregorian calendar date in @[min_value, max_value]@ (both
 -- inclusive), shrinking toward 2000-01-01, or the nearest bound when that is
--- out of range. Calls through @cbits/datetime_shim.c@, which takes the
--- bounds by pointer since GHC's FFI cannot pass a C struct by value.
+-- out of range.
 --
 -- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted. Returns
 -- 'HEGEL_E_INVALID_ARG' for an invalid calendar date in either bound, or
@@ -1508,7 +1504,6 @@ foreign import ccall unsafe "hegel_zizek_generate_date"
 
 -- | Draw a time of day in @[min_value, max_value]@ (both inclusive),
 -- shrinking toward @min_value@, the representable time closest to midnight.
--- Calls through @cbits/datetime_shim.c@; see 'hegel_generate_date'.
 --
 -- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted. Returns
 -- 'HEGEL_E_INVALID_ARG' for an out-of-range field in either bound, or
@@ -1524,7 +1519,6 @@ foreign import ccall unsafe "hegel_zizek_generate_time"
 
 -- | Draw a naive datetime, no timezone, in @[min_value, max_value]@ (both
 -- inclusive), shrinking toward 2000-01-01T00:00:00 clamped into range.
--- Calls through @cbits/datetime_shim.c@; see 'hegel_generate_date'.
 --
 -- Returns 'HEGEL_E_STOP_TEST' when the choice budget is exhausted. Returns
 -- 'HEGEL_E_INVALID_ARG' for an invalid date or time in either bound, or
@@ -1799,8 +1793,9 @@ foreign import ccall unsafe "hegel_failure_origin"
 -- (a minimal counterexample), or a nondeterministic failure's replay state,
 -- through @*out_blob@; 'hegel_run_start_blob' replays either kind.
 --
--- Writes a @NULL@ pointer when the engine produced no blob for this failure, such as an
--- unconfirmed nondeterministic failure or one found by replaying a blob.
+-- Writes a @NULL@ pointer when the engine produced no blob for this failure,
+-- such as an unconfirmed nondeterministic failure or one found by replaying a
+-- blob.
 --
 -- The written pointer is borrowed (see the section notes above);
 -- 'failureReproductionBlob' copies it out.
@@ -1831,8 +1826,7 @@ foreign import ccall unsafe "hegel_version"
 lastErrorMessage :: Ptr HegelContext -> IO (Maybe Text)
 lastErrorMessage ctx = alloca \out -> do
   hegel_context_last_error ctx out
-  msg <- String.peekText out
-  pure (if T.null msg then Nothing else Just msg)
+  mfilter (not . T.null) . Just <$> String.peekText out
 
 -- | Check a @libhegel@ return code; throws 'HegelError' on any non-zero
 -- value, attaching the diagnostic recorded on the context.

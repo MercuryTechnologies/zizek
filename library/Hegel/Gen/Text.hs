@@ -67,7 +67,7 @@ instance Build TextBuilder Text where
                 maxCodepoint = maxBound,
                 categories = Nothing,
                 excludeCategories = Just ["Cs"],
-                includeCharacters = Nothing,
-                excludeCharacters = Nothing
+                includeCharacters = "",
+                excludeCharacters = ""
               }
         Just cb -> buildCharTextGen wireLo wireHi cb

@@ -67,8 +67,8 @@ data CharBuilder = CharBuilder
     bMaxCodepoint :: !(Maybe Int),
     bCategories :: !(Maybe [GeneralCategory]),
     bExcludeCategories :: !(Maybe [GeneralCategory]),
-    bIncludeCharacters :: !(Maybe Text),
-    bExcludeCharacters :: !(Maybe Text),
+    bIncludeCharacters :: !Text,
+    bExcludeCharacters :: !Text,
     -- Track whether 'categories' was set; when True, Cs auto-injection is
     -- suppressed (categories and excludeCategories are mutually exclusive).
     bCategoriesExplicit :: !Bool
@@ -83,8 +83,8 @@ char =
       bMaxCodepoint = Nothing,
       bCategories = Nothing,
       bExcludeCategories = Nothing,
-      bIncludeCharacters = Nothing,
-      bExcludeCharacters = Nothing,
+      bIncludeCharacters = "",
+      bExcludeCharacters = "",
       bCategoriesExplicit = False
     }
 
@@ -113,11 +113,11 @@ excludeCategories cs b = b {bExcludeCategories = Just cs}
 
 -- | Always include these characters even if excluded by other filters.
 includeCharacters :: Text -> CharBuilder -> CharBuilder
-includeCharacters t b = b {bIncludeCharacters = Just t}
+includeCharacters t b = b {bIncludeCharacters = t}
 
 -- | Always exclude these characters.
 excludeCharacters :: Text -> CharBuilder -> CharBuilder
-excludeCharacters t b = b {bExcludeCharacters = Just t}
+excludeCharacters t b = b {bExcludeCharacters = t}
 
 -- | Builders that accept a character-set restriction.
 class HasAlphabet b where

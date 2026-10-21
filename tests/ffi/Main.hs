@@ -377,8 +377,9 @@ stringAbiSpec = describe "hegel_string_t round trips" $ do
         `finally` clear
 
   -- A text generator with no include or exclude set passes empty strings for
-  -- both, which the engine must read as no restriction.
-  it "reads an empty include and exclude string as no restriction" do
+  -- both, which the engine must read as no restriction. The restricted case
+  -- confirms a non-empty include string still narrows the alphabet.
+  it "reads empty include and exclude strings as no restriction, and a non-empty one as a restriction" do
     let distinct gen = Set.size . Set.fromList . concatMap T.unpack <$> Runner.samples def 200 gen
     unrestricted <- distinct (Gen.text & Gen.minSize 1 & Gen.build)
     restricted <- distinct (Gen.text & Gen.minSize 1 & Gen.alphabet (Gen.char & Gen.includeCharacters "ab" & Gen.categories []) & Gen.build)
