@@ -11,13 +11,17 @@
 --
 -- Not yet bound: @hegel_generate_ipv4@\/@_ipv6@, @hegel_note@,
 -- @hegel_test_case_block@, @hegel_test_case_set_worker@,
--- @hegel_test_case_printer@, and the @hegel_printer_*@ and
--- @hegel_reflow_options_*@ families.
+-- @hegel_test_case_printer@, and the @hegel_printer_*@,
+-- @hegel_reflow_options_*@, and @hegel_grammar_*@ families.
 --
 -- __Strings__: every string crosses the boundary as a @hegel_string_t@,
 -- marshalled by "Hegel.Internal.Foreign.String". GHC's FFI cannot pass a C
 -- struct by value, so a function taking one is bound to its @hegel_zizek_*@
 -- shim in @cbits/@, which takes the struct by pointer.
+--
+-- __Signature guard__: @cbits/ffi_signature_guard.c@ in the @ffi@ test suite
+-- holds a copy of every bound function's C prototype, so the build fails when
+-- @hegel.h@ changes one. A new binding needs a line there.
 --
 -- __Calling convention__: every @libhegel@ entry point takes a
 -- @hegel_context_t*@ as its first argument and returns a @hegel_result_t@,

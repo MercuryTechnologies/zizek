@@ -294,9 +294,14 @@ test-suite ffi
   hs-source-dirs: tests/ffi
   main-is: Main.hs
   pkgconfig-depends: hegel
-  -- Closed-world guard: fails to build if libhegel adds an enum variant.
-  c-sources: cbits/wire_enum_guard.c
+  -- Closed-world guards: the build fails if libhegel adds an enum variant or
+  -- changes the signature of a function zizek binds.
+  c-sources:
+    cbits/ffi_signature_guard.c
+    cbits/wire_enum_guard.c
+
   cc-options:
+    -Werror
     -Werror=switch-enum
     -Werror=switch
 
