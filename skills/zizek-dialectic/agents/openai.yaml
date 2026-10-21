@@ -1,0 +1,3 @@
+interface:
+  display_name: "Zizek Dialectic"
+  short_description: "Property-testing suites with zizek and independently reviewable fixes"

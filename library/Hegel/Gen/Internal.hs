@@ -204,25 +204,18 @@ just = mapMaybe Prelude.id
 filtered :: (a -> Bool) -> Gen a -> Gen a
 filtered p = mapMaybe \a -> if p a then Prelude.Just a else Prelude.Nothing
 
--- | Choose one of the given generators. The list must be non-empty;
--- passing @[]@ throws 'ValidationError' when evaluated.
+-- | Choose one of the given generators, each about equally often.
 --
--- /NOTE/: The empirical distribution across branches is __not__ uniform.
---
--- Hypothesis explores novel choice sequences rather than drawing uniformly,
--- so branches that produce more distinct outputs get visited more often.
---
--- For example, @oneOf [Gen.bool, Gen.int32]@ exhausts the @bool@ branch
--- after two cases (it can only produce 'True' or 'False'), so the rest of
--- the run draws almost exclusively from @int32@. See 'frequency' for the
--- underlying mechanism.
+-- The list must be non-empty, and passing @[]@ throws 'ValidationError' when
+-- evaluated. A counterexample shrinks toward the first generator in the list.
 oneOf :: (HasCallStack) => [Gen a] -> Gen a
 oneOf [] = throw (ValidationError Diagnostic {context = "Gen.oneOf", detail = "used with empty list", values = [("choices", "0")], callStack = callStack})
 oneOf gens = OneOf (combineLabels (spanLabel LabelOneOf : fmap labelOf gens)) gens
 
--- | Generate one of the given values (not uniformly — see the distribution
--- note on 'oneOf'). The list must be non-empty; passing @[]@ raises an error
--- at the call site.
+-- | Generate one of the given values, each about equally often.
+--
+-- The list must be non-empty, and passing @[]@ throws 'ValidationError' when
+-- evaluated. A counterexample shrinks toward the first value in the list.
 element :: (HasCallStack) => [a] -> Gen a
 element [] = throw (ValidationError Diagnostic {context = "Gen.element", detail = "used with empty list", values = [("choices", "0")], callStack = callStack})
 element xs = Draw (spanLabel LabelSampledFrom) \tc -> do
@@ -253,25 +246,12 @@ element xs = Draw (spanLabel LabelSampledFrom) \tc -> do
 defer :: Gen a -> Gen a
 defer g = Draw (spanLabel LabelDeferred) \tc -> drawInline tc g
 
--- | Choose one of the given generators, weighted by the accompanying 'Int'.
+-- | Choose one of the given generators about as often as its share of the
+-- total weight.
 --
--- The list must be non-empty and all weights must be positive; violations
--- throw 'ValidationError' when evaluated.
---
--- /NOTE/: Weights bias which branch the engine prefers, especially early in a
--- run, however they do __not__ describe a long-run sampling distribution:
---
--- Hypothesis explores novel choice sequences rather than drawing uniformly, so
--- if branches have different /entropy demand/ (i.e. produce different numbers
--- of distinct outputs) the output distribution will skew towards branches with
--- higher entropy, __not__ a distribution characterized by the given weights.
---
--- For example, imagine you have a recursive, tree-like data structure with a
--- @leaf@ generator that draws leaves & a @recursive@ generator that unfolds
--- more of the tree.
---
--- In this case, @frequency [(10, leaf), (1, recursive)]@ will spend most of
--- its budget on @recursive@ once @leaf@'s novel paths are exhausted.
+-- The list must be non-empty and every weight must be positive, and a
+-- violation throws 'ValidationError' when evaluated. A counterexample shrinks
+-- toward the first generator in the list.
 frequency :: (HasCallStack) => [(Int, Gen a)] -> Gen a
 frequency [] = throw (ValidationError Diagnostic {context = "Gen.frequency", detail = "used with empty list", values = [("choices", "0")], callStack = callStack})
 frequency pairs
