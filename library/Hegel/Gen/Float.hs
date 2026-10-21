@@ -107,7 +107,8 @@ smallestSubnormalFloat = float2Double (encodeFloat 1 (fst (floatRange (0 :: Floa
 -- not exceed the upper.
 --
 -- With an exclusive bound the two must be strictly ordered, since equal
--- endpoints would leave the range empty.
+-- endpoints would leave the range empty. Positive zero ranks above negative
+-- zero, so a lower bound of @0.0@ with an upper bound of @-0.0@ is empty too.
 checkFloatBounds :: (HasCallStack, RealFloat a, Show a) => Text -> FloatBuilder a -> IO ()
 checkFloatBounds what b = do
   checkNotNaN b.bMin
@@ -118,7 +119,11 @@ checkFloatBounds what b = do
           when (lo >= hi) $
             throwIO
               (ValidationError Diagnostic {context = what, detail = "min must be less than max for an exclusive range", values = [("min", T.pack (show lo)), ("max", T.pack (show hi))], callStack = callStack})
-      | otherwise -> checkOrdered what lo hi
+      | otherwise -> do
+          checkOrdered what lo hi
+          when (not (isNegativeZero lo) && isNegativeZero hi && lo == hi) $
+            throwIO
+              (ValidationError Diagnostic {context = what, detail = "min of positive zero exceeds max of negative zero", values = [("min", T.pack (show lo)), ("max", T.pack (show hi))], callStack = callStack})
     _ -> pure ()
   where
     checkNotNaN Nothing = pure ()

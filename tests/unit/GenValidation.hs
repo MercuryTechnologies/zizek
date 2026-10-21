@@ -387,6 +387,16 @@ spec = do
         prop (Gen.double & Gen.min (0 / 0) & Gen.build) (\_ -> pure ())
           `shouldThrow` messageContains "Hegel.Gen.Float"
 
+      it "rejects a lower bound of positive zero above an upper bound of negative zero" $ do
+        prop (Gen.double & Gen.min 0.0 & Gen.max (-0.0) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "positive zero"
+        prop (Gen.float & Gen.min 0.0 & Gen.max (-0.0) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "positive zero"
+
+      it "accepts a range from negative zero to positive zero" $ do
+        xs <- Runner.samples defaultSettings {seed = Just (SeedFixed 1)} 20 (Gen.double & Gen.min (-0.0) & Gen.max 0.0 & Gen.build)
+        xs `shouldSatisfy` all (== 0)
+
     describe "Gen.date" $ do
       it "rejects an inverted min/max" $ do
         prop (Gen.date & Gen.min (fromGregorian 2000 1 2) & Gen.max (fromGregorian 2000 1 1) & Gen.build) (\_ -> pure ())
