@@ -795,7 +795,7 @@ foreign import ccall unsafe "hegel_zizek_settings_set_test_location"
 -- | Configure the on-disk example database.
 --
 -- Pass an empty string to disable, or @nullPtr@ for the default store under
--- @.hegel/@.
+-- @.hegel/examples/@.
 foreign import ccall unsafe "hegel_settings_set_database"
   hegel_settings_set_database :: Ptr HegelContext -> Ptr HegelSettings -> Ptr HegelString -> IO CInt
 

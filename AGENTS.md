@@ -249,7 +249,7 @@ Concurrency alone does not make a run nondeterministic. The engine switches to n
 
 ### Framework Integrations
 
-`Hegel.Hspec.prop` and its variants derive a stable example-database key from the module plus the test's describe and name path, and persist failures wherever the resolved profile's database points: `.hegel/` under `development`, nowhere under `ci`. Renaming a test or its group orphans its stored failures, and stored replays only reproduce against deterministic fixtures.
+`Hegel.Hspec.prop` and its variants derive a stable example-database key from the module plus the test's describe and name path, and persist failures wherever the resolved profile's database points: `.hegel/examples/` under `development`, nowhere under `ci`. Renaming a test or its group orphans its stored failures, and stored replays only reproduce against deterministic fixtures.
 
 Native `Hegel.Tasty.testProperty` runs without a key, so nothing persists unless `testPropertyWith` supplies an explicit `databaseKey`. Use `tasty-hspec` to get Hspec's automatic keys inside Tasty.
 

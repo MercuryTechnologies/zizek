@@ -9,8 +9,8 @@ where
 --
 -- A run files and replays failures only under a 'Hegel.Settings.databaseKey'.
 data Database
-  = -- | Use the engine's default store: @.hegel/@ relative to the working
-    -- directory.
+  = -- | Use the engine's default store: @.hegel/examples/@ relative to
+    -- the working directory.
     DatabaseDefault
   | -- | No persistence.
     DatabaseDisabled
