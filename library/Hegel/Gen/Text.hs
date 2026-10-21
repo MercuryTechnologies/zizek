@@ -51,7 +51,7 @@ instance Build TextBuilder Text where
       -- 'textGen' must stay bound here, outside the 'Draw' lambda above, so
       -- 'stringGen' builds its handle once and shares it across every draw
       -- of this 'Gen' value.
-      textGen = stringGen (spanLabel LabelText) gen
+      textGen = withFrozenCallStack (stringGen "Hegel.Gen.Text" (spanLabel LabelText) gen)
       wireLo = fromIntegral b.bMinSize
       wireHi = maybe maxBound fromIntegral b.bMaxSize
       gen = withFrozenCallStack $ case b.bAlphabet of

@@ -192,6 +192,25 @@ spec = do
       Runner.samples defaultSettings {testCases = Just (-1)} 0 (pure True) `shouldReturn` []
       Runner.samples defaultSettings (-1) (pure True) `shouldThrow` \SettingsError {} -> True
 
+  describe "engine rejections of a configuration" $
+    for_
+      [ ("char with no characters", "Hegel.Gen.Char", "No valid characters", void (Gen.char & Gen.minCodepoint 55296 & Gen.maxCodepoint 57343 & Gen.build)),
+        ("char include the codec cannot encode", "Hegel.Gen.Char", "cannot be encoded", void (Gen.char & Gen.codec Gen.Ascii & Gen.includeCharacters "\233" & Gen.build)),
+        ("char include and exclude overlap", "Hegel.Gen.Char", "overlap", void (Gen.char & Gen.includeCharacters "a" & Gen.excludeCharacters "a" & Gen.build)),
+        ("text alphabet with no characters", "Hegel.Gen.Text", "No valid characters", void (Gen.text & Gen.alphabet (Gen.char & Gen.minCodepoint 55296 & Gen.maxCodepoint 57343) & Gen.build)),
+        ("regex alphabet with no characters", "Hegel.Gen.Regex", "No valid characters", void (Gen.regex "." & Gen.alphabet (Gen.char & Gen.minCodepoint 55296 & Gen.maxCodepoint 57343) & Gen.build)),
+        ("double range emptied by exclusive bounds", "Hegel.Gen.Float", "exclusive-bound adjustment", void (Gen.double & Gen.min 0 & Gen.max 5.0e-324 & Gen.exclusiveMin & Gen.exclusiveMax & Gen.build)),
+        ("float range holding only an infinity", "Hegel.Gen.Float", "leaves no value", void (Gen.float & Gen.min (1 / 0) & Gen.max (1 / 0) & Gen.build))
+      ]
+      \(name, origin, needle, gen) ->
+        it ("raises ValidationError for a " <> name) do
+          Runner.sample defaultSettings gen `shouldThrow` \(ValidationError d) ->
+            d.context == origin
+              && T.isInfixOf needle d.detail
+              && case getCallStack d.callStack of
+                (operation, loc) : _ -> operation == "build" && loc.srcLocFile == "tests/unit/GenValidation.hs"
+                _ -> False
+
   describe "Gen.frequency validation" $ do
     it "rejects empty choices at the call site" $ do
       evaluate (Gen.frequency @Int []) `shouldThrow` \(ValidationError d) -> d.context == "Gen.frequency"

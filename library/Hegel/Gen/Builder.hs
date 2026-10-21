@@ -19,15 +19,18 @@ module Hegel.Gen.Builder
     checkNonNegative,
     checkNonNegativeNamed,
     checkSizeBounds,
+    engineRejection,
   )
 where
 
-import Control.Exception (throwIO)
+import Control.Exception (catch, throwIO)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
-import Hegel.Exception (Diagnostic (..), ValidationError (..))
+import Hegel.Exception (Diagnostic (..), HegelError (..), ValidationError (..))
 import Hegel.Gen.Internal (Gen)
+import Hegel.Internal.Foreign.Raw (pattern HEGEL_E_INVALID_ARG)
 
 -- | Materialize a configured builder, validating it when drawn.
 class Build b a | b -> a where
@@ -85,6 +88,17 @@ checkNonNegativeNamed what field n
   | n >= 0 = pure ()
   | otherwise =
       throwIO (ValidationError Diagnostic {context = what, detail = field <> " must be nonnegative", values = [(field, T.pack (show n))], callStack = callStack})
+
+-- | Run an engine call, raising 'ValidationError' when the engine rejects
+-- the generator's configuration as an invalid argument.
+engineRejection :: (HasCallStack) => Text -> IO a -> IO a
+engineRejection what act =
+  act `catch` \e ->
+    if e.code == HEGEL_E_INVALID_ARG
+      then
+        throwIO
+          (ValidationError Diagnostic {context = what, detail = fromMaybe "the engine rejected the configuration" e.message, values = [], callStack = callStack})
+      else throwIO (e :: HegelError)
 
 -- | Validate a @minSize@\/@maxSize@ pair: each bound must be non-negative,
 -- and ordered when both are set.

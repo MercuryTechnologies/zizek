@@ -21,4 +21,4 @@ email :: EmailBuilder
 email = EmailBuilder
 
 instance Build EmailBuilder Text where
-  build _ = withFrozenCallStack $ stringGen (spanLabel LabelEmail) buildEmailGen
+  build _ = withFrozenCallStack $ stringGen "Hegel.Gen.Email" (spanLabel LabelEmail) buildEmailGen

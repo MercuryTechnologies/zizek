@@ -43,7 +43,7 @@ uriText :: UriTextBuilder
 uriText = UriTextBuilder
 
 instance Build UriBuilder URI where
-  build _ = withFrozenCallStack $ stringDraw (spanLabel LabelUrl) buildUrlGen postProcess
+  build _ = withFrozenCallStack $ stringDraw "Hegel.Gen.Uri" (spanLabel LabelUrl) buildUrlGen postProcess
     where
       postProcess :: TestCase -> Text -> IO URI
       postProcess _tc t = case parseURI (T.unpack t) of
@@ -52,4 +52,4 @@ instance Build UriBuilder URI where
           throwIO InvariantViolation {detail = "libhegel: unparseable URI from a url draw: " <> t}
 
 instance Build UriTextBuilder Text where
-  build _ = withFrozenCallStack $ stringGen (spanLabel LabelUrl) buildUrlGen
+  build _ = withFrozenCallStack $ stringGen "Hegel.Gen.Uri" (spanLabel LabelUrl) buildUrlGen

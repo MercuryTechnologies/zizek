@@ -44,7 +44,7 @@ instance HasAlphabet RegexBuilder where
   alphabet cb b = b {bAlphabet = Just cb}
 
 instance Build RegexBuilder Text where
-  build b = withFrozenCallStack $ stringGen (spanLabel LabelRegex) gen
+  build b = withFrozenCallStack $ stringGen "Hegel.Gen.Regex" (spanLabel LabelRegex) gen
     where
       -- The alphabet, if any, uses the same single-character bounds
       -- 'Hegel.Gen.Char' uses; see 'buildCharTextGen' for why.

@@ -28,7 +28,7 @@ import Data.Text qualified as T
 import GHC.Float (double2Float, float2Double)
 import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Exception (Diagnostic (..))
-import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), ValidationError (..), checkOrdered)
+import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), ValidationError (..), checkOrdered, engineRejection)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (FloatSpec (..), Label (LabelFloat), drawFloat, spanLabel)
 
@@ -129,7 +129,7 @@ checkFloatBounds what b = do
 instance Build (FloatBuilder Float) Float where
   build b = withFrozenCallStack $ Draw (spanLabel LabelFloat) \tc -> do
     checkFloatBounds "Hegel.Gen.Float" b
-    double2Float <$> drawFloat tc 32 spec
+    double2Float <$> engineRejection "Hegel.Gen.Float" (drawFloat tc 32 spec)
     where
       (allowNan, allowInf) = effectiveFlags b
       spec =
@@ -146,7 +146,7 @@ instance Build (FloatBuilder Float) Float where
 instance Build (FloatBuilder Double) Double where
   build b = withFrozenCallStack $ Draw (spanLabel LabelFloat) \tc -> do
     checkFloatBounds "Hegel.Gen.Float" b
-    drawFloat tc 64 spec
+    engineRejection "Hegel.Gen.Float" (drawFloat tc 64 spec)
     where
       (allowNan, allowInf) = effectiveFlags b
       spec =

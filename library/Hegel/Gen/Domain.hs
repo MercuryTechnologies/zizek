@@ -49,7 +49,7 @@ instance Build DomainBuilder Text where
       -- 'domainGen' must stay bound here, outside the 'Draw' lambda above,
       -- so 'stringGen' builds its handle once and shares it across every
       -- draw of this 'Gen' value.
-      domainGen = stringGen (spanLabel LabelDomain) (buildDomainGen (fromIntegral b.bMaxLength))
+      domainGen = withFrozenCallStack (stringGen "Hegel.Gen.Domain" (spanLabel LabelDomain) (buildDomainGen (fromIntegral b.bMaxLength)))
       checkMaxLength :: (HasCallStack) => Int -> IO ()
       checkMaxLength n
         | n < 4 || n > 255 =

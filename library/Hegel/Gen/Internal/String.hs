@@ -19,23 +19,28 @@ where
 import Data.Text (Text)
 import Data.Word (Word64)
 import Foreign.ForeignPtr (ForeignPtr)
+import GHC.Stack (HasCallStack, withFrozenCallStack)
+import Hegel.Gen.Builder (engineRejection)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (HegelStringGenerator, drawString)
 import Hegel.Internal.TestCase (TestCase)
 import System.IO.Unsafe (unsafePerformIO)
 
 -- | Draw the generator's raw 'Text' unchanged, in a span labelled @label@.
-stringGen :: Word64 -> IO (ForeignPtr HegelStringGenerator) -> Gen Text
-stringGen label mkGen = Draw label \tc -> drawString tc genFP
+--
+-- An engine rejection of the configuration surfaces as a 'Hegel.Exception.ValidationError' in context @what@.
+stringGen :: (HasCallStack) => Text -> Word64 -> IO (ForeignPtr HegelStringGenerator) -> Gen Text
+stringGen what label mkGen = Draw label \tc -> withFrozenCallStack (engineRejection what (drawString tc genFP))
   where
     genFP = unsafePerformIO mkGen
     {-# NOINLINE genFP #-}
 
 -- | Draw the generator's raw 'Text' and post-process it against the live
 -- 'TestCase', so a failing post-process can throw rather than only 'fmap'
--- over the result. The draw runs in a span labelled @label@.
-stringDraw :: Word64 -> IO (ForeignPtr HegelStringGenerator) -> (TestCase -> Text -> IO a) -> Gen a
-stringDraw label mkGen post = Draw label \tc -> drawString tc genFP >>= post tc
+-- over the result. The draw runs in a span labelled @label@, and an engine
+-- rejection of the configuration surfaces as a 'Hegel.Exception.ValidationError' in context @what@.
+stringDraw :: (HasCallStack) => Text -> Word64 -> IO (ForeignPtr HegelStringGenerator) -> (TestCase -> Text -> IO a) -> Gen a
+stringDraw what label mkGen post = Draw label \tc -> withFrozenCallStack (engineRejection what (drawString tc genFP)) >>= post tc
   where
     genFP = unsafePerformIO mkGen
     {-# NOINLINE genFP #-}

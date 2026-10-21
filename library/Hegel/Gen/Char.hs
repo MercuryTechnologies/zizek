@@ -191,7 +191,7 @@ buildCharTextGen minSz maxSz b = withFrozenCallStack $ do
       | otherwise = Just (fmap categoryCode (nub (Surrogate : fromMaybe [] b.bExcludeCategories)))
 
 instance Build CharBuilder Char where
-  build b = withFrozenCallStack $ stringDraw (spanLabel LabelCharacter) (buildCharTextGen 1 1 b) postProcess
+  build b = withFrozenCallStack $ stringDraw "Hegel.Gen.Char" (spanLabel LabelCharacter) (buildCharTextGen 1 1 b) postProcess
     where
       postProcess :: TestCase -> Text -> IO Char
       postProcess _tc t = case T.uncons t of
