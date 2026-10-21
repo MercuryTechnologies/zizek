@@ -23,11 +23,12 @@ data Backend
     -- shrinking, replay, and the failure database work. This is the
     -- default.
     Default
-  | -- | Read fresh entropy from @\/dev\/urandom@ on every draw, ignoring the
-    -- seed entirely.
+  | -- | Take fresh entropy from outside the process on every draw, ignoring the
+    -- seed entirely. Under Antithesis it comes from Antithesis's fuzzer, and
+    -- elsewhere from @\/dev\/urandom@.
     --
-    -- Intended for running under Antithesis, whose fuzzer controls
-    -- @\/dev\/urandom@; you almost certainly don't want it otherwise.
+    -- Intended for running under Antithesis, and selected by the shipped
+    -- @workload@ profile; you almost certainly don't want it otherwise.
     Urandom
   deriving stock (Show, Eq, Enum, Bounded)
 

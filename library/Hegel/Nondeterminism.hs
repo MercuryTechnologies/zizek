@@ -18,7 +18,8 @@ import Witch qualified
 data Nondeterminism
   = -- | Switch silently to nondeterministic handling, which confirms each
     -- failure by repeated replay before reporting or shrinking it. A failure
-    -- found this way carries a caveat describing how reliably it reproduced.
+    -- the run saw pass at least once carries a caveat describing how reliably
+    -- it reproduced.
     -- This is the default.
     Tolerate
   | -- | Switch as 'Tolerate' does, and have the engine print a one-line notice

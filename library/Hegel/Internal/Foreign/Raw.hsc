@@ -1022,11 +1022,10 @@ foreign import ccall safe "hegel_run_free"
 -- handle is genuinely driven from two threads at once, and a family's
 -- completion race resolves through a lock-free atomic rather than a lock.
 --
--- Caveat, accepted: under the urandom backend (explicit 'HEGEL_BACKEND_URANDOM',
--- or auto-selected inside Antithesis) every entropy-consuming call reads
--- @\/dev\/urandom@ inside the call, pinning the capability for the syscall
--- pair. @\/dev\/urandom@ never blocks, the pin is µs-scale, and Antithesis
--- runs are not latency-sensitive.
+-- Under the urandom backend, every entropy-consuming call fetches entropy
+-- inside the call, from Antithesis's fuzzer or @\/dev\/urandom@, and pins the
+-- capability while it does. That cost is accepted because the backend is meant
+-- for Antithesis runs, which are not latency-sensitive.
 --
 -- One exception: 'hegel_generate_string' is @safe@. See its own haddock —
 -- a regex-backed draw's bounded retry-on-failed-lookaround loop is a

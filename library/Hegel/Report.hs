@@ -183,7 +183,8 @@ data FailureOutcome = FailureOutcome
     -- produced a reproduce blob.
     failureReplayToken :: !(Maybe ReplayToken),
     -- | How reliably a failure found under nondeterministic handling
-    -- reproduced, quoting the engine's replay evidence.
+    -- reproduced, quoting the engine's replay evidence. A failure the run
+    -- never saw pass has none.
     failureCaveat :: !(Maybe Text),
     failureEvidence :: !FailureEvidenceStatus
   }

@@ -526,8 +526,8 @@ buildTextGen spec =
 
 -- | Build a __regex__ string generator.
 --
--- @alphabet@, when given, must itself be a __text__ generator with constraints
--- on the pattern's padding and wildcard characters.
+-- @alphabet@, when given, must itself be a __text__ generator, and every
+-- character of a drawn string comes from it.
 buildRegexGen :: Text -> Bool -> Maybe (ForeignPtr HegelStringGenerator) -> IO (ForeignPtr HegelStringGenerator)
 buildRegexGen pat fullmatch mAlphabet =
   withContext \ctx ->
