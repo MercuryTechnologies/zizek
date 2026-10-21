@@ -32,15 +32,17 @@ module Hegel.Gen.Char
 where
 
 import Control.Exception (throwIO)
+import Control.Monad (when)
 import Data.Char (GeneralCategory (..))
 import Data.Foldable (traverse_)
 import Data.List (nub)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Word (Word32, Word64)
+import Data.Word (Word64)
 import Foreign.ForeignPtr (ForeignPtr)
-import GHC.Stack (HasCallStack, withFrozenCallStack)
+import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
+import Hegel.Exception (Diagnostic (..), ValidationError (..))
 import Hegel.Gen.Builder (Build (..), checkNonNegativeNamed, checkOrderedMaybe)
 import Hegel.Gen.Internal.String (stringDraw)
 import Hegel.Internal.DataSource (HegelStringGenerator, InvariantViolation (..), Label (LabelCharacter), TextSpec (..), buildTextGen, spanLabel)
@@ -92,11 +94,13 @@ char =
 codec :: Codec -> CharBuilder -> CharBuilder
 codec c b = b {bCodec = c}
 
--- | Set the minimum Unicode codepoint (inclusive).
+-- | Set the minimum Unicode codepoint (inclusive), which must be at most
+-- @0x10FFFF@.
 minCodepoint :: Int -> CharBuilder -> CharBuilder
 minCodepoint n b = b {bMinCodepoint = Just n}
 
--- | Set the maximum Unicode codepoint (inclusive).
+-- | Set the maximum Unicode codepoint (inclusive). A value beyond @0x10FFFF@
+-- imposes no further restriction.
 maxCodepoint :: Int -> CharBuilder -> CharBuilder
 maxCodepoint n b = b {bMaxCodepoint = Just n}
 
@@ -170,19 +174,26 @@ buildCharTextGen minSz maxSz b = withFrozenCallStack $ do
   checkOrderedMaybe "Hegel.Gen.Char" b.bMinCodepoint b.bMaxCodepoint
   traverse_ (checkNonNegativeNamed "Hegel.Gen.Char" "minCodepoint") b.bMinCodepoint
   traverse_ (checkNonNegativeNamed "Hegel.Gen.Char" "maxCodepoint") b.bMaxCodepoint
+  traverse_ checkBeyondUnicode b.bMinCodepoint
   buildTextGen
     TextSpec
       { minSize = minSz,
         maxSize = maxSz,
         codec = codecArg b.bCodec,
         minCodepoint = maybe 0 fromIntegral b.bMinCodepoint,
-        maxCodepoint = maybe maxBound fromIntegral b.bMaxCodepoint :: Word32,
+        maxCodepoint = fromIntegral (maybe lastCodepoint (min lastCodepoint) b.bMaxCodepoint),
         categories = fmap (fmap categoryCode) b.bCategories,
         excludeCategories = exclCats,
         includeCharacters = b.bIncludeCharacters,
         excludeCharacters = b.bExcludeCharacters
       }
   where
+    lastCodepoint :: Int
+    lastCodepoint = 0x10FFFF
+    checkBeyondUnicode n =
+      when (n > lastCodepoint) $
+        throwIO
+          (ValidationError Diagnostic {context = "Hegel.Gen.Char", detail = "minCodepoint must be at most 1114111", values = [("minCodepoint", T.pack (show n))], callStack = callStack})
     -- Haskell 'Text' cannot represent lone surrogates, so exclude them by
     -- default unless the caller explicitly took over category filtering
     -- with 'categories'.

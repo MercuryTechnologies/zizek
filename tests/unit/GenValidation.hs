@@ -67,6 +67,14 @@ spec = do
           Runner.sample defaultSettings gen `shouldThrow` \(ValidationError d) ->
             d.values == [(field, "-1")] && d.detail == field <> " must be nonnegative"
 
+    it "rejects a minCodepoint beyond the last code point instead of wrapping it" do
+      Runner.sample defaultSettings (void (Gen.char & Gen.minCodepoint 4294967296 & Gen.build)) `shouldThrow` \(ValidationError d) ->
+        d.values == [("minCodepoint", "4294967296")]
+
+    it "treats a maxCodepoint beyond the last code point as no upper limit" do
+      cs <- Runner.samples defaultSettings {seed = Just (SeedFixed 7)} 50 (Gen.char & Gen.minCodepoint 70 & Gen.maxCodepoint 4294967361 & Gen.build)
+      cs `shouldSatisfy` all (>= 'F')
+
     it "shrinks generated invalid bounds and replays the smallest failing input" do
       let body :: Property.Property ()
           body = do
