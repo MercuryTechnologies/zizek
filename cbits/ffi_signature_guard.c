@@ -21,6 +21,10 @@ _Static_assert(__builtin_types_compatible_p(hegel_output_callback_t,
                                             void (*)(void *, const char *, size_t)),
                "hegel_output_callback_t changed; update OutputSink in Raw.hsc");
 
+/* Raw.hsc reads hegel_run_error_kind_t through a CInt. */
+_Static_assert(sizeof(hegel_run_error_kind_t) == sizeof(int),
+               "hegel_run_error_kind_t is no longer int-sized; update Raw.hsc");
+
 hegel_result_t (*const zizek_guard_hegel_collection_free)(hegel_context_t *ctx, hegel_collection_t *collection) = hegel_collection_free;
 hegel_result_t (*const zizek_guard_hegel_collection_more)(hegel_context_t *ctx, hegel_test_case_t *tc, hegel_collection_t *collection, bool *out_more) = hegel_collection_more;
 hegel_result_t (*const zizek_guard_hegel_collection_reject)(hegel_context_t *ctx, hegel_test_case_t *tc, hegel_collection_t *collection, const hegel_string_t *why) = hegel_collection_reject;
@@ -64,6 +68,7 @@ hegel_result_t (*const zizek_guard_hegel_recursion_retry)(hegel_context_t *ctx, 
 hegel_result_t (*const zizek_guard_hegel_run_free)(hegel_context_t *ctx, hegel_run_t *run) = hegel_run_free;
 hegel_result_t (*const zizek_guard_hegel_run_result)(hegel_context_t *ctx, hegel_run_t *run, hegel_run_result_t **out_result) = hegel_run_result;
 hegel_result_t (*const zizek_guard_hegel_run_result_error)(hegel_context_t *ctx, const hegel_run_result_t *r, const hegel_string_t **out_error) = hegel_run_result_error;
+hegel_result_t (*const zizek_guard_hegel_run_result_error_kind)(hegel_context_t *ctx, const hegel_run_result_t *r, hegel_run_error_kind_t *out_kind, uint32_t *out_health_check) = hegel_run_result_error_kind;
 hegel_result_t (*const zizek_guard_hegel_run_result_failure)(hegel_context_t *ctx, const hegel_run_result_t *r, size_t index, hegel_failure_t **out_failure) = hegel_run_result_failure;
 hegel_result_t (*const zizek_guard_hegel_run_result_failure_count)(hegel_context_t *ctx, const hegel_run_result_t *r, size_t *out_count) = hegel_run_result_failure_count;
 hegel_result_t (*const zizek_guard_hegel_run_result_free)(hegel_context_t *ctx, hegel_run_result_t *r) = hegel_run_result_free;

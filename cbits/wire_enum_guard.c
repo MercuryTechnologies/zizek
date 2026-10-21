@@ -96,6 +96,20 @@ int hegel_guard_run_status(int x) {
   return -1;
 }
 
+int hegel_guard_run_error_kind(int x) {
+  switch ((hegel_run_error_kind_t)x) {
+    case HEGEL_RUN_ERROR_NONE:
+    case HEGEL_RUN_ERROR_HEALTH_CHECK:
+    case HEGEL_RUN_ERROR_FLAKY:
+    case HEGEL_RUN_ERROR_NONDETERMINISTIC:
+    case HEGEL_RUN_ERROR_UNSATISFIABLE:
+    case HEGEL_RUN_ERROR_USAGE:
+    case HEGEL_RUN_ERROR_INTERNAL:
+      return 0;
+  }
+  return -1;
+}
+
 int hegel_guard_result(int x) {
   switch ((hegel_result_t)x) {
     case HEGEL_OK:

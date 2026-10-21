@@ -43,6 +43,8 @@ foreign import ccall unsafe "hegel_guard_status" guardStatus :: Word32 -> IO CIn
 
 foreign import ccall unsafe "hegel_guard_result" guardResult :: CInt -> IO CInt
 
+foreign import ccall unsafe "hegel_guard_run_error_kind" guardRunErrorKind :: CInt -> IO CInt
+
 -- | Assert the guard recognizes (returns @0@ for) every supplied wire value.
 allRecognized :: (w -> IO CInt) -> [w] -> Expectation
 allRecognized guard = traverse_ \w -> guard w `shouldReturn` 0
@@ -100,4 +102,15 @@ wireEnumCoverageSpec = describe "wire enum coverage (conversion values vs hegel.
         HEGEL_E_CONCURRENT_USE,
         HEGEL_E_RETRY,
         HEGEL_E_NOT_FOUND
+      ]
+  it "hegel_run_error_kind_t" $
+    allRecognized
+      guardRunErrorKind
+      [ HEGEL_RUN_ERROR_NONE,
+        HEGEL_RUN_ERROR_HEALTH_CHECK,
+        HEGEL_RUN_ERROR_FLAKY,
+        HEGEL_RUN_ERROR_NONDETERMINISTIC,
+        HEGEL_RUN_ERROR_UNSATISFIABLE,
+        HEGEL_RUN_ERROR_USAGE,
+        HEGEL_RUN_ERROR_INTERNAL
       ]

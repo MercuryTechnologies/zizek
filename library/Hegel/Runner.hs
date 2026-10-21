@@ -133,16 +133,10 @@ noCounterexample = Aborted (Errored (toException (userError "run reported a fail
 -- engine panic, and produced no verdict on the property.
 runErrored :: RunOutcome -> Result
 runErrored outcome
-  | Just msg <- outcome.runError, isUnsatisfiable msg = GaveUp msg
-  | otherwise = Aborted (UnhealthyInput (fromMaybe "the run failed" outcome.runError))
-
--- | Whether a run error is the engine's verdict that no case satisfied the
--- property's assumptions, which this library reports as giving up.
---
--- @libhegel@ signals this only through the error text, which its own tests
--- require to contain @Unsatisfiable@.
-isUnsatisfiable :: Text -> Bool
-isUnsatisfiable = T.isInfixOf "Unsatisfiable"
+  | outcome.runErrorKind == HEGEL_RUN_ERROR_UNSATISFIABLE = GaveUp message
+  | otherwise = Aborted (UnhealthyInput message)
+  where
+    message = fromMaybe "the run failed" outcome.runError
 
 -- | Pair an engine failure with the capture recorded for its origin, and with
 -- its replay token when @printBlob@ asks for one.
@@ -312,6 +306,8 @@ samples settings n gen =
               collectCases ctx gen acc run
               readRunOutcome ctx run
             case outcome.status of
+              -- A run in which no case was valid has no values to return.
+              RunErrored | outcome.runErrorKind == HEGEL_RUN_ERROR_UNSATISFIABLE -> pure []
               RunErrored -> throwIO (userError (T.unpack (fromMaybe "the run failed" outcome.runError)))
               -- 'samples' runs no property body, so nothing can mark a case
               -- 'Interesting', and 'RunFailed' should not arise here.
@@ -374,7 +370,10 @@ data RunOutcome = RunOutcome
     -- | Distinct failures, in engine order.
     failures :: ![Failure],
     -- | The run-level error message, when the run errored.
-    runError :: !(Maybe Text)
+    runError :: !(Maybe Text),
+    -- | Why the run errored, one of the @HEGEL_RUN_ERROR_*@ values, or
+    -- 'HEGEL_RUN_ERROR_NONE' when it did not.
+    runErrorKind :: !CInt
   }
 
 -- | Read the aggregate status, the primary failure, and the run-level error
@@ -386,7 +385,8 @@ readRunOutcome ctx run =
     let status = either (const RunErrored) id (Witch.tryInto rawStatus)
     failures <- readFailures ctx res
     runError <- readRunError ctx res
-    pure RunOutcome {status, failures, runError}
+    runErrorKind <- outWith \kind -> hegel_run_result_error_kind ctx res kind nullPtr
+    pure RunOutcome {status, failures, runError, runErrorKind}
   where
     -- Run one @out_*@ call, checking its return code and reading the result.
     outWith :: (Storable a) => (Ptr a -> IO CInt) -> IO a

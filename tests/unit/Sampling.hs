@@ -7,6 +7,7 @@ import Data.Function ((&))
 import Data.List (nub)
 import Hegel (Gen, defaultSettings, sample, samples)
 import Hegel.Gen qualified as Gen
+import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Seed (Seed (..))
 import Hegel.Settings (Settings (..))
 import Test.Hspec
@@ -56,3 +57,6 @@ spec = do
     it "throws when the generator's valid rate is too low to pass FilterTooMuch" do
       samples def 100 (Gen.filtered (const False) (Gen.int & Gen.build))
         `shouldThrow` anyIOException
+
+    it "returns no values for a generator that always discards once FilterTooMuch is suppressed" do
+      samples def {suppressHealthCheck = Just [FilterTooMuch]} 20 Gen.discard `shouldReturn` ([] :: [Int])

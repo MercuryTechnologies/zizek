@@ -134,6 +134,16 @@ module Hegel.Internal.Foreign.Raw
     pattern HEGEL_RUN_STATUS_FAILED,
     pattern HEGEL_RUN_STATUS_ERROR,
 
+    -- * Run-error-kind pattern synonyms
+    -- $runerrorkind
+    pattern HEGEL_RUN_ERROR_NONE,
+    pattern HEGEL_RUN_ERROR_HEALTH_CHECK,
+    pattern HEGEL_RUN_ERROR_FLAKY,
+    pattern HEGEL_RUN_ERROR_NONDETERMINISTIC,
+    pattern HEGEL_RUN_ERROR_UNSATISFIABLE,
+    pattern HEGEL_RUN_ERROR_USAGE,
+    pattern HEGEL_RUN_ERROR_INTERNAL,
+
     -- * Context lifecycle
     -- $context
     hegel_context_new,
@@ -250,6 +260,7 @@ module Hegel.Internal.Foreign.Raw
     -- $results
     hegel_run_result_status,
     hegel_run_result_error,
+    hegel_run_result_error_kind,
     hegel_run_result_failure_count,
     hegel_run_result_failure,
     hegel_failure_free,
@@ -643,6 +654,33 @@ pattern HEGEL_RUN_STATUS_FAILED = (#const HEGEL_RUN_STATUS_FAILED)
 
 pattern HEGEL_RUN_STATUS_ERROR :: CInt
 pattern HEGEL_RUN_STATUS_ERROR = (#const HEGEL_RUN_STATUS_ERROR)
+
+-- $runerrorkind
+--
+-- @CInt@ values written by 'hegel_run_result_error_kind', saying why a run
+-- whose status is 'HEGEL_RUN_STATUS_ERROR' errored. Classify an errored run by
+-- these, never by the wording of 'hegel_run_result_error'.
+
+pattern HEGEL_RUN_ERROR_NONE :: CInt
+pattern HEGEL_RUN_ERROR_NONE = (#const HEGEL_RUN_ERROR_NONE)
+
+pattern HEGEL_RUN_ERROR_HEALTH_CHECK :: CInt
+pattern HEGEL_RUN_ERROR_HEALTH_CHECK = (#const HEGEL_RUN_ERROR_HEALTH_CHECK)
+
+pattern HEGEL_RUN_ERROR_FLAKY :: CInt
+pattern HEGEL_RUN_ERROR_FLAKY = (#const HEGEL_RUN_ERROR_FLAKY)
+
+pattern HEGEL_RUN_ERROR_NONDETERMINISTIC :: CInt
+pattern HEGEL_RUN_ERROR_NONDETERMINISTIC = (#const HEGEL_RUN_ERROR_NONDETERMINISTIC)
+
+pattern HEGEL_RUN_ERROR_UNSATISFIABLE :: CInt
+pattern HEGEL_RUN_ERROR_UNSATISFIABLE = (#const HEGEL_RUN_ERROR_UNSATISFIABLE)
+
+pattern HEGEL_RUN_ERROR_USAGE :: CInt
+pattern HEGEL_RUN_ERROR_USAGE = (#const HEGEL_RUN_ERROR_USAGE)
+
+pattern HEGEL_RUN_ERROR_INTERNAL :: CInt
+pattern HEGEL_RUN_ERROR_INTERNAL = (#const HEGEL_RUN_ERROR_INTERNAL)
 
 -- $context
 --
@@ -1702,6 +1740,13 @@ foreign import ccall unsafe "hegel_run_result_status"
 -- 'hegel_run_result_free'.
 foreign import ccall unsafe "hegel_run_result_error"
   hegel_run_result_error :: Ptr HegelContext -> Ptr HegelRunResult -> Ptr (Ptr HegelString) -> IO CInt
+
+-- | Write why the run errored, one of the @HEGEL_RUN_ERROR_*@ values, into
+-- @*out_kind@, and the failed @HEGEL_HC_*@ check into @*out_health_check@
+-- for 'HEGEL_RUN_ERROR_HEALTH_CHECK'. Either pointer may be @NULL@, but not
+-- both.
+foreign import ccall unsafe "hegel_run_result_error_kind"
+  hegel_run_result_error_kind :: Ptr HegelContext -> Ptr HegelRunResult -> Ptr CInt -> Ptr Word32 -> IO CInt
 
 -- | Write the number of distinct failures (by origin) into @*out_count@.
 foreign import ccall unsafe "hegel_run_result_failure_count"
