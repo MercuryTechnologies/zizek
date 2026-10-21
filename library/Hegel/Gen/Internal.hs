@@ -21,7 +21,6 @@ module Hegel.Gen.Internal
     frequency,
     maybe,
     either,
-    prefixSelect,
 
     -- * Exceptions
     -- $exceptions
@@ -30,13 +29,14 @@ module Hegel.Gen.Internal
 where
 
 import Control.Exception (throw, throwIO)
+import Data.Ratio ((%))
 import Data.Text qualified as T
 import Data.Vector qualified as Vector
 import Data.Word (Word64)
 import GHC.Stack (HasCallStack, callStack)
 import Hegel.Exception (Diagnostic (..), InvariantViolation (..), ValidationError (..))
 import Hegel.Internal.Control (AssumeRejected (..))
-import Hegel.Internal.DataSource (Label (..), combineLabels, drawInteger, spanLabel, startSpan, stopSpan)
+import Hegel.Internal.DataSource (Label (..), combineLabels, drawBool, drawInteger, spanLabel, startSpan, stopSpan)
 import Hegel.Internal.TestCase (TestCase)
 import Hegel.Internal.TestCase qualified as TestCase
 import Prelude hiding (either, maybe)
@@ -246,29 +246,36 @@ element xs = Draw (spanLabel LabelSampledFrom) \tc -> do
 defer :: Gen a -> Gen a
 defer g = Draw (spanLabel LabelDeferred) \tc -> drawInline tc g
 
--- | Choose one of the given generators about as often as its share of the
--- total weight.
+-- | Choose one of the given generators, each draw picking a branch in
+-- proportion to its share of the total weight.
 --
 -- The list must be non-empty and every weight must be positive, and a
 -- violation throws 'ValidationError' when evaluated. A counterexample shrinks
 -- toward the first generator in the list.
+--
+-- __NOTE__: The weights steer each draw but don't fix the long-run mix. The
+-- engine explores novel choice sequences, so once a branch stops producing new
+-- values the run drifts toward branches that still do. In
+-- @frequency [(10, leaf), (1, node)]@ for a recursive tree, most of the budget
+-- goes to @node@ once @leaf@'s distinct values are exhausted.
 frequency :: (HasCallStack) => [(Int, Gen a)] -> Gen a
 frequency [] = throw (ValidationError Diagnostic {context = "Gen.frequency", detail = "used with empty list", values = [("choices", "0")], callStack = callStack})
 frequency pairs
   | any ((<= 0) . fst) pairs = throw (ValidationError Diagnostic {context = "Gen.frequency", detail = "all weights must be positive", values = [("weights", T.pack (show (map fst pairs)))], callStack = callStack})
-  | otherwise = Draw (combineLabels (spanLabel LabelOneOf : fmap (labelOf . snd) pairs)) \tc -> do
-      i <- drawInteger tc 0 (total - 1)
-      draw tc (prefixSelect i weighted)
+  | otherwise = Draw (combineLabels (spanLabel LabelOneOf : fmap (labelOf . snd) pairs)) \tc -> pickWeighted tc total weighted
   where
     weighted = [(toInteger w, g) | (w, g) <- pairs]
-    total = foldl' (\acc (w, _) -> acc + w) 0 weighted
+    total = sum (fst <$> weighted)
 
--- | Select the branch containing an index in the total positive weight range.
-prefixSelect :: Integer -> [(Integer, a)] -> a
-prefixSelect _ [] = throw InvariantViolation {detail = "Gen.frequency: index exceeds the total weight"}
-prefixSelect n ((w, g) : rest)
-  | n < w = g
-  | otherwise = prefixSelect (n - w) rest
+-- | Walk the alternatives in order, skipping each with the probability that
+-- a later alternative holds the draw, so every alternative is chosen in
+-- exact proportion to its weight and a skip shrinks toward staying put.
+pickWeighted :: TestCase -> Integer -> [(Integer, Gen a)] -> IO a
+pickWeighted _ _ [] = throw InvariantViolation {detail = "Gen.frequency: no alternative left to choose"}
+pickWeighted tc _ [(_, g)] = draw tc g
+pickWeighted tc remaining ((w, g) : rest) = do
+  skip <- drawBool tc (fromRational ((remaining - w) % remaining))
+  if skip then pickWeighted tc (remaining - w) rest else draw tc g
 
 -- | Generate either 'Nothing' or 'Just' a value from the given generator.
 maybe :: Gen a -> Gen (Maybe a)

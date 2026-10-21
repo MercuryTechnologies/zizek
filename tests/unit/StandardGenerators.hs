@@ -14,6 +14,8 @@ import Hegel.Gen.Internal qualified as Internal
 import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Property (check, check_, forEach)
 import Hegel.Report (Report (..), Result (..), Stats (..))
+import Hegel.Runner qualified as Runner
+import Hegel.Seed (Seed (..))
 import Hegel.Settings (Settings (..), defaultSettings)
 import Network.URI (uriScheme)
 import Test.Hspec
@@ -104,12 +106,13 @@ spec = do
         length xs `shouldSatisfy` (<= 4)
 
   describe "Gen.frequency" $ do
-    it "selects exact prefix boundaries with arbitrary precision" $ do
-      let w = toInteger (maxBound :: Int)
-          weights = [(w, 'a'), (w, 'b'), (w, 'c')]
-      map (`Internal.prefixSelect` weights) [0, w - 1, w, 2 * w - 1, 2 * w, 3 * w - 1]
-        `shouldBe` "aabbcc"
-      map (`Internal.prefixSelect` [(2, 'a'), (1, 'b')]) [0, 1, 2] `shouldBe` "aab"
+    it "chooses in proportion to its weights however large they are" $ do
+      let share weights = do
+            xs <- Runner.samples defaultSettings {seed = Just (SeedFixed 42)} 2000 (Gen.frequency (zip weights (pure <$> [0 :: Int ..])))
+            pure (fromIntegral (length (filter (== 1) xs)) / 2000 :: Double)
+      share [1000, 1000] >>= (`shouldSatisfy` \p -> p > 0.4 && p < 0.6)
+      share [1000000, 3000000] >>= (`shouldSatisfy` \p -> p > 0.7 && p < 0.8)
+      share [maxBound, maxBound] >>= (`shouldSatisfy` \p -> p > 0.4 && p < 0.6)
     it "accepts totals larger than a machine word" $ do
       traverse_
         ( \n -> check_ (defaultSettings {testCases = Just 20}) $
