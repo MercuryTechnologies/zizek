@@ -7,7 +7,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Default.Class (def)
 import Data.Foldable (for_)
 import Data.Function ((&))
-import Data.IORef (atomicModifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Maybe (isNothing)
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -18,7 +18,7 @@ import Hegel.Gen qualified as Gen
 import Hegel.HealthCheck (HealthCheck (..))
 import Hegel.Pool (Pool)
 import Hegel.Pool qualified as Pool
-import Hegel.Property (assert, assume, forAll, forAllSilent)
+import Hegel.Property (assert, assume, forAll, forAllSilent, (===))
 import Hegel.Report (Abort (..), FailureEvidence (..), FailureOutcome (..), Note (..), NoteKind (..), Report (..), Result (..), isFailureNote, renderReportRich)
 import Hegel.Runner (check, replay)
 import Hegel.Seed (Seed (..))
@@ -412,8 +412,89 @@ poolMachine =
       invariants = []
     }
 
+-- | A pool seeded with three values, an empty pool, how many values the model
+-- expects the first to hold, and how many steps this case has rejected.
+data Stocked = Stocked
+  { stock :: Pool Int,
+    empty :: Pool Int,
+    expected :: Int,
+    rejections :: IORef Int
+  }
+
+-- | A machine over 'Stocked' whose invariant checks, at every join point, that
+-- the pool holds as many values as the model expects.
+stockedMachine :: [Stateful.Rule Stocked IO] -> Stateful.Machine Stocked IO
+stockedMachine rules =
+  Stateful.Machine
+    { initial = do
+        stock <- Pool.new
+        for_ [1, 2, 3 :: Int] (Pool.add stock)
+        empty <- Pool.new
+        rejections <- liftIO (newIORef 0)
+        pure Stocked {stock, empty, expected = 3, rejections},
+      rules,
+      stepCount = 20,
+      invariants =
+        [ Stateful.always $ Stateful.invariant "the pool matches the model" \m -> do
+            held <- liftIO (Pool.size m.stock)
+            held === m.expected
+        ]
+    }
+
+-- | Consume a value and record it in the model.
+takeOne :: Stateful.Rule Stocked IO
+takeOne = Stateful.rule "take" \m -> do
+  _ <- forAll (Pool.consume m.stock)
+  pure m {expected = m.expected - 1}
+
+-- | Consume a value, count the rejection, then reject the step.
+takeThenReject :: Stateful.Rule Stocked IO
+takeThenReject = Stateful.rule "take_then_reject" \m -> do
+  _ <- forAll (Pool.consume m.stock)
+  liftIO (atomicModifyIORef' m.rejections \n -> (n + 1, ()))
+  assume False
+  pure m
+
+-- | Consume a value inside a filter attempt that then rejects the step by
+-- drawing from the empty pool.
+filteredTakeThenReject :: Stateful.Rule Stocked IO
+filteredTakeThenReject = Stateful.rule "filtered_take_then_reject" \m -> do
+  _ <- forAll (Gen.filtered (const True) (Pool.consume m.stock *> Pool.consume m.empty))
+  pure m
+
 poolMachineSpec :: Spec
 poolMachineSpec = describe "Pool + Machine" do
+  it "a rejected rule restores the values it consumed" do
+    report <- check def (Stateful.run (stockedMachine [takeOne, takeThenReject]))
+    case report.result of
+      Ok -> pure ()
+      other -> expectationFailure ("expected Ok, got: " <> show other)
+
+  it "a rejected rule restores a value consumed inside a filter attempt" do
+    report <- check def (Stateful.run (stockedMachine [takeOne, filteredTakeThenReject]))
+    case report.result of
+      Ok -> pure ()
+      other -> expectationFailure ("expected Ok, got: " <> show other)
+
+  -- The property fails only after a rejected step, so every counterexample,
+  -- shrunk or not, replays at least one restore.
+  it "a counterexample with rejected steps reproduces on replay" do
+    let unrejected :: Stateful.Rule Stocked IO
+        unrejected = Stateful.rule "unrejected" \m -> do
+          n <- liftIO (readIORef m.rejections)
+          assert (n == 0) "no step has been rejected"
+          pure m
+        machine = stockedMachine [takeOne, takeThenReject, unrejected]
+    report <- check def (Stateful.run machine)
+    evidence <- expectCaptured report.result
+    [label | Note {kind = StepHeader _ label} <- evidence.notes] `shouldContain` ["take_then_reject"]
+    token <- case allFailureOutcomes report.result of
+      [outcome] -> expectToken outcome
+      other -> fail ("expected one failure, got " <> show (length other))
+    replayed <- replay def token (Stateful.run machine)
+    actual <- expectCaptured replayed.result
+    actual.message `shouldBe` evidence.message
+
   it "values added in one rule are drawn back in another" do
     report <- check def (Stateful.run poolMachine)
     report.result `shouldSatisfy` \case

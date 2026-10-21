@@ -42,6 +42,12 @@
 --   the entire sequence, and the skipped step does not count toward the
 --   machine's 'stepCount'.
 --
+-- * A rejected step restores every value it consumed with
+--   'Hegel.Pool.consume', just as its model update is discarded. It cannot take
+--   back a value it added with 'Hegel.Pool.add' or moved with
+--   'Hegel.Pool.transfer', so a rule that may reject should do so before it adds
+--   or transfers.
+--
 -- * @StateT s (PropertyT m)@ rules adapt with
 --   @\\s -> execStateT myStateRule s :: s -> PropertyT m s@.
 --
@@ -302,7 +308,7 @@ run machine = withFrozenCallStack $ do
         -- This round's own 'LabelStatefulRule' span is opened\/closed below,
         -- around the 'stateMachineNextGroup' draw 'runWorkerRound' never
         -- sees, so the caller, not the worker, owns it.
-        worker = Worker {testCase = tc, dispatch, onRejected, roundSpan = Caller}
+        worker = Worker {testCase = tc, dispatch, onRejected, roundSpan = Caller, restoresRejected = True}
 
         -- A round's draws share one 'LabelStatefulRule' span. On
         -- 'ContinueRound' it closes discarded exactly when some rule this

@@ -162,7 +162,8 @@ fanOutSpec = describe "runRound (real engine, several workers)" do
                     atomicModifyIORef' dispatches \d -> (d + 1, ())
                     modifyMVar_ seenWorkers (pure . Set.insert i),
                   onRejected = pure (),
-                  roundSpan = Caller
+                  roundSpan = Caller,
+                  restoresRejected = False
                 }
             workers = zipWith mkWorker [0 :: Int ..] clones
             roundLoop = do
@@ -208,7 +209,8 @@ fanOutSpec = describe "runRound (real engine, several workers)" do
                       (atomicModifyIORef' active \a -> (a - 1, ()))
                       (threadDelay 10_000_000),
                   onRejected = pure (),
-                  roundSpan = Caller
+                  roundSpan = Caller,
+                  restoresRejected = False
                 }
             workers = map mkWorker clones
         _ <- stateMachineNextGroup tc sm

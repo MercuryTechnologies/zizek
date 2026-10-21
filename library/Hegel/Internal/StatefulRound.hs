@@ -30,6 +30,7 @@ where
 import Control.Exception (SomeException, fromException, mask, onException, throw, throwIO, toException)
 import Control.Monad (filterM)
 import Data.Foldable (traverse_)
+import Data.Functor ((<&>))
 import Data.List (sortOn)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -40,6 +41,7 @@ import Hegel.Internal.Control (AssumeRejected (..), ControlSignal (Assume, Stop)
 import Hegel.Internal.DataSource (Label (LabelStatefulRule), discardSpansTo, openSpanDepth, spanLabel, startSpan, stateMachineNextRule, stateMachineRuleRejected, stateMachineShouldCheckInvariant, stopSpan)
 import Hegel.Internal.Foreign.Raw (HegelStateMachine)
 import Hegel.Internal.TestCase (TestCase)
+import Hegel.Internal.TestCase qualified as TestCase
 import UnliftIO.Async (Async)
 import UnliftIO.Async qualified as Async
 
@@ -58,7 +60,8 @@ data Worker = Worker
   { testCase :: !TestCase,
     dispatch :: !(Int -> IO ()),
     onRejected :: !(IO ()),
-    roundSpan :: !RoundSpan
+    roundSpan :: !RoundSpan,
+    restoresRejected :: !Bool
   }
 
 -- | Pull rules for one worker from @sm@ until the round's own budget is
@@ -70,6 +73,11 @@ runWorkerRound sm w workerIndex = case w.roundSpan of
     loop False `onException` stopSpan w.testCase False
   Caller -> loop False
   where
+    -- A rejected rule's undo actions run inside 'TestCase.undoOnReject' before
+    -- its 'AssumeRejected' reaches the handler below.
+    attempt
+      | w.restoresRejected = TestCase.undoOnReject w.testCase
+      | otherwise = id
     loop rejected = do
       mRuleIndex <- stateMachineNextRule w.testCase sm workerIndex
       case mRuleIndex of
@@ -78,7 +86,7 @@ runWorkerRound sm w workerIndex = case w.roundSpan of
           Caller -> pure ()
         Just ruleIndex -> do
           depth <- openSpanDepth w.testCase
-          verdict <- (Right <$> w.dispatch ruleIndex) `catchControl` (pure . Left)
+          verdict <- (fmap Right . attempt $ w.dispatch ruleIndex) `catchControl` (pure . Left)
           case verdict of
             Right () -> loop rejected
             -- A rejected rule unwinds out of whatever draws it was making, so
@@ -117,7 +125,7 @@ classifyWorkerOutcome e
 
 -- | The conclusion of a given round.
 data RoundVerdict
-  = -- | Every worker finished its round normally; run invariants and start
+  = -- | Every worker finished its round normally; check invariants and start
     -- the next round.
     ContinueRound
   | -- | The round ends the whole test case; (re)throw this exception.
@@ -126,27 +134,21 @@ data RoundVerdict
 -- | Resolve one round's worker outcomes by precedence.
 --
 -- A control error outranks an overrun or an invalid conclusion, which outrank
--- a panic; among several panics, the lowest-indexed worker's wins.
+-- a panic; among several panics, the lowest-indexed worker's is returned.
 --
--- Returns the panics that lost, for the caller to note rather than drop
--- silently.
+-- Returns the remaining panics (if any).
 resolveRound :: [(Int, WorkerOutcome)] -> (RoundVerdict, [(Int, SomeException)])
-resolveRound outcomes = case [e | (_, RoundControlError e) <- outcomes] of
-  e : _ -> (Conclude e, panics)
-  [] ->
-    if anyOverrun || anyInvalid
-      then (Conclude (if anyOverrun then toException TestStopped else toException AssumeRejected), panics)
-      else case panics of
-        (_, e) : rest -> (Conclude e, rest)
-        [] -> (ContinueRound, [])
+resolveRound outcomes
+  | e : _ <- controlErrors = (Conclude e, panics)
+  | any (isOverrun . snd) outcomes = (Conclude (toException TestStopped), panics)
+  | any (isInvalid . snd) outcomes = (Conclude (toException AssumeRejected), panics)
+  | (_, e) : rest <- panics = (Conclude e, rest)
+  | otherwise = (ContinueRound, [])
   where
-    anyOverrun = any (isOverrun . snd) outcomes
-    anyInvalid = any (isInvalid . snd) outcomes
-    isOverrun RoundOverrun = True
-    isOverrun _ = False
-    isInvalid RoundInvalid = True
-    isInvalid _ = False
+    controlErrors = [e | (_, RoundControlError e) <- outcomes]
     panics = sortOn fst [(i, e) | (i, RoundPanicked e) <- outcomes]
+    isOverrun = \case RoundOverrun -> True; _ -> False
+    isInvalid = \case RoundInvalid -> True; _ -> False
 
 -- * Fan-out
 
@@ -155,16 +157,16 @@ runRound :: Ptr HegelStateMachine -> [Worker] -> IO (RoundVerdict, [(Int, SomeEx
 runRound sm workers = mask \restore -> do
   handles <- for (zip [0 ..] workers) \(i, w) -> (,) i <$> Async.async (runWorkerRound sm w i)
   outcomes <-
-    restore (for handles (\(i, h) -> (,) i <$> waitWorkerOutcome h))
+    restore (for handles \(i, h) -> (,) i <$> waitWorkerOutcome h)
       `onException` traverse_ (Async.uninterruptibleCancel . snd) handles
-  pure (resolveRound outcomes)
+  pure $ resolveRound outcomes
 
 -- | Wait for one worker's round to finish, classifying however it ended.
 waitWorkerOutcome :: Async () -> IO WorkerOutcome
 waitWorkerOutcome h =
-  Async.waitCatch h >>= \case
-    Right () -> pure RoundDone
-    Left e -> pure (classifyWorkerOutcome e)
+  Async.waitCatch h <&> \case
+    Right () -> RoundDone
+    Left e -> classifyWorkerOutcome e
 
 -- * Join points
 
@@ -210,7 +212,10 @@ checkRuleWeights context rules =
   case filter (not . validWeight . snd) rules of
     [] -> pure ()
     (name, w) : _ ->
-      throwIO (malformedTest context "a Rule's weight must be finite and positive" [("rule", name), ("weight", T.pack (show w))])
+      let message :: Text
+          message = "a Rule's weight must be finite and positive"
+          fields = [("rule", name), ("weight", T.pack $ show w)]
+       in throwIO $ malformedTest context message fields
   where
     validWeight :: Double -> Bool
     validWeight w = not (isNaN w || isInfinite w) && w > 0

@@ -330,7 +330,7 @@ run bounds machine = withFrozenCallStack $ do
              in -- Each worker runs on its own clone, so it owns its own
                 -- 'LabelStatefulRule' span: unlike the sequential driver, no
                 -- root span would enclose it.
-                Worker {testCase = clone, dispatch, onRejected, roundSpan = Own}
+                Worker {testCase = clone, dispatch, onRejected, roundSpan = Own, restoresRejected = False}
 
           workers = map mkWorker (zip clones workerJournals)
 

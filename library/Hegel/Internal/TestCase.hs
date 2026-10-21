@@ -24,8 +24,9 @@ module Hegel.Internal.TestCase
 
     -- * Filter attempts
     recordUndo,
-    inAttempt,
+    inFilter,
     attempts,
+    undoOnReject,
 
     -- * Completion
     Status (..),
@@ -36,7 +37,6 @@ where
 import Control.Exception (bracket, onException, throwIO)
 import Control.Monad (void)
 import Data.List qualified as List
-import Data.Maybe (fromMaybe, isJust)
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
@@ -145,10 +145,9 @@ data TestCase = TestCase
     -- | How many spans this case has open, so a caller that recovers from an
     -- unwind can close or forget the spans it left behind.
     spanDepth :: !(IORef Int),
-    -- | Actions that restore what this case's draws took since the innermost
-    -- open filter attempt began, newest first, or 'Nothing' outside any
-    -- attempt. See 'attempts'.
-    undo :: !(IORef (Maybe [IO ()]))
+    -- | What the innermost open attempt's draws took, or 'Nothing' outside any
+    -- attempt. See 'attempts' and 'undoOnReject'.
+    undo :: !(IORef (Maybe Undo))
   }
 
 -- * Draw provenance
@@ -175,18 +174,29 @@ forgetDraw tc v = case tc.recording of
 
 -- * Filter attempts
 
+-- | The undo actions an open attempt's draws registered, newest first.
+data Undo = Undo
+  { -- | Whether the attempt is one of a filter's, rather than a rule body.
+    filtering :: !Bool,
+    actions :: ![IO ()]
+  }
+
 -- | Register an action that restores what a draw just took, which runs if the
--- filter attempt enclosing the draw is rejected. Outside any filter attempt it
--- is dropped.
+-- attempt enclosing the draw is rejected. Outside any attempt it is dropped.
 recordUndo :: TestCase -> IO () -> IO ()
-recordUndo tc act = modifyIORef' tc.undo (fmap (act :))
+recordUndo tc act = modifyIORef' tc.undo (fmap \u -> u {actions = act : u.actions})
 
 -- | Is a filter attempt open on this case?
-inAttempt :: TestCase -> IO Bool
-inAttempt tc = isJust <$> readIORef tc.undo
+inFilter :: TestCase -> IO Bool
+inFilter tc = maybe False (.filtering) <$> readIORef tc.undo
 
--- | Run @attempt@ up to @n@ times until it returns 'Just', yielding that result
--- or 'Nothing' once every attempt has been rejected.
+-- | Run @act@ as a single attempt that only an 'AssumeRejected' rejects,
+-- putting back what it took before the exception propagates.
+undoOnReject :: TestCase -> IO a -> IO a
+undoOnReject tc act = attemptsIn False tc 1 (Just <$> act) >>= maybe (throwIO AssumeRejected) pure
+
+-- | Run a filter's @attempt@ up to @n@ times until it returns 'Just', yielding
+-- that result or 'Nothing' once every attempt has been rejected.
 --
 -- What a rejected attempt's draws took stays taken until the attempts are
 -- over, so no later attempt draws it again, and is then put back. A kept
@@ -194,18 +204,24 @@ inAttempt tc = isJust <$> readIORef tc.undo
 -- attempt is rejected. An attempt that throws 'AssumeRejected' rejects the
 -- whole loop, putting back everything the attempts took before the exception
 -- propagates.
+--
+-- A failure or 'TestStopped' leaves everything taken, since the case is over.
 attempts :: TestCase -> Int -> IO (Maybe a) -> IO (Maybe a)
-attempts tc n attempt = do
+attempts = attemptsIn True
+
+-- | 'attempts', with @filtering@ saying whether they belong to a filter.
+attemptsIn :: Bool -> TestCase -> Int -> IO (Maybe a) -> IO (Maybe a)
+attemptsIn filtering tc n attempt = do
   outer <- readIORef tc.undo
   (result, kept, rejected) <- go n [] `onException` writeIORef tc.undo outer
   writeIORef tc.undo outer
   sequence_ rejected
-  modifyIORef' tc.undo (fmap (kept <>))
+  modifyIORef' tc.undo (fmap \u -> u {actions = kept <> u.actions})
   pure result
   where
-    taken = fromMaybe [] <$> readIORef tc.undo
+    taken = maybe [] (.actions) <$> readIORef tc.undo
     go k rejected = do
-      writeIORef tc.undo (Just [])
+      writeIORef tc.undo (Just Undo {filtering, actions = []})
       result <-
         attempt `catchControl` \case
           Assume -> do

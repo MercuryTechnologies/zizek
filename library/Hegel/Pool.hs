@@ -121,15 +121,7 @@ isEmpty pool = IntMap.null <$> readMVar pool.values
 -- header describes.
 reuse :: Pool a -> Gen a
 reuse pool = Draw (spanLabel LabelPoolReuse) \tc ->
-  withMVar pool.values \vals ->
-    if IntMap.null vals
-      then throwIO AssumeRejected
-      else do
-        vid <- poolGenerate tc pool.handle pool.identity False
-        case IntMap.lookup vid vals of
-          Just v -> pure v
-          Nothing ->
-            throwIO InvariantViolation {detail = "Hegel.Pool.reuse: unknown variable id " <> T.pack (show vid)}
+  withMVar pool.values \m -> snd <$> drawVar "reuse" Reuse pool tc m
 
 -- | A generator that consumes values from the pool, removing each yielded
 -- value so it is never drawn again.
@@ -141,7 +133,7 @@ reuse pool = Draw (spanLabel LabelPoolReuse) \tc ->
 consume :: Pool a -> Gen a
 consume pool = Draw (spanLabel LabelPoolConsume) \tc -> do
   (vid, v) <- drawConsuming "consume" pool tc
-  TestCase.recordUndo tc (restore pool tc vid v)
+  TestCase.recordUndo tc $ restore pool tc vid v
   pure v
 
 -- | Undo a consuming draw of @v@ under the variable id @vid@.
@@ -152,21 +144,36 @@ restore pool tc vid v = do
     pure (IntMap.insert vid v m)
   TestCase.forgetDraw tc Var {pool = pool.identity, id = vid}
 
--- | The consuming draw shared by 'consume' and 'transfer': draw a
--- vid from the engine (removing it there) and pop the mirrored value.
+-- | Take a value out of the pool for 'consume' and 'transfer', removing it
+-- from both the engine and the mirror.
 --
 -- Throws 'AssumeRejected' when the pool is empty.
-drawConsuming :: String -> Pool a -> TestCase -> IO (Int, a)
+drawConsuming :: Text -> Pool a -> TestCase -> IO (Int, a)
 drawConsuming caller pool tc =
-  modifyMVar pool.values \m ->
-    if IntMap.null m
-      then throwIO AssumeRejected
-      else do
-        vid <- poolGenerate tc pool.handle pool.identity True
-        case IntMap.updateLookupWithKey (\_ _ -> Nothing) vid m of
-          (Just v, m') -> pure (m', (vid, v))
-          (Nothing, _) ->
-            throwIO InvariantViolation {detail = "Hegel.Pool." <> T.pack caller <> ": unknown variable id " <> T.pack (show vid)}
+  modifyMVar pool.values \m -> do
+    (vid, v) <- drawVar caller Consume pool tc m
+    pure (IntMap.delete vid m, (vid, v))
+
+-- | Whether a draw leaves its value in the pool or removes it.
+data DrawMode = Reuse | Consume
+
+-- | Have the engine pick one of the pool's variables and return its id
+-- with its value from @m@, the pool's mirror, which the caller must hold
+-- locked across this call.
+--
+-- Throws 'AssumeRejected' when the pool is empty.
+drawVar :: Text -> DrawMode -> Pool a -> TestCase -> IntMap a -> IO (Int, a)
+drawVar caller mode pool tc m = do
+  when (IntMap.null m) $ throwIO AssumeRejected
+  vid <- poolGenerate tc pool.handle pool.identity consuming
+  case IntMap.lookup vid m of
+    Just v -> pure (vid, v)
+    Nothing ->
+      throwIO InvariantViolation {detail = "Hegel.Pool." <> caller <> ": unknown variable id " <> T.pack (show vid)}
+  where
+    consuming = case mode of
+      Reuse -> False
+      Consume -> True
 
 -- | A generator that moves a value from one pool to another: a consuming
 -- draw from @src@ whose value is immediately registered in @dst@, with the
@@ -178,10 +185,10 @@ drawConsuming caller pool tc =
 -- The move is not atomic across the two pools, and is therefore not safe to
 -- retry. Drawing it inside a 'Hegel.Gen.filtered' or 'Hegel.Gen.mapMaybe'
 -- attempt throws 'MalformedTest', since a rejected attempt could not undo the
--- move.
+-- move, and a stateful rule that is rejected after a transfer keeps it.
 transfer :: Pool a -> Pool a -> Gen a
 transfer src dst = Draw (spanLabel LabelPoolTransfer) \tc -> do
-  nested <- TestCase.inAttempt tc
+  nested <- TestCase.inFilter tc
   when nested $
     throwIO (malformedTest "Hegel.Pool.transfer" "a transfer cannot be drawn inside a filter attempt, which cannot undo the move" [])
   (vid, v) <- drawConsuming "transfer" src tc
