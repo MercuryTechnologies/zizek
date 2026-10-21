@@ -73,6 +73,11 @@ data Settings = Settings
     -- | When 'True', the engine collects every distinct failure instead of
     -- stopping at the first.
     reportMultipleFailures :: !(Maybe Bool),
+    -- | When 'True', the default, the engine stops generating at the first
+    -- failure to shrink and report it. When 'False', it spends the whole
+    -- 'testCases' budget first and replays every stored failure. Every
+    -- distinct failure is stored either way.
+    stopOnFirstFailure :: !(Maybe Bool),
     -- | Health checks to skip.
     suppressHealthCheck :: !(Maybe [HealthCheck]),
     -- | Let a test case make any number of choices. By default the engine
@@ -131,6 +136,7 @@ instance Semigroup Settings where
         backend = b.backend <|> a.backend,
         verbosity = b.verbosity <|> a.verbosity,
         reportMultipleFailures = b.reportMultipleFailures <|> a.reportMultipleFailures,
+        stopOnFirstFailure = b.stopOnFirstFailure <|> a.stopOnFirstFailure,
         suppressHealthCheck = b.suppressHealthCheck <|> a.suppressHealthCheck,
         unboundedChoices = b.unboundedChoices <|> a.unboundedChoices,
         showStatistics = b.showStatistics <|> a.showStatistics,
@@ -158,6 +164,7 @@ defaultSettings =
       backend = Nothing,
       verbosity = Nothing,
       reportMultipleFailures = Nothing,
+      stopOnFirstFailure = Nothing,
       suppressHealthCheck = Nothing,
       unboundedChoices = Nothing,
       showStatistics = Nothing,

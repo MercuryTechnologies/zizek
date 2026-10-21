@@ -123,6 +123,9 @@ spec = do
       directed.database `shouldBe` Just (DatabaseDirectory "some/dir")
       unbounded <- Profile.resolve defaultSettings {unboundedChoices = Just True}
       unbounded.unboundedChoices `shouldBe` Just True
+      based.stopOnFirstFailure `shouldBe` Just True
+      exhaustive <- Profile.resolve defaultSettings {stopOnFirstFailure = Just False}
+      exhaustive.stopOnFirstFailure `shouldBe` Just False
       worked <- Profile.resolve defaultSettings {profile = Just "workload"}
       worked.suppressHealthCheck `shouldBe` Just [minBound .. maxBound]
       for_ [minBound .. maxBound] \level -> do

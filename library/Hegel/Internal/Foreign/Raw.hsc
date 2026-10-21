@@ -161,6 +161,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_settings_set_seed,
     hegel_settings_set_derandomize,
     hegel_settings_set_report_multiple_failures,
+    hegel_settings_set_stop_on_first_failure,
     hegel_settings_set_unbounded_choices,
     hegel_settings_set_show_statistics,
     hegel_settings_set_test_location,
@@ -181,6 +182,7 @@ module Hegel.Internal.Foreign.Raw
     hegel_settings_get_phases,
     hegel_settings_get_suppress_health_check,
     hegel_settings_get_report_multiple_failures,
+    hegel_settings_get_stop_on_first_failure,
     hegel_settings_get_unbounded_choices,
     hegel_settings_get_show_statistics,
     hegel_settings_get_print_blob,
@@ -762,6 +764,11 @@ foreign import ccall unsafe "hegel_settings_set_derandomize"
 foreign import ccall unsafe "hegel_settings_set_report_multiple_failures"
   hegel_settings_set_report_multiple_failures :: Ptr HegelContext -> Ptr HegelSettings -> CBool -> IO CInt
 
+-- | Stop generating at the first failure to shrink and report it, which is the
+-- default, or with @0@ spend the whole test-case budget first.
+foreign import ccall unsafe "hegel_settings_set_stop_on_first_failure"
+  hegel_settings_set_stop_on_first_failure :: Ptr HegelContext -> Ptr HegelSettings -> CBool -> IO CInt
+
 -- | Let a test case make any number of choices instead of concluding it as an
 -- overrun at 2^20.
 foreign import ccall unsafe "hegel_settings_set_unbounded_choices"
@@ -856,6 +863,10 @@ foreign import ccall unsafe "hegel_settings_get_suppress_health_check"
 -- | Read whether a handle collects every distinct failure.
 foreign import ccall unsafe "hegel_settings_get_report_multiple_failures"
   hegel_settings_get_report_multiple_failures :: Ptr HegelContext -> Ptr HegelSettings -> Ptr CBool -> IO CInt
+
+-- | Read whether a handle stops generating at the first failure.
+foreign import ccall unsafe "hegel_settings_get_stop_on_first_failure"
+  hegel_settings_get_stop_on_first_failure :: Ptr HegelContext -> Ptr HegelSettings -> Ptr CBool -> IO CInt
 
 -- | Read whether a handle lifts the per-test-case choice limit.
 foreign import ccall unsafe "hegel_settings_get_unbounded_choices"

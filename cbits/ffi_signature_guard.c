@@ -105,6 +105,8 @@ hegel_result_t (*const zizek_guard_hegel_settings_set_print_blob)(hegel_context_
 hegel_result_t (*const zizek_guard_hegel_settings_set_report_multiple_failures)(hegel_context_t *ctx, hegel_settings_t *s, bool yes) = hegel_settings_set_report_multiple_failures;
 hegel_result_t (*const zizek_guard_hegel_settings_set_seed)(hegel_context_t *ctx, hegel_settings_t *s, uint64_t seed, bool has_seed) = hegel_settings_set_seed;
 hegel_result_t (*const zizek_guard_hegel_settings_set_show_statistics)(hegel_context_t *ctx, hegel_settings_t *s, bool yes) = hegel_settings_set_show_statistics;
+hegel_result_t (*const zizek_guard_hegel_settings_get_stop_on_first_failure)(hegel_context_t *ctx, const hegel_settings_t *s, bool *out) = hegel_settings_get_stop_on_first_failure;
+hegel_result_t (*const zizek_guard_hegel_settings_set_stop_on_first_failure)(hegel_context_t *ctx, hegel_settings_t *s, bool yes) = hegel_settings_set_stop_on_first_failure;
 hegel_result_t (*const zizek_guard_hegel_settings_set_suppress_health_check)(hegel_context_t *ctx, hegel_settings_t *s, uint32_t checks) = hegel_settings_set_suppress_health_check;
 hegel_result_t (*const zizek_guard_hegel_settings_set_test_cases)(hegel_context_t *ctx, hegel_settings_t *s, uint64_t n) = hegel_settings_set_test_cases;
 hegel_result_t (*const zizek_guard_hegel_settings_set_test_location)(hegel_context_t *ctx, hegel_settings_t *s, hegel_string_t file, uint32_t begin_line, hegel_string_t class_name, hegel_string_t function) = hegel_settings_set_test_location;

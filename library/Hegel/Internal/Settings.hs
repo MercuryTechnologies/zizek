@@ -97,6 +97,7 @@ readSettings ctx settings s = do
   phases <- fromBitmask <$> out (hegel_settings_get_phases ctx s)
   suppressHealthCheck <- fromBitmask <$> out (hegel_settings_get_suppress_health_check ctx s)
   reportMultipleFailures <- readBool ctx (hegel_settings_get_report_multiple_failures ctx s)
+  stopOnFirstFailure <- readBool ctx (hegel_settings_get_stop_on_first_failure ctx s)
   unboundedChoices <- readBool ctx (hegel_settings_get_unbounded_choices ctx s)
   showStatistics <- readBool ctx (hegel_settings_get_show_statistics ctx s)
   printBlob <- readBool ctx (hegel_settings_get_print_blob ctx s)
@@ -116,6 +117,7 @@ readSettings ctx settings s = do
         backend = Just backend,
         verbosity = Just verbosity,
         reportMultipleFailures = Just reportMultipleFailures,
+        stopOnFirstFailure = Just stopOnFirstFailure,
         suppressHealthCheck = Just suppressHealthCheck,
         unboundedChoices = Just unboundedChoices,
         showStatistics = Just showStatistics,
@@ -165,6 +167,7 @@ applySettings ctx s ptr = do
     SeedFixed seed -> chk $ hegel_settings_set_seed ctx ptr seed (CBool 1)
   for_ s.derandomize \b -> chk $ hegel_settings_set_derandomize ctx ptr (fromBool b)
   for_ s.reportMultipleFailures \b -> chk $ hegel_settings_set_report_multiple_failures ctx ptr (fromBool b)
+  for_ s.stopOnFirstFailure \b -> chk $ hegel_settings_set_stop_on_first_failure ctx ptr (fromBool b)
   for_ s.phases \ps -> chk $ hegel_settings_set_phases ctx ptr (phasesBitmask ps)
   for_ s.suppressHealthCheck \hcs -> chk $ hegel_settings_set_suppress_health_check ctx ptr (hcBitmask hcs)
   for_ s.unboundedChoices \b -> chk $ hegel_settings_set_unbounded_choices ctx ptr (fromBool b)
