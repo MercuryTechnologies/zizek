@@ -1,7 +1,8 @@
 -- | Unit tests for the 'Hegel.Property.Branch' combinators.
 module BranchProperties (spec) where
 
-import Control.Monad (replicateM)
+import Control.Concurrent (threadDelay)
+import Control.Monad (join, replicateM, replicateM_)
 import Control.Monad.IO.Class (liftIO)
 import Data.Default.Class (def)
 import Data.Foldable (for_, traverse_)
@@ -11,9 +12,11 @@ import Data.Text qualified as T
 import Hegel (Gen)
 import Hegel.Gen qualified as Gen
 import Hegel.HealthCheck (HealthCheck (..))
+import Hegel.Internal.TestCase (TestCase (..))
 import Hegel.Pool qualified as Pool
 import Hegel.Property
-  ( annotate,
+  ( Property,
+    annotate,
     annotateShow,
     assert,
     check,
@@ -23,11 +26,14 @@ import Hegel.Property
     (===),
   )
 import Hegel.Property.Branch qualified as Branch
-import Hegel.Report (FailureEvidence (..), Note (..), Report (..), Result (..), isBranchFailure, isBranchHeader, renderReport, renderReportRich)
+import Hegel.Property.Internal (Env (..), askEnv)
+import Hegel.Report (FailureEvidence (..), FailureOutcome (..), Note (..), Report (..), Result (..), isBranchFailure, isBranchHeader, renderReport, renderReportRich)
+import Hegel.Runner (replay)
+import Hegel.Seed (Seed (..))
 import Hegel.Settings (Settings (..), defaultSettings)
 import Test.Hspec
-import TestSupport (expectCaptured, singleCapturedEvidence)
-import UnliftIO.IORef (atomicModifyIORef', newIORef, readIORef)
+import TestSupport (allFailureOutcomes, expectCaptured, expectToken, singleCapturedEvidence)
+import UnliftIO.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 
 intR :: (Int, Int) -> Gen Int
 intR (lo, hi) = Gen.integral & Gen.min lo & Gen.max hi & Gen.build
@@ -333,24 +339,69 @@ spec = describe "concurrent combinators" do
         assert (length rs == 6) "cap limits concurrency, not the result count"
       report.result `shouldSatisfy` isOk
 
-    it "never runs more than cap branches live at once" do
-      liveRef <- newIORef (0 :: Int)
-      maxLiveRef <- newIORef (0 :: Int)
+    it "never holds more than cap clones live at once" do
+      peakRef <- newIORef (0 :: Int)
       report <- check def do
+        live <- (.testCase.liveClones) <$> askEnv
         _ <-
           Branch.replicateConcurrentlyBounded
             2
             8
             ( liftIO do
-                atomicModifyIORef' liveRef \n -> (n + 1, ())
-                cur <- readIORef liveRef
-                atomicModifyIORef' maxLiveRef \m -> (max m cur, ())
-                atomicModifyIORef' liveRef \n -> (n - 1, ())
+                cur <- readIORef live
+                atomicModifyIORef' peakRef \m -> (max m cur, ())
+                threadDelay 2000
             )
         pure ()
       report.result `shouldSatisfy` isOk
-      maxLive <- readIORef maxLiveRef
-      maxLive `shouldSatisfy` (<= 2)
+      peak <- readIORef peakRef
+      peak `shouldSatisfy` (<= 2)
+      peak `shouldSatisfy` (>= 1)
+
+    it "frees every clone when a branch fails" do
+      liveRef <- newIORef (pure 0)
+      report <- check def do
+        live <- (.testCase.liveClones) <$> askEnv
+        liftIO (writeIORef liveRef (readIORef live))
+        _ <- Branch.replicateConcurrentlyBounded 2 6 (assert False "branch fails")
+        pure ()
+      case singleCapturedEvidence report.result of
+        Just FailureEvidence {message} -> message `shouldBe` "branch fails"
+        other -> expectationFailure ("expected failure, got: " <> show other)
+      join (readIORef liveRef) >>= (`shouldBe` 0)
+
+    it "returns results in input order whatever the cap or scheduling" do
+      let settings = defaultSettings {seed = Just (SeedFixed 7), testCases = Just 1, database = Nothing}
+          runWith cap = do
+            ref <- newIORef []
+            report <-
+              check settings do
+                rs <- Branch.replicateConcurrentlyBounded cap 6 (forAll (intR (0, 1000)) <* liftIO (threadDelay 1000))
+                liftIO (writeIORef ref rs)
+            report.result `shouldSatisfy` isOk
+            readIORef ref
+      sequential <- runWith 1
+      length sequential `shouldBe` 6
+      for_ [2, 3, 6, 9] \cap -> replicateM_ 5 (runWith cap >>= (`shouldBe` sequential))
+
+    it "replays a failing bounded fan-out from its token to the same failure" do
+      let settings = defaultSettings {testCases = Just 200}
+          failing :: Property ()
+          failing = do
+            _ <- Branch.replicateConcurrentlyBounded 2 6 do
+              x <- forAll (intR (0, 20))
+              assert (x < 15) ("drew " <> T.pack (show x))
+            pure ()
+      report <- check settings failing
+      outcome <- case allFailureOutcomes report.result of
+        [o] -> pure o
+        other -> expectationFailure (show other) >> fail "no single failure"
+      token <- expectToken outcome
+      evidence <- expectCaptured report.result
+      replayed <- replay settings token failing
+      actual <- expectCaptured replayed.result
+      actual.message `shouldBe` evidence.message
+      map (.failureReplayToken) (allFailureOutcomes replayed.result) `shouldBe` [Just token]
 
   describe "control signals" do
     it "a discarding branch discards the whole case" do

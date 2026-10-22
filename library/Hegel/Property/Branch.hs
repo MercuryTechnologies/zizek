@@ -32,15 +32,16 @@ module Hegel.Property.Branch
   )
 where
 
+import Control.Concurrent.MVar (modifyMVar, newMVar)
 import Control.Exception qualified as E
 import Control.Monad (void)
 import Control.Monad.IO.Class (liftIO)
 import Data.Either (partitionEithers)
-import Data.List (find)
+import Data.List (find, sortOn)
 import Data.Text qualified as T
 import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hegel.Internal.Control (isAborting, malformedTest)
-import Hegel.Internal.TestCase (withClonePair, withClones)
+import Hegel.Internal.TestCase (TestCase, allocateClone, withClonePair, withClones)
 import Hegel.Property.Internal
   ( Env (testCase),
     PropertyT,
@@ -85,7 +86,7 @@ concurrently_ pa pb = withFrozenCallStack $ void (concurrently pa pb)
 -- each against its own cloned choice stream, preserving input order in the
 -- result.
 mapConcurrently :: (HasCallStack, MonadUnliftIO m) => (a -> PropertyT m b) -> [a] -> PropertyT m [b]
-mapConcurrently f xs = withFrozenCallStack $ runBranches Async.mapConcurrently (map f xs)
+mapConcurrently f xs = withFrozenCallStack $ runBranches Nothing (map f xs)
 
 -- | 'mapConcurrently', discarding the results.
 mapConcurrently_ :: (HasCallStack, MonadUnliftIO m) => (a -> PropertyT m b) -> [a] -> PropertyT m ()
@@ -104,41 +105,68 @@ forConcurrently_ = withFrozenCallStack $ flip mapConcurrently_
 -- properties want: @replicateConcurrently 5 clientSession@ runs five
 -- independent sessions against one shared server.
 replicateConcurrently :: (HasCallStack, MonadUnliftIO m) => Int -> PropertyT m a -> PropertyT m [a]
-replicateConcurrently n act = withFrozenCallStack $ runBranches Async.mapConcurrently (replicate n act)
+replicateConcurrently n act = withFrozenCallStack $ runBranches Nothing (replicate n act)
 
 -- | 'replicateConcurrently', discarding the results.
 replicateConcurrently_ :: (HasCallStack, MonadUnliftIO m) => Int -> PropertyT m a -> PropertyT m ()
 replicateConcurrently_ n = withFrozenCallStack $ void . replicateConcurrently n
 
--- | 'replicateConcurrently', capping how many branches drive at once rather
--- than acquiring all @n@ clones and threads live simultaneously. @cap@ must
--- be at least 1.
+-- | 'replicateConcurrently', keeping at most @cap@ branches, each with its own
+-- clone and thread, live at any time. @cap@ must be at least 1.
 replicateConcurrentlyBounded :: (HasCallStack, MonadUnliftIO m) => Int -> Int -> PropertyT m a -> PropertyT m [a]
 replicateConcurrentlyBounded cap n act =
   withFrozenCallStack $
     if cap < 1
       then liftIO (E.throwIO (malformedTest "Hegel.Property.Branch.replicateConcurrentlyBounded" "cap must be at least 1" [("cap", T.pack (show cap))]))
-      else runBranches (Async.pooledMapConcurrentlyN cap) (replicate n act)
+      else runBranches (Just cap) (replicate n act)
 
 -- * Mechanics
 
--- | Run every branch of a homogeneous fan-out, given the concurrency strategy
--- ('UnliftIO.Async.mapConcurrently' for unbounded fan-out, or a pooled
--- variant for bounded), then fold notes and report the lowest-indexed failure
--- deterministically, mirroring 'concurrently'.
+-- | Run every branch of a homogeneous fan-out, either all at once or with at
+-- most the given number live, then fold notes and report the lowest-indexed
+-- failure deterministically, mirroring 'concurrently'.
 runBranches ::
   (HasCallStack, MonadUnliftIO m) =>
-  (forall x y. (x -> IO y) -> [x] -> IO [y]) ->
+  Maybe Int ->
   [PropertyT m a] ->
   PropertyT m [a]
 runBranches _ [] = pure []
-runBranches runMany actions = withFrozenCallStack $ do
+runBranches cap actions = withFrozenCallStack $ do
   env <- askEnv
   liftIO (checkCloneDepth env)
-  withBaseRunInIO \runBase ->
-    withClones (length actions) env.testCase \clones -> do
-      outcomes <- runMany (\(tc, act) -> runBranch runBase env tc act) (zip clones actions)
-      foldBranchNotes env (map snd outcomes)
-      case partitionEithers (map fst outcomes) of
-        (e : es, _) -> E.throwIO (maybe e id (find isAborting (e : es)))
-        ([], results) -> pure results
+  withBaseRunInIO \runBase -> do
+    let run tc act = runBranch runBase env tc act
+    outcomes <- case cap of
+      Nothing ->
+        withClones (length actions) env.testCase \clones ->
+          Async.mapConcurrently (uncurry run) (zip clones actions)
+      Just c -> runBounded c env.testCase run actions
+    foldBranchNotes env (map snd outcomes)
+    case partitionEithers (map fst outcomes) of
+      (e : es, _) -> E.throwIO (maybe e id (find isAborting (e : es)))
+      ([], results) -> pure results
+
+-- | Run the branches on @cap@ workers, returning outcomes in input order.
+-- A worker takes the next index and acquires that branch's clone from the
+-- parent inside one critical section, so clones are acquired in index order
+-- whatever the scheduling, and it frees the clone before taking another.
+runBounded :: Int -> TestCase -> (TestCase -> b -> IO o) -> [b] -> IO [o]
+runBounded cap parent run actions = do
+  next <- newMVar (0 :: Int, actions)
+  let claim = modifyMVar next \case
+        (i, []) -> pure ((i, []), Nothing)
+        (i, a : rest) -> do
+          (clone, release) <- allocateClone parent
+          pure ((i + 1, rest), Just (i, a, clone, release))
+      worker acc = do
+        job <- E.mask \restore ->
+          claim >>= \case
+            Nothing -> pure Nothing
+            Just (i, a, clone, release) -> do
+              o <- restore (run clone a) `E.finally` release
+              pure (Just (i, o))
+        case job of
+          Nothing -> pure acc
+          Just r -> worker (r : acc)
+  results <- Async.mapConcurrently (const (worker [])) [1 .. min cap (length actions)]
+  pure (map snd (sortOn fst (concat results)))

@@ -10,6 +10,7 @@ module Hegel.Internal.TestCase
   ( -- * Construction
     mkTestCase,
     withClone,
+    allocateClone,
     withClonePair,
     withClones,
 
@@ -34,7 +35,7 @@ module Hegel.Internal.TestCase
   )
 where
 
-import Control.Exception (bracket, onException, throwIO)
+import Control.Exception (bracket, mask_, onException, throwIO)
 import Control.Monad (void)
 import Data.List qualified as List
 import Data.Sequence (Seq)
@@ -65,7 +66,8 @@ mkTestCase recording handle = do
   draws <- newIORef []
   spanDepth <- newIORef 0
   undo <- newIORef Nothing
-  pure TestCase {handle, slot, recording, events, draws, spanDepth, undo}
+  liveClones <- newIORef 0
+  pure TestCase {handle, slot, recording, events, draws, spanDepth, undo, liveClones}
 
 -- | Clone @src@ and run @action@ against the clone, freeing it on every
 -- exit, including an exception.
@@ -80,9 +82,21 @@ mkTestCase recording handle = do
 -- prevents that, so do not call 'hegel_test_case_free' on the clone
 -- yourself, and do not return it out of @action@.
 withClone :: TestCase -> (TestCase -> IO a) -> IO a
-withClone src action =
-  bracket hegel_context_new (void . hegel_context_free) \ctx ->
-    bracket (acquire ctx) release action
+withClone src action = bracket (allocateClone src) snd (action . fst)
+
+-- | Clone @src@ and return the clone with the action that frees it.
+--
+-- The caller must run the release action exactly once on every exit, since
+-- a clone that is never freed wedges the run.
+allocateClone :: TestCase -> IO (TestCase, IO ())
+allocateClone src = mask_ do
+  ctx <- hegel_context_new
+  ( do
+      clone <- acquire ctx
+      atomicModifyIORef' src.liveClones (\n -> (n + 1, ()))
+      pure (clone, release ctx clone)
+    )
+    `onException` void (hegel_context_free ctx)
   where
     acquire :: Ptr HegelContext -> IO TestCase
     acquire ctx = do
@@ -96,8 +110,12 @@ withClone src action =
         Tick.Silent -> pure Tick.Silent
         Tick.Active _ -> Tick.newRecording
       mkTestCase recording Handle {ctx, ptr}
-    release :: TestCase -> IO ()
-    release clone = void (hegel_test_case_free clone.handle.ctx clone.handle.ptr)
+        `onException` void (hegel_test_case_free ctx ptr)
+    release :: Ptr HegelContext -> TestCase -> IO ()
+    release ctx clone = do
+      void (hegel_test_case_free clone.handle.ctx clone.handle.ptr)
+      void (hegel_context_free ctx)
+      atomicModifyIORef' src.liveClones (\n -> (n - 1, ()))
 
 -- | Acquire two clones of @tc@ in a fixed order, against @tc@ itself rather
 -- than each other, so both fork positions are direct children at clone depth
@@ -147,7 +165,10 @@ data TestCase = TestCase
     spanDepth :: !(IORef Int),
     -- | What the innermost open attempt's draws took, or 'Nothing' outside any
     -- attempt. See 'attempts' and 'undoOnReject'.
-    undo :: !(IORef (Maybe Undo))
+    undo :: !(IORef (Maybe Undo)),
+    -- | How many clones of this case are currently held, for tests that bound
+    -- a combinator's peak.
+    liveClones :: !(IORef Int)
   }
 
 -- * Draw provenance
