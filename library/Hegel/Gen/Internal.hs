@@ -204,18 +204,28 @@ just = mapMaybe Prelude.id
 filtered :: (a -> Bool) -> Gen a -> Gen a
 filtered p = mapMaybe \a -> if p a then Prelude.Just a else Prelude.Nothing
 
--- | Choose one of the given generators, each about equally often.
+-- | Choose one of the given generators.
 --
 -- The list must be non-empty, and passing @[]@ throws 'ValidationError' when
 -- evaluated. A counterexample shrinks toward the first generator in the list.
+--
+-- __NOTE__: The choice is not uniform. The engine explores novel choice
+-- sequences, so a generator that produces more distinct values is chosen more
+-- often, and its index draw favours earlier generators in a long list. For
+-- example, @oneOf [Gen.bool, Gen.int32]@ exhausts the @bool@ branch after two
+-- cases and draws almost exclusively from @int32@ for the rest of the run.
 oneOf :: (HasCallStack) => [Gen a] -> Gen a
 oneOf [] = throw (ValidationError Diagnostic {context = "Gen.oneOf", detail = "used with empty list", values = [("choices", "0")], callStack = callStack})
 oneOf gens = OneOf (combineLabels (spanLabel LabelOneOf : fmap labelOf gens)) gens
 
--- | Generate one of the given values, each about equally often.
+-- | Generate one of the given values.
 --
 -- The list must be non-empty, and passing @[]@ throws 'ValidationError' when
 -- evaluated. A counterexample shrinks toward the first value in the list.
+--
+-- __NOTE__: The choice is not uniform, because the engine's index draw
+-- favours small indices. In a list of a thousand values, the upper half comes
+-- up only about a quarter of the time.
 element :: (HasCallStack) => [a] -> Gen a
 element [] = throw (ValidationError Diagnostic {context = "Gen.element", detail = "used with empty list", values = [("choices", "0")], callStack = callStack})
 element xs = Draw (spanLabel LabelSampledFrom) \tc -> do

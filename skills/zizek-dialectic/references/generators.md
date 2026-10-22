@@ -57,7 +57,7 @@ marks = Gen.text & Gen.alphabet Alphabet.combiningMarks & Gen.build
 
 ## Choosing among alternatives
 
-`Gen.oneOf` and `Gen.element` pick each alternative about equally often, and `Gen.frequency` picks in proportion to its weights. A counterexample shrinks toward the first alternative in the list, so put the simplest one first. When crossing input classes deliberately, draw the class itself as a small type with `Gen.enumBounded` or `Gen.element` and construct the case from it, so each case records which class it belongs to.
+`Gen.oneOf`, `Gen.element`, and `Gen.frequency` don't sample uniformly. The engine explores novel choice sequences, so an alternative that produces more distinct values comes up more often, and the index draw behind `Gen.oneOf` and `Gen.element` favours earlier alternatives in a long list. Weights in `Gen.frequency` steer which branch each draw picks, but a branch that quickly runs out of new values still fades from the run. Check the mix a test actually gets with `event` before relying on it. A counterexample shrinks toward the first alternative in the list, so put the simplest one first. When crossing input classes deliberately, draw the class itself as a small type with `Gen.enumBounded` or `Gen.element` and construct the case from it, so each case records which class it belongs to.
 
 ## Recursive data
 
