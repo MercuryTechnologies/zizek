@@ -96,7 +96,7 @@ checkWithProgress progress settings prop = do
             (sink, readOutput) <- newOutputBuffer
             -- Read and copy everything out of the run handle before withRun frees
             -- it on bracket exit (see 'readRunOutcome').
-            (stats, outcome) <- withRun ctx s (Just sink) (driveRun ctx settings prop captures statsRef progress)
+            (stats, _, outcome) <- withRun ctx s (Just sink) (driveRun ctx settings prop captures statsRef progress)
             result <- case outcome.status of
               RunPassed
                 | stats.valid == 0 -> pure (GaveUp "no valid examples found")
@@ -122,13 +122,14 @@ checkWithProgress progress settings prop = do
 -- | Pump every case out of a started run, then copy its outcome.
 --
 -- The running tallies live in @statsRef@, so an abort partway through the run
--- leaves the stats of the cases that already ran readable.
-driveRun :: Ptr HegelContext -> Settings -> Property () -> IORef (Map Text Capture) -> IORef Stats -> (Int -> IO ()) -> Ptr HegelRun -> IO (Stats, RunOutcome)
+-- leaves the stats of the cases that already ran readable. The count of cases
+-- that overran is returned alongside them.
+driveRun :: Ptr HegelContext -> Settings -> Property () -> IORef (Map Text Capture) -> IORef Stats -> (Int -> IO ()) -> Ptr HegelRun -> IO (Stats, Int, RunOutcome)
 driveRun ctx settings prop captures statsRef progress run = do
-  driveLoop ctx (\journal -> propertyAction journal (fromMaybe Settings.defaultMaxCloneDepth settings.maxCloneDepth) prop) captures statsRef run progress
+  overruns <- driveLoop ctx (\journal -> propertyAction journal (fromMaybe Settings.defaultMaxCloneDepth settings.maxCloneDepth) prop) captures statsRef run progress
   stats <- readIORef statsRef
   outcome <- readRunOutcome ctx run
-  pure (stats, outcome)
+  pure (stats, overruns, outcome)
 
 -- | The result for a run the engine marked failed without exposing a failure.
 noCounterexample :: Result
@@ -192,10 +193,12 @@ replay settings token prop = do
                     | e.code == HEGEL_E_INVALID_ARG ->
                         pure (diverged (Stats 0 0 0) (InvalidReplayBlob (fromMaybe "invalid replay blob" e.message)))
                     | otherwise -> throwIO e
-                  Right (stats, outcome) -> do
+                  Right (stats, overruns, outcome) -> do
                     captured <- readIORef captures
                     pure case outcome.status of
-                      RunPassed -> diverged stats DidNotReproduce
+                      RunPassed
+                        | overruns > 0, stats.valid + stats.invalid == 0 -> diverged stats ReplayOverran
+                        | otherwise -> diverged stats DidNotReproduce
                       RunFailed -> case outcome.failures of
                         [] -> Report noCounterexample stats Unstored []
                         failure : failures -> Report (Failures (replayedOutcomes captured (failure :| failures))) stats Unstored []
@@ -477,15 +480,15 @@ driveLoop ::
   IORef Stats ->
   Ptr HegelRun ->
   (Int -> IO ()) ->
-  IO ()
-driveLoop ctx action captures statsRef run progress = loop 0
+  IO Int
+driveLoop ctx action captures statsRef run progress = loop 0 0
   where
-    loop !completed = do
+    loop !overruns !completed = do
       tcPtr <- alloca \out -> do
         throwOnError ctx =<< hegel_next_test_case ctx run out
         peek out
       if tcPtr == nullPtr
-        then pure ()
+        then pure overruns
         else do
           status <- runTestCase ctx action captures tcPtr `finally` void (hegel_test_case_free ctx tcPtr)
           progress (completed + 1)
@@ -494,7 +497,7 @@ driveLoop ctx action captures statsRef run progress = loop 0
             Invalid -> modifyIORef' statsRef \stats -> stats {invalid = stats.invalid + 1}
             Interesting _ -> modifyIORef' statsRef \stats -> stats {failing = stats.failing + 1}
             Overrun -> pure ()
-          loop (completed + 1)
+          loop (if status == Overrun then overruns + 1 else overruns) (completed + 1)
 
 -- | Run one engine-produced test case, recording a capture when it fails.
 --

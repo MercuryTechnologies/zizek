@@ -146,8 +146,11 @@ newtype ReplayDivergence = ReplayDivergence
 
 -- | Why an explicit replay did not reproduce its token's failure.
 data ReplayReason
-  = -- | Every replay the engine attempted within its budget passed.
+  = -- | Every replay the engine attempted within its budget ran to completion and passed.
     DidNotReproduce
+  | -- | The property draws more than the recorded failure supplies, so no
+    -- replay ran to completion.
+    ReplayOverran
   | -- | The replay failed, but at this origin rather than the token's.
     ChangedOrigin !Text
   | -- | The engine rejected the token's blob without running it.
@@ -196,6 +199,7 @@ replayDivergenceReason = renderReplayReason . (.replayReason)
 renderReplayReason :: ReplayReason -> Text
 renderReplayReason = \case
   DidNotReproduce -> "every replay passed, so the failure may have been fixed or may not have recurred"
+  ReplayOverran -> "the property now draws more than the recorded failure supplies, so no replay ran to completion"
   ChangedOrigin origin -> "replay failed at a different origin: " <> origin
   InvalidReplayBlob detail -> "the replay token was rejected by the engine: " <> detail
   IncompatibleVersions {tokenVersion, engineVersion} ->

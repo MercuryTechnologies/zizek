@@ -292,6 +292,7 @@ data Status
   | -- | The case failed; the payload is the origin string used for
     -- deduplication.
     Interesting Text
+  deriving stock (Eq, Show)
 
 -- | The @hegel_status_t@ wire value.
 --

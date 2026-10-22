@@ -19,7 +19,7 @@ import Hegel.Phase (Phase (..))
 import Hegel.Property (Property, assert, assume, forAll)
 import Hegel.Property.Internal (Env (..), Journal (..), askEnv)
 import Hegel.Replay (ReplayError (..), ReplayToken, decodeReplayToken, encodeReplayToken, replayTokenOrigin, replayTokenVersion)
-import Hegel.Report (Abort (..), FailureEvidence (..), FailureEvidenceStatus (..), FailureOutcome (..), ReplayDivergence (..), ReplayReason (..), Report (..), Reproduction (..), Result (..), Stats (..))
+import Hegel.Report (Abort (..), FailureEvidence (..), FailureEvidenceStatus (..), FailureOutcome (..), ReplayDivergence (..), ReplayReason (..), Report (..), Reproduction (..), Result (..), Stats (..), replayDivergenceReason)
 import Hegel.Runner (check, replay)
 import Hegel.Settings (Settings (..), defaultSettings)
 import System.FilePath ((</>))
@@ -87,8 +87,7 @@ spec = do
 
   for_
     [ ("passing", pure ()),
-      ("discarding", assume False),
-      ("overdrawing", void (forAll (intR (0, 100))))
+      ("discarding", assume False)
     ]
     \(name, body) ->
       it ("reports a stale token replayed against a body that is " <> name <> " as not reproducing") do
@@ -96,6 +95,18 @@ spec = do
         replayed <- replay defaultSettings token body
         assertDivergence DidNotReproduce replayed
         map (.failureReplayToken) (allFailureOutcomes replayed.result) `shouldBe` [Just token]
+
+  it "reports a stale token replayed against a body that now draws more as overrunning" do
+    token <- singletonToken =<< check defaultSettings zeroFailure
+    replayed <- replay defaultSettings token (void (forAll (intR (0, 100))))
+    assertDivergence ReplayOverran replayed
+    case failureEvidenceStatuses replayed.result of
+      [Diverged divergence] -> do
+        let text = replayDivergenceReason divergence
+        text `shouldSatisfy` (not . T.isInfixOf "passed")
+        text `shouldSatisfy` T.isInfixOf "draws more"
+      other -> expectationFailure (show other)
+    map (.failureReplayToken) (allFailureOutcomes replayed.result) `shouldBe` [Just token]
 
   it "rejects invalid blobs without executing the body" do
     token <- singletonToken =<< check defaultSettings zeroFailure
