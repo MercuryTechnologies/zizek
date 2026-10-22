@@ -36,12 +36,14 @@ open. The engine closes those spans itself, so the retry loop must not call
 attempt started.
 -}
 
-import Control.Exception (Handler (..), bracket, catches)
+import Control.Exception (Handler (..), bracket, catches, throwIO)
 import Control.Monad (when)
+import Data.Text qualified as T
 import Data.Word (Word64)
 import Foreign (Ptr)
-import GHC.Stack (withFrozenCallStack)
-import Hegel.Gen.Builder (Build (..), checkNonNegativeNamed)
+import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
+import Hegel.Exception (Diagnostic (..))
+import Hegel.Gen.Builder (Build (..), ValidationError (..), checkNonNegativeNamed)
 import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.Control (AttemptMispriced (..), LeafBudgetExceeded (..))
 import Hegel.Internal.DataSource
@@ -97,14 +99,21 @@ recursive leaf branch =
 maxDepth :: Int -> RecursiveBuilder a -> RecursiveBuilder a
 maxDepth n b = b {rMaxDepth = n}
 
--- | Set the maximum number of leaves the generator should produce.
+-- | Set the maximum number of leaves the generator should produce, which must
+-- be at least 1 or drawing throws 'ValidationError'.
 maxLeaves :: Int -> RecursiveBuilder a -> RecursiveBuilder a
 maxLeaves n b = b {rMaxLeaves = n}
+
+checkPositiveLeaves :: (HasCallStack) => Int -> IO ()
+checkPositiveLeaves n
+  | n >= 1 = pure ()
+  | otherwise =
+      throwIO (ValidationError Diagnostic {context = "Hegel.Gen.Recursive", detail = "maxLeaves must be at least 1", values = [("maxLeaves", T.pack (show n))], callStack = callStack})
 
 instance Build (RecursiveBuilder a) a where
   build b = withFrozenCallStack $ Draw label \tc -> do
     checkNonNegativeNamed "Hegel.Gen.Recursive" "maxDepth" b.rMaxDepth
-    checkNonNegativeNamed "Hegel.Gen.Recursive" "maxLeaves" b.rMaxLeaves
+    checkPositiveLeaves b.rMaxLeaves
     bracket
       (newRecursion tc (fromIntegral b.rMaxDepth) (fromIntegral b.rMaxLeaves))
       (freeRecursion tc)

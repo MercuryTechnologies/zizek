@@ -8,16 +8,17 @@ import Control.Exception (throwIO)
 import Control.Monad (void)
 import Data.Default.Class (def)
 import Data.Function ((&))
+import Data.Text qualified as T
 import Data.Word (Word64)
 import Hegel (prop)
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Recursive (retryLoopWith)
 import Hegel.Internal.Control (AttemptMispriced (..), LeafBudgetExceeded (..))
 import Hegel.Property (check, check_, forEach)
-import Hegel.Report (Report (..))
+import Hegel.Report (PropertyFailed (..), Report (..))
 import Hegel.Settings (Settings (..))
 import Test.Hspec
-import TestSupport (expectCaptured)
+import TestSupport (expectCaptured, failureMessages)
 import UnliftIO.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 
 -- | A tree whose branches hold a variable number of children, built through
@@ -89,6 +90,9 @@ dTrees =
     (pure DLeaf)
     (\ctx subtrees -> DBranch ctx.depth ctx.maxDepth <$> (Gen.list subtrees & Gen.maxSize 3 & Gen.build))
 
+messageContains :: T.Text -> PropertyFailed -> Bool
+messageContains needle PropertyFailed {report = Report {result}} = any (T.isInfixOf needle) (failureMessages result)
+
 spec :: Spec
 spec = describe "Gen.recursive" $ do
   it "respects maxDepth" $ do
@@ -102,6 +106,14 @@ spec = describe "Gen.recursive" $ do
   it "respects maxLeaves with binary branches" $ do
     prop (binTrees & Gen.maxLeaves 4 & Gen.build) $ \t ->
       binLeafCount t `shouldSatisfy` (<= 4)
+
+  it "rejects a maxLeaves below 1" $ do
+    prop (trees & Gen.maxLeaves 0 & Gen.build) (\_ -> pure ())
+      `shouldThrow` messageContains "Hegel.Gen.Recursive"
+
+  it "accepts a maxLeaves of exactly 1" $ do
+    prop (trees & Gen.maxLeaves 1 & Gen.build) $ \t ->
+      treeLeafCount t `shouldSatisfy` (<= 1)
 
   it "generates both leaves and branches" $ do
     seen <- newIORef ([] :: [Tree])

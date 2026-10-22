@@ -60,8 +60,7 @@ spec = do
       [ ("maxCodepoint", void (Gen.char & Gen.maxCodepoint (-1) & Gen.build)),
         ("minSize", void (Gen.text & Gen.minSize (-1) & Gen.build)),
         ("maxSize", void (Gen.binary & Gen.maxSize (-1) & Gen.build)),
-        ("maxDepth", void (Gen.recursive (pure ()) (\_ _ -> pure ()) & Gen.maxDepth (-1) & Gen.build)),
-        ("maxLeaves", void (Gen.recursive (pure ()) (\_ _ -> pure ()) & Gen.maxLeaves (-1) & Gen.build))
+        ("maxDepth", void (Gen.recursive (pure ()) (\_ _ -> pure ()) & Gen.maxDepth (-1) & Gen.build))
       ]
       \(field, gen) ->
         it ("names the invalid " <> T.unpack field <> " field") do
@@ -79,6 +78,11 @@ spec = do
     it "rejects categories combined with excludeCategories instead of ignoring the exclusion" do
       Runner.sample defaultSettings (void (Gen.char & Gen.categories [UppercaseLetter] & Gen.excludeCategories [UppercaseLetter] & Gen.build)) `shouldThrow` \(ValidationError d) ->
         d.context == "Hegel.Gen.Char" && d.detail == "categories and excludeCategories are mutually exclusive"
+
+    it "names the invalid maxLeaves field" do
+      Runner.sample defaultSettings (void (Gen.recursive (pure ()) (\_ _ -> pure ()) & Gen.maxLeaves 0 & Gen.build))
+        `shouldThrow` \(ValidationError d) ->
+          d.values == [("maxLeaves", "0")] && d.detail == "maxLeaves must be at least 1"
 
     it "shrinks generated invalid bounds and replays the smallest failing input" do
       let body :: Property.Property ()
@@ -489,7 +493,7 @@ spec = do
         prop (Gen.recursive (pure True) (\_ctx sub -> sub) & Gen.maxDepth (-1) & Gen.build) (\_ -> pure ())
           `shouldThrow` messageContains "Hegel.Gen.Recursive"
 
-      it "rejects a negative maxLeaves" $ do
+      it "rejects a maxLeaves below 1" $ do
         prop (Gen.recursive (pure True) (\_ctx sub -> sub) & Gen.maxLeaves (-1) & Gen.build) (\_ -> pure ())
           `shouldThrow` messageContains "Hegel.Gen.Recursive"
 
