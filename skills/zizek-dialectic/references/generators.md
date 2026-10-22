@@ -38,7 +38,7 @@ Enable `ApplicativeDo` so do-blocks whose draws don't depend on each other becom
 ## Default bounds
 
 - **Integers** default to the type's full range, and `Gen.min` and `Gen.max` are inclusive.
-- **Floats** produce NaN and both infinities by default. Setting `Gen.min` or `Gen.max` excludes NaN, and setting both excludes infinity. `Gen.disallowNan` and `Gen.disallowInfinity` exclude them unconditionally, and `Gen.exclusiveMin` and `Gen.exclusiveMax` make a bound strict.
+- **Floats** produce NaN and both infinities by default. Setting `Gen.min` or `Gen.max` excludes NaN, and setting both excludes infinity. `Gen.disallowNan` and `Gen.disallowInfinity` exclude them unconditionally, and `Gen.exclusiveMin x` and `Gen.exclusiveMax x` set a bound that the generator never produces. The last modifier to set a side wins.
 - **Sizes** of text, binary, and lists default to a minimum of zero and no maximum. Set them with `Gen.minSize` and `Gen.maxSize`.
 
 The engine already favors boundary values, but only within the bounds you set, so leave bounds wide wherever the code under test should handle the whole range.

@@ -8,6 +8,7 @@ import Data.Text qualified as T
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (NominalDiffTime)
 import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), midnight)
+import GHC.Float (castDoubleToWord64, castFloatToWord32, castWord32ToFloat, castWord64ToDouble)
 import Hegel (Gen, prop)
 import Hegel.Gen qualified as Gen
 import Hegel.Gen.Internal qualified as Internal
@@ -83,7 +84,41 @@ spec = do
       prop (Gen.double & Gen.min 3.14 & Gen.max 3.14 & Gen.build) $ \x ->
         x `shouldBe` 3.14
 
+    it "never produces an exclusive bound" $ do
+      prop (Gen.double & Gen.exclusiveMin 0 & Gen.exclusiveMax 1 & Gen.build) $ \x ->
+        x `shouldSatisfy` (\v -> v > 0 && v < 1)
+
+    it "excludes a bound with no opposite bound" $ do
+      prop (Gen.double & Gen.exclusiveMin 0 & Gen.build) $ \x ->
+        x `shouldSatisfy` (> 0)
+
+    it "leaves only the value between two adjacent exclusive bounds" $ do
+      let lo = 1.0 :: Double
+          mid = castWord64ToDouble (castDoubleToWord64 lo + 1)
+          hi = castWord64ToDouble (castDoubleToWord64 lo + 2)
+      prop (Gen.double & Gen.exclusiveMin lo & Gen.exclusiveMax hi & Gen.build) $ \x ->
+        x `shouldBe` mid
+
+    it "lets the last bound-setting modifier win" $ do
+      prop (Gen.double & Gen.exclusiveMin 0 & Gen.min 0 & Gen.max 0 & Gen.build) $ \x ->
+        x `shouldBe` 0
+      prop (Gen.double & Gen.min 0 & Gen.exclusiveMin 5 & Gen.max 6 & Gen.build) $ \x ->
+        x `shouldSatisfy` (> 5)
+      prop (Gen.double & Gen.exclusiveMax 1 & Gen.max 1 & Gen.min 1 & Gen.build) $ \x ->
+        x `shouldBe` 1
+
   describe "Gen.float" $ do
+    it "never produces an exclusive bound" $ do
+      prop (Gen.float & Gen.exclusiveMin 0 & Gen.exclusiveMax 1 & Gen.build) $ \x ->
+        x `shouldSatisfy` (\v -> v > 0 && v < 1)
+
+    it "leaves only the value between two adjacent exclusive bounds" $ do
+      let lo = 1.0 :: Float
+          mid = castWord32ToFloat (castFloatToWord32 lo + 1)
+          hi = castWord32ToFloat (castFloatToWord32 lo + 2)
+      prop (Gen.float & Gen.exclusiveMin lo & Gen.exclusiveMax hi & Gen.build) $ \x ->
+        x `shouldBe` mid
+
     it "draws Float values" $ do
       check_ (defaultSettings {testCases = Just 1}) $ forEach (Gen.float & Gen.build) $ \_ -> pure ()
 

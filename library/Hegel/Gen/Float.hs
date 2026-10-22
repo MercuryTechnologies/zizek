@@ -2,8 +2,9 @@
 --
 -- By default 'float' and 'double' produce NaN and ±Infinity.
 --
--- Setting a bound via 'Hegel.Gen.Builder.min' or 'Hegel.Gen.Builder.max'
--- implicitly excludes NaN; setting both implicitly excludes Infinity.
+-- Setting a bound via 'Hegel.Gen.Builder.min', 'Hegel.Gen.Builder.max',
+-- 'exclusiveMin', or 'exclusiveMax' implicitly excludes NaN; setting both
+-- implicitly excludes Infinity.
 --
 --  Use 'disallowNan' and 'disallowInfinity' to exclude them unconditionally.
 module Hegel.Gen.Float
@@ -32,8 +33,8 @@ import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), ValidationError 
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (FloatSpec (..), Label (LabelFloat), drawFloat, spanLabel)
 
--- | Builder for a floating-point generator, bounded with 'HasMin' and 'HasMax'
--- and refined with 'exclusiveMin', 'exclusiveMax', 'disallowNan', and
+-- | Builder for a floating-point generator, bounded with 'HasMin', 'HasMax',
+-- 'exclusiveMin', and 'exclusiveMax' and refined with 'disallowNan' and
 -- 'disallowInfinity'.
 data FloatBuilder a = FloatBuilder
   { bMin :: Maybe a,
@@ -63,13 +64,19 @@ float = defaultFloatBuilder
 double :: FloatBuilder Double
 double = defaultFloatBuilder
 
--- | Treat the lower bound as exclusive.
-exclusiveMin :: FloatBuilder a -> FloatBuilder a
-exclusiveMin b = b {bExclMin = True}
+-- | Set the lower bound to @lo@, which the generator never produces.
+--
+-- The most recent of 'exclusiveMin' and 'Hegel.Gen.Builder.min' wins. A
+-- positive infinite @lo@ leaves no values and raises a 'ValidationError'.
+exclusiveMin :: a -> FloatBuilder a -> FloatBuilder a
+exclusiveMin lo b = b {bMin = Just lo, bExclMin = True}
 
--- | Treat the upper bound as exclusive.
-exclusiveMax :: FloatBuilder a -> FloatBuilder a
-exclusiveMax b = b {bExclMax = True}
+-- | Set the upper bound to @hi@, which the generator never produces.
+--
+-- The most recent of 'exclusiveMax' and 'Hegel.Gen.Builder.max' wins. A
+-- negative infinite @hi@ leaves no values and raises a 'ValidationError'.
+exclusiveMax :: a -> FloatBuilder a -> FloatBuilder a
+exclusiveMax hi b = b {bMax = Just hi, bExclMax = True}
 
 -- | Exclude NaN. (Already implicit once any bound is set.)
 disallowNan :: FloatBuilder a -> FloatBuilder a
@@ -80,10 +87,10 @@ disallowInfinity :: FloatBuilder a -> FloatBuilder a
 disallowInfinity b = b {bAllowInf = False}
 
 instance HasMin (FloatBuilder a) a where
-  min lo b = b {bMin = Just lo}
+  min lo b = b {bMin = Just lo, bExclMin = False}
 
 instance HasMax (FloatBuilder a) a where
-  max hi b = b {bMax = Just hi}
+  max hi b = b {bMax = Just hi, bExclMax = False}
 
 -- | Setting either bound excludes NaN, and setting both excludes Infinity,
 -- keeping engine-rejected combinations from reaching the FFI.
@@ -109,10 +116,19 @@ smallestSubnormalFloat = float2Double (encodeFloat 1 (fst (floatRange (0 :: Floa
 -- With an exclusive bound the two must be strictly ordered, since equal
 -- endpoints would leave the range empty. Positive zero ranks above negative
 -- zero, so a lower bound of @0.0@ with an upper bound of @-0.0@ is empty too.
+--
+-- An exclusive lower bound of positive infinity or an exclusive upper bound of
+-- negative infinity also leaves no values.
 checkFloatBounds :: (HasCallStack, RealFloat a, Show a) => Text -> FloatBuilder a -> IO ()
 checkFloatBounds what b = do
   checkNotNaN b.bMin
   checkNotNaN b.bMax
+  case b.bMin of
+    Just lo | b.bExclMin, isInfinite lo, lo > 0 -> emptyRange "exclusive min is +Infinity" "min" lo
+    _ -> pure ()
+  case b.bMax of
+    Just hi | b.bExclMax, isInfinite hi, hi < 0 -> emptyRange "exclusive max is -Infinity" "max" hi
+    _ -> pure ()
   case (b.bMin, b.bMax) of
     (Just lo, Just hi)
       | b.bExclMin || b.bExclMax ->
@@ -126,6 +142,8 @@ checkFloatBounds what b = do
               (ValidationError Diagnostic {context = what, detail = "min of positive zero exceeds max of negative zero", values = [("min", T.pack (show lo)), ("max", T.pack (show hi))], callStack = callStack})
     _ -> pure ()
   where
+    emptyRange detail name x =
+      throwIO (ValidationError Diagnostic {context = what, detail, values = [(name, T.pack (show x))], callStack = callStack})
     checkNotNaN Nothing = pure ()
     checkNotNaN (Just x)
       | isNaN x = throwIO (ValidationError Diagnostic {context = what, detail = "bound is NaN", values = [("bound", T.pack (show x))], callStack = callStack})

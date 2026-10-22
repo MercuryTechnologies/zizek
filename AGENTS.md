@@ -126,7 +126,7 @@ g5 = Gen.bool                                        & Gen.build
 
 The `Build`, `HasMin`, `HasMax`, `HasSize`, and `HasYear` typeclasses in `Hegel.Gen.Builder`, plus `HasAlphabet` in `Hegel.Gen.Char` for the text and regex builders, provide the shared modifier vocabulary. Builder-specific modifiers are plain functions on their builder type:
 
-- float: `exclusiveMin`, `exclusiveMax`, `disallowNan`, `disallowInfinity`
+- float: `exclusiveMin bound`, `exclusiveMax bound`, `disallowNan`, `disallowInfinity`
 - char: `codec`, `minCodepoint`, `maxCodepoint`, `categories`, `excludeCategories`, `includeCharacters`, `excludeCharacters`
 - regex: `fullMatch`
 - uuid: `version`

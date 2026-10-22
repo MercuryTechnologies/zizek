@@ -199,7 +199,7 @@ spec = do
         ("char include and exclude overlap", "Hegel.Gen.Char", "overlap", void (Gen.char & Gen.includeCharacters "a" & Gen.excludeCharacters "a" & Gen.build)),
         ("text alphabet with no characters", "Hegel.Gen.Text", "No valid characters", void (Gen.text & Gen.alphabet (Gen.char & Gen.minCodepoint 55296 & Gen.maxCodepoint 57343) & Gen.build)),
         ("regex alphabet with no characters", "Hegel.Gen.Regex", "No valid characters", void (Gen.regex "." & Gen.alphabet (Gen.char & Gen.minCodepoint 55296 & Gen.maxCodepoint 57343) & Gen.build)),
-        ("double range emptied by exclusive bounds", "Hegel.Gen.Float", "exclusive-bound adjustment", void (Gen.double & Gen.min 0 & Gen.max 5.0e-324 & Gen.exclusiveMin & Gen.exclusiveMax & Gen.build)),
+        ("double range emptied by exclusive bounds", "Hegel.Gen.Float", "exclusive-bound adjustment", void (Gen.double & Gen.exclusiveMin 0 & Gen.exclusiveMax 5.0e-324 & Gen.build)),
         ("float range holding only an infinity", "Hegel.Gen.Float", "leaves no value", void (Gen.float & Gen.min (1 / 0) & Gen.max (1 / 0) & Gen.build))
       ]
       \(name, origin, needle, gen) ->
@@ -380,7 +380,23 @@ spec = do
 
     describe "Gen.double" $ do
       it "rejects an exclusive bound that empties the range" $ do
-        prop (Gen.double & Gen.min 1 & Gen.max 1 & Gen.exclusiveMin & Gen.build) (\_ -> pure ())
+        prop (Gen.double & Gen.exclusiveMin 1 & Gen.max 1 & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Float"
+
+      it "rejects an exclusive max equal to the min" $ do
+        prop (Gen.double & Gen.min 1 & Gen.exclusiveMax 1 & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Float"
+
+      it "rejects an exclusive min of +Infinity" $ do
+        prop (Gen.double & Gen.exclusiveMin (1 / 0) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Float"
+
+      it "rejects an exclusive max of -Infinity" $ do
+        prop (Gen.double & Gen.exclusiveMax (-1 / 0) & Gen.build) (\_ -> pure ())
+          `shouldThrow` messageContains "Hegel.Gen.Float"
+
+      it "rejects an exclusive min of +Infinity for float" $ do
+        prop (Gen.float & Gen.exclusiveMin (1 / 0) & Gen.build) (\_ -> pure ())
           `shouldThrow` messageContains "Hegel.Gen.Float"
 
       it "rejects a NaN bound" $ do

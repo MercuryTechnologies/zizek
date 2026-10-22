@@ -416,7 +416,7 @@ A property can select the profile it uses by overriding its settings `def {profi
 | `integral`                 | any `Integral a`       | `min`, `max`                                                                                                         |
 | `int`, `int8`…`int64`      | signed ints            | `min`, `max`                                                                                                         |
 | `word`, `word8`…`word64`   | unsigned ints          | `min`, `max`                                                                                                         |
-| `float`, `double`          | floating point numbers | `min`, `max`, `exclusiveMin`, `exclusiveMax`, `disallowNan`, `disallowInfinity`                                      |
+| `float`, `double`          | floating point numbers | `min`, `max`, `exclusiveMin x`, `exclusiveMax x`, `disallowNan`, `disallowInfinity`                                      |
 | `binary`                   | `ByteString`           | `minSize`, `maxSize`                                                                                                 |
 | `text`                     | `Text`                 | `minSize`, `maxSize`, `alphabet`                                                                                     |
 | `char`                     | `Char`                 | `codec`, `minCodepoint`, `maxCodepoint`, `categories`, `excludeCategories`, `includeCharacters`, `excludeCharacters` |
