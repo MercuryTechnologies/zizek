@@ -8,6 +8,8 @@ module Hegel.Replay
   )
 where
 
+import Control.Monad (when)
+import Data.Bifunctor (first)
 import Data.Bits (shiftR, (.&.))
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 qualified as BSC
@@ -46,24 +48,32 @@ encodeHex = T.pack . concatMap byteHex . BSC.unpack
     byteHex c = [intToDigit (fromEnum c `shiftR` 4), intToDigit (fromEnum c .&. 15)]
 
 -- | Decode a token produced by 'encodeReplayToken'.
+--
+-- Every token 'encodeReplayToken' produces decodes back to an equal token,
+-- including one whose version contains @:@ or whose origin is empty.
 decodeReplayToken :: Text -> Either ReplayError ReplayToken
-decodeReplayToken input = case T.splitOn ":" input of
-  ["hegel-replay", version, origin, blob]
-    | T.null version || T.null origin || T.null blob -> Left ReplayTokenEmptyField
-    | otherwise -> do
-        decodedOrigin <- decodeHex origin
-        case TE.decodeUtf8' decodedOrigin of
-          Left _ -> Left ReplayTokenOriginNotUtf8
-          Right decodedOriginText -> Right (makeReplayToken version decodedOriginText (TE.encodeUtf8 blob))
-  format : _ | format /= "hegel-replay" -> Left (ReplayTokenUnsupportedFormat format)
-  _ -> Left ReplayTokenMalformedEnvelope
+decodeReplayToken input = do
+  (version, origin, blob) <- envelope (T.splitOn ":" input)
+  when (T.null version || T.null blob) (Left ReplayTokenEmptyField)
+  originBytes <- decodeHex origin
+  originText <- first (const ReplayTokenOriginNotUtf8) (TE.decodeUtf8' originBytes)
+  pure (makeReplayToken version originText (TE.encodeUtf8 blob))
   where
-    decodeHex text
-      | T.length text `mod` 2 /= 0 = Left ReplayTokenInvalidOriginHex
-      | T.any (not . isHexDigit) text = Left ReplayTokenInvalidOriginHex
-      | otherwise = Right (BSC.pack (pairs (T.unpack text)))
+    -- The origin is hex and the blob is base64, so neither holds a colon, and
+    -- whatever lies between the format and the origin is the version.
+    envelope :: [Text] -> Either ReplayError (Text, Text, Text)
+    envelope = \case
+      "hegel-replay" : fields
+        | blob : origin : version@(_ : _) <- reverse fields ->
+            Right (T.intercalate ":" (reverse version), origin, blob)
+      format : _ | format /= "hegel-replay" -> Left (ReplayTokenUnsupportedFormat format)
+      _ -> Left ReplayTokenMalformedEnvelope
 
-    pairs :: [Char] -> [Char]
-    pairs [] = []
-    pairs (a : b : rest) = toEnum (digitToInt a * 16 + digitToInt b) : pairs rest
-    pairs _ = []
+    decodeHex :: Text -> Either ReplayError ByteString
+    decodeHex text
+      | even (T.length text) && T.all isHexDigit text = Right (BSC.pack (hexPairs (T.unpack text)))
+      | otherwise = Left ReplayTokenInvalidOriginHex
+
+    hexPairs :: [Char] -> [Char]
+    hexPairs (hi : lo : rest) = toEnum (digitToInt hi * 16 + digitToInt lo) : hexPairs rest
+    hexPairs _ = []

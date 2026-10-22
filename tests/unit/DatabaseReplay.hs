@@ -77,6 +77,14 @@ spec = do
       \(encoded, expected) ->
         decodeReplayToken encoded `shouldBe` Left expected
 
+  it "round-trips a token whose version contains a colon or whose origin is empty" do
+    for_
+      [ InternalReplay.makeReplayToken "1:2" "AssertionFailure at M.hs:3" "QQ==",
+        InternalReplay.makeReplayToken "a:b:c" "o" "QQ==",
+        InternalReplay.makeReplayToken "0.48.0" "" "QQ=="
+      ]
+      \token -> decodeReplayToken (encodeReplayToken token) `shouldBe` Right token
+
   for_
     [ ("passing", pure ()),
       ("discarding", assume False),
