@@ -11,8 +11,8 @@
 --
 -- Not yet bound: @hegel_generate_ipv4@\/@_ipv6@, @hegel_note@,
 -- @hegel_test_case_block@, @hegel_test_case_set_worker@,
--- @hegel_test_case_printer@, and the @hegel_printer_*@,
--- @hegel_reflow_options_*@, and @hegel_grammar_*@ families.
+-- @hegel_test_case_printer@, @hegel_grammar_placeholder@, and the
+-- @hegel_printer_*@ and @hegel_reflow_options_*@ families.
 --
 -- __Strings__: every string crosses the boundary as a @hegel_string_t@,
 -- marshalled by "Hegel.Internal.Foreign.String". GHC's FFI cannot pass a C
@@ -254,6 +254,17 @@ module Hegel.Internal.Foreign.Raw
     hegel_generate_string,
     hegel_owned_string_free,
 
+    -- * Grammars
+    HegelGrammarBuilder,
+    HegelGrammar,
+    hegel_grammar_builder_new,
+    hegel_grammar_builder_file,
+    hegel_grammar_builder_provide,
+    hegel_grammar_builder_free,
+    hegel_grammar_new,
+    hegel_grammar_free,
+    hegel_generate_grammar,
+
     -- * Failure reproduction
     -- $reproduction
     hegel_test_case_from_blob,
@@ -337,6 +348,15 @@ data HegelFailure
 -- a 'hegel_string_generator_text'-family constructor and freed with
 -- 'hegel_string_generator_free'.
 data HegelStringGenerator
+
+-- | Marker type for @hegel_grammar_builder_t*@: a caller-owned handle that
+-- gathers a Lark grammar's text and the files its @%import@s need, built by
+-- 'hegel_grammar_builder_new' and freed with 'hegel_grammar_builder_free'.
+data HegelGrammarBuilder
+
+-- | Marker type for @hegel_grammar_t*@: a caller-owned, immutable compiled
+-- grammar, built by 'hegel_grammar_new' and freed with 'hegel_grammar_free'.
+data HegelGrammar
 
 -- | Marker type for @hegel_collection_t*@: a caller-owned handle to an
 -- engine-managed variable-length collection, built by 'hegel_new_collection'
@@ -516,9 +536,8 @@ pattern HEGEL_E_CONCURRENT_USE = (#const HEGEL_E_CONCURRENT_USE)
 pattern HEGEL_E_RETRY :: CInt
 pattern HEGEL_E_RETRY = (#const HEGEL_E_RETRY)
 
--- | Marks the end of a grammar builder's file list. This library binds no
--- grammar functions, so it never receives it, but the closed-world guard in
--- @cbits/wire_enum_guard.c@ still checks it against @hegel.h@.
+-- | Returned by 'hegel_grammar_builder_file' for an index past the end of the
+-- grammar builder's file list.
 pattern HEGEL_E_NOT_FOUND :: CInt
 pattern HEGEL_E_NOT_FOUND = (#const HEGEL_E_NOT_FOUND)
 
@@ -1640,6 +1659,98 @@ foreign import ccall safe "hegel_generate_string"
 -- to @{NULL, 0}@. Safe to call with an already-freed (zeroed) struct.
 foreign import ccall unsafe "hegel_owned_string_free"
   hegel_owned_string_free :: Ptr HegelContext -> Ptr HegelOwnedString -> IO CInt
+
+-- | Start gathering a grammar written in Lark's syntax from its root text.
+--
+-- On success writes a caller-owned handle into @*out_builder@; release with
+-- 'hegel_grammar_builder_free'. Returns 'HEGEL_E_INVALID_ARG' for text that
+-- is not UTF-8, does not parse, or whose imports nest too deeply.
+foreign import ccall unsafe "hegel_zizek_grammar_builder_new"
+  hegel_grammar_builder_new
+    :: Ptr HegelContext
+    -> Ptr HegelString                 -- ^ @text@
+    -> Ptr (Ptr HegelGrammarBuilder)   -- ^ out: caller-owned handle
+    -> IO CInt
+
+-- | The @index@th file the grammar needs, counting from 0, written into
+-- @*out_path@ as a string borrowed until the builder is freed.
+--
+-- Returns 'HEGEL_E_NOT_FOUND' for an index past the end of the list, which
+-- grows as files are provided.
+foreign import ccall unsafe "hegel_grammar_builder_file"
+  hegel_grammar_builder_file
+    :: Ptr HegelContext
+    -> Ptr HegelGrammarBuilder -- ^ @builder@ (borrowed)
+    -> CSize                   -- ^ @index@
+    -> Ptr HegelString         -- ^ out: borrowed path
+    -> IO CInt
+
+-- | Provide the text of the @index@th file, or @NULL@ when it doesn't exist,
+-- so that the bundled grammar at that path stands in for an absolute import.
+--
+-- Returns 'HEGEL_E_INVALID_ARG' when the text doesn't parse, its imports nest
+-- too deeply, or a missing file has no bundled stand-in, and the file stays
+-- unprovided.
+foreign import ccall unsafe "hegel_grammar_builder_provide"
+  hegel_grammar_builder_provide
+    :: Ptr HegelContext
+    -> Ptr HegelGrammarBuilder -- ^ @builder@
+    -> CSize                   -- ^ @index@
+    -> Ptr HegelString         -- ^ @text@ (nullable)
+    -> IO CInt
+
+-- | Release a grammar builder. Safe to call with @NULL@.
+foreign import ccall unsafe "hegel_grammar_builder_free"
+  hegel_grammar_builder_free :: Ptr HegelContext -> Ptr HegelGrammarBuilder -> IO CInt
+
+-- | Compile the grammar a builder gathered, once every file it needs has been
+-- provided. The builder may be freed afterwards, and so may @alphabet@, which
+-- must be a __text__ string generator.
+--
+-- A zero @max_size@ or @max_depth@ selects the engine's default. Returns
+-- 'HEGEL_E_INVALID_ARG' for a file not yet provided, an import cycle, an
+-- undefined rule or start symbol, a rule that never terminates, a
+-- @%declare@d terminal missing from @explicit_names@, an alphabet some
+-- terminal can't be drawn from, or a cap above the maximum or below what the
+-- start rule needs.
+foreign import ccall unsafe "hegel_grammar_new"
+  hegel_grammar_new
+    :: Ptr HegelContext
+    -> Ptr HegelGrammarBuilder  -- ^ @builder@ (borrowed)
+    -> Ptr HegelString          -- ^ @start@ (nullable for @start@)
+    -> Word64                   -- ^ @max_size@
+    -> Word32                   -- ^ @max_depth@
+    -> Ptr HegelStringGenerator -- ^ @alphabet@ (borrowed, nullable)
+    -> Ptr HegelString          -- ^ @explicit_names@ (nullable)
+    -> CSize                    -- ^ @explicit_len@
+    -> Ptr (Ptr HegelGrammar)   -- ^ out: caller-owned handle
+    -> IO CInt
+
+-- | Release a compiled grammar. Safe to call with @NULL@. Each grammar must be
+-- freed exactly once, and only after every draw using it has completed.
+foreign import ccall unsafe "hegel_grammar_free"
+  hegel_grammar_free :: Ptr HegelContext -> Ptr HegelGrammar -> IO CInt
+
+-- | Draw a string from a compiled grammar, capped at @max_size@ characters, or
+-- at the grammar's own cap when @max_size@ is zero.
+--
+-- On success fills @*out_result@ with an engine-allocated UTF-8 string the
+-- caller owns; release with 'hegel_owned_string_free'. Returns
+-- 'HEGEL_E_STOP_TEST' when the choice budget is exhausted,
+-- 'HEGEL_E_ASSUME' when the draw rejected the test case, and
+-- 'HEGEL_E_INVALID_ARG' when the grammar can't produce any string within its
+-- size cap and the work a draw is allowed.
+--
+-- A derivation can be long, so this is a @safe@ call for the same reason as
+-- 'hegel_generate_string'.
+foreign import ccall safe "hegel_generate_grammar"
+  hegel_generate_grammar
+    :: Ptr HegelContext
+    -> Ptr HegelTestCase
+    -> Ptr HegelGrammar     -- ^ @grammar@ (borrowed)
+    -> Word64               -- ^ @max_size@
+    -> Ptr HegelOwnedString -- ^ out: engine-allocated string
+    -> IO CInt
 
 -- | Record a numeric observation for the targeting phase to hill-climb toward.
 --

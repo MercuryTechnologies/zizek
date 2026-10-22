@@ -94,6 +94,10 @@ hegel_result_t hegel_zizek_string_generator_regex(hegel_context_t *ctx,
                                                   const hegel_string_generator_t *alphabet,
                                                   hegel_string_generator_t **out_generator);
 
+hegel_result_t hegel_zizek_grammar_builder_new(hegel_context_t *ctx,
+                                               const hegel_string_t *text,
+                                               hegel_grammar_builder_t **out_builder);
+
 hegel_result_t hegel_zizek_target(hegel_context_t *ctx,
                                   hegel_test_case_t *tc,
                                   double value,
