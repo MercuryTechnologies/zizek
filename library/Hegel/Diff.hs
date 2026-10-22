@@ -10,9 +10,13 @@
 -- Structural diff of two 'Show'-rendered values.
 --
 -- Ported from @Hedgehog.Internal.Show@: parse both sides into
--- 'Text.Show.Pretty.Value' ASTs, recurse structurally so a single changed
--- field in a record shows up as one @-@\/@+@ pair surrounded by unchanged
--- context, and fall back to a line-level diff when either side fails to parse.
+-- 'Text.Show.Pretty.Value' ASTs, recurse structurally, and fall back to a
+-- line-level diff when either side fails to parse.
+--
+-- Lines are those of pretty-show's layout. A value that spans several lines
+-- shows a single changed record field as one @-@\/@+@ pair surrounded by
+-- unchanged context, while a value short enough to fit on one line diffs as a
+-- single whole-line @-@\/@+@ pair.
 module Hegel.Diff
   ( -- * Result type
     LineDiff (..),
