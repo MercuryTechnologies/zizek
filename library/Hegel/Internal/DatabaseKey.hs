@@ -4,7 +4,8 @@
 -- A key is @"\<module\>:\<a/b/c\>/\<label\>"@: the call-site module (salt that
 -- removes cross-module collisions and survives line edits), then the ancestor
 -- describe path and the leaf label joined with @\/@ (mirroring hspec's
--- @--match@ path notation). Used by "Hegel.Hspec" and "Hegel.Tasty".
+-- @--match@ path notation), with @\\@ and @\/@ inside a segment escaped as
+-- @\\\\@ and @\\\/@. Used by "Hegel.Hspec" and "Hegel.Tasty".
 module Hegel.Internal.DatabaseKey
   ( propKey,
     moduleFromCallStack,
@@ -37,8 +38,15 @@ moduleFromCallStack cs = case getCallStack cs of
   [] -> "<unknown-module>"
 
 -- | Join path segments with @\/@, the separator hspec uses for test paths.
+-- Each segment has @\\@ escaped as @\\\\@ and @\/@ as @\\\/@, so distinct
+-- paths always join to distinct text and a segment without either character
+-- is unchanged.
 joinPath :: [String] -> Text
-joinPath = T.intercalate "/" . map T.pack
+joinPath = T.intercalate "/" . map (T.concatMap escape . T.pack)
+  where
+    escape c
+      | c == '/' || c == '\\' = T.pack ['\\', c]
+      | otherwise = T.singleton c
 
 -- | The location of the test defined at the nearest call frame, named by its
 -- describe path and leaf label joined as in 'propKey', or 'Nothing' when the

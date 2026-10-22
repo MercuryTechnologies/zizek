@@ -4,7 +4,7 @@
 
 zizek stores every distinct failure a test finds and replays it first on the next run, before generating anything new. The default store is `.hegel/examples/` under the working directory. Nothing is stored or replayed for a test without a database key.
 
-- `Hegel.Hspec.prop` derives a key from the module and the test's `describe` path and name. Renaming the test or a group around it orphans its stored failures. `propWith` and `propModify` take settings and keep the derived key, and `propFor` does the same for a property that uses an Hspec fixture. A property written directly as `it "name" \fixture -> …` has no key.
+- `Hegel.Hspec.prop` derives a key from the module and the test's `describe` path and name, joined with `/` after escaping `\` and `/` inside each name as `\\` and `\/`. Renaming the test or a group around it orphans its stored failures. `propWith` and `propModify` take settings and keep the derived key, and `propFor` does the same for a property that uses an Hspec fixture. A property written directly as `it "name" \fixture -> …` has no key.
 - `Hegel.Tasty.testProperty` has no key, so nothing is stored. Pass one with `testPropertyWith def {databaseKey = Just "Module:name"}`, and keep it distinct from every other property's key.
 
 libhegel switches to its `ci` profile when it sees CI environment variables such as `CI` or `GITHUB_ACTIONS`, and that profile turns the database off. When stored failures aren't replaying, check whether the run picked up `ci`.

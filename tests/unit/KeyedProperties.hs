@@ -36,6 +36,21 @@ spec = do
     it "handles an empty describe path" $
       deriveKey [] "standalone" `shouldBe` "KeyedProperties:standalone"
 
+  describe "propKey escaping" $ do
+    it "gives describe \"a/b\" and nested describes distinct keys" $
+      deriveKey ["a/b"] "c" `shouldNotBe` deriveKey ["a", "b"] "c"
+
+    it "keeps the old key for names without a slash or backslash" $
+      deriveKey ["reverse", "x y"] "is involutive"
+        `shouldBe` "KeyedProperties:reverse/x y/is involutive"
+
+    it "does not collide a literal backslash with an escaped slash" $ do
+      deriveKey ["a\\"] "b" `shouldNotBe` deriveKey ["a/"] "b"
+      deriveKey ["a\\", "b"] "c" `shouldNotBe` deriveKey ["a/b"] "c"
+
+    it "escapes the backslash and the slash" $
+      joinPath ["a\\b", "c/d"] `shouldBe` "a\\\\b/c\\/d"
+
   describe "joinPath" $ do
     it "joins segments with slashes" $
       joinPath ["a", "b", "c"] `shouldBe` "a/b/c"
