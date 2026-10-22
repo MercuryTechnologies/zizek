@@ -83,11 +83,12 @@ check = withFrozenCallStack $ checkWithProgress (\_ -> pure ())
 -- Every case the engine runs counts, including shrink probes and the engine's
 -- final replay of each failure.
 checkWithProgress :: (HasCallStack) => (Int -> IO ()) -> Settings -> Property () -> IO Report
-checkWithProgress progress settings prop =
-  abortFramework (withAsyncBound go wait)
+checkWithProgress progress settings prop = do
+  statsRef <- newIORef (Stats 0 0 0)
+  abortFramework statsRef (withAsyncBound (go statsRef) wait)
   where
-    go = either throwIO pure (withFrozenCallStack (Settings.validate settings)) *> execute
-    execute
+    go statsRef = either throwIO pure (withFrozenCallStack (Settings.validate settings)) *> execute statsRef
+    execute statsRef
       | Just 0 <- settings.testCases, Just DatabaseDisabled <- settings.database = pure (Report (GaveUp "no valid examples found") (Stats 0 0 0) Unstored [])
       | otherwise = withContext \ctx ->
           withResolvedSettings ctx settings \resolved s -> do
@@ -95,7 +96,7 @@ checkWithProgress progress settings prop =
             (sink, readOutput) <- newOutputBuffer
             -- Read and copy everything out of the run handle before withRun frees
             -- it on bracket exit (see 'readRunOutcome').
-            (stats, outcome) <- withRun ctx s (Just sink) (driveRun ctx settings prop captures progress)
+            (stats, outcome) <- withRun ctx s (Just sink) (driveRun ctx settings prop captures statsRef progress)
             result <- case outcome.status of
               RunPassed
                 | stats.valid == 0 -> pure (GaveUp "no valid examples found")
@@ -119,9 +120,13 @@ checkWithProgress progress settings prop =
                 }
 
 -- | Pump every case out of a started run, then copy its outcome.
-driveRun :: Ptr HegelContext -> Settings -> Property () -> IORef (Map Text Capture) -> (Int -> IO ()) -> Ptr HegelRun -> IO (Stats, RunOutcome)
-driveRun ctx settings prop captures progress run = do
-  stats <- driveLoop ctx (\journal -> propertyAction journal (fromMaybe Settings.defaultMaxCloneDepth settings.maxCloneDepth) prop) captures run progress
+--
+-- The running tallies live in @statsRef@, so an abort partway through the run
+-- leaves the stats of the cases that already ran readable.
+driveRun :: Ptr HegelContext -> Settings -> Property () -> IORef (Map Text Capture) -> IORef Stats -> (Int -> IO ()) -> Ptr HegelRun -> IO (Stats, RunOutcome)
+driveRun ctx settings prop captures statsRef progress run = do
+  driveLoop ctx (\journal -> propertyAction journal (fromMaybe Settings.defaultMaxCloneDepth settings.maxCloneDepth) prop) captures statsRef run progress
+  stats <- readIORef statsRef
   outcome <- readRunOutcome ctx run
   pure (stats, outcome)
 
@@ -167,11 +172,12 @@ failureReproduction failures resolved databaseKey = case (failures, databaseKey)
 -- The engine replays the token's blob until a replay fails, within a bounded
 -- budget, so a nondeterministic failure gets several chances to recur.
 replay :: (HasCallStack) => Settings -> ReplayToken -> Property () -> IO Report
-replay settings token prop =
-  abortFramework (withAsyncBound go wait)
+replay settings token prop = do
+  statsRef <- newIORef (Stats 0 0 0)
+  abortFramework statsRef (withAsyncBound (go statsRef) wait)
   where
     expected = Replay.tokenOriginOf token
-    go =
+    go statsRef =
       either throwIO pure (withFrozenCallStack (Settings.validate settings)) *> withContext \ctx ->
         withResolvedSettings ctx settings {database = Just DatabaseDisabled, databaseKey = Nothing} \_ s -> do
           version <- engineVersion ctx
@@ -181,7 +187,7 @@ replay settings token prop =
               captures <- newIORef Map.empty
               (sink, readOutput) <- newOutputBuffer
               report <-
-                withBlobRun ctx s (Replay.tokenBlobOf token) (Just sink) (driveRun ctx settings prop captures (\_ -> pure ())) >>= \case
+                withBlobRun ctx s (Replay.tokenBlobOf token) (Just sink) (driveRun ctx settings prop captures statsRef (\_ -> pure ())) >>= \case
                   Left e
                     | e.code == HEGEL_E_INVALID_ARG ->
                         pure (diverged (Stats 0 0 0) (InvalidReplayBlob (fromMaybe "invalid replay blob" e.message)))
@@ -468,25 +474,27 @@ driveLoop ::
   Ptr HegelContext ->
   (Journal -> Finalizers -> OpenForks -> TestCase -> IO ()) ->
   IORef (Map Text Capture) ->
+  IORef Stats ->
   Ptr HegelRun ->
   (Int -> IO ()) ->
-  IO Stats
-driveLoop ctx action captures run progress = loop (Stats 0 0 0) 0
+  IO ()
+driveLoop ctx action captures statsRef run progress = loop 0
   where
-    loop !stats !completed = do
+    loop !completed = do
       tcPtr <- alloca \out -> do
         throwOnError ctx =<< hegel_next_test_case ctx run out
         peek out
       if tcPtr == nullPtr
-        then pure stats
+        then pure ()
         else do
           status <- runTestCase ctx action captures tcPtr `finally` void (hegel_test_case_free ctx tcPtr)
           progress (completed + 1)
           case status of
-            Valid -> loop stats {valid = stats.valid + 1} (completed + 1)
-            Invalid -> loop stats {invalid = stats.invalid + 1} (completed + 1)
-            Interesting _ -> loop stats {failing = stats.failing + 1} (completed + 1)
-            Overrun -> loop stats (completed + 1)
+            Valid -> modifyIORef' statsRef \stats -> stats {valid = stats.valid + 1}
+            Invalid -> modifyIORef' statsRef \stats -> stats {invalid = stats.invalid + 1}
+            Interesting _ -> modifyIORef' statsRef \stats -> stats {failing = stats.failing + 1}
+            Overrun -> pure ()
+          loop (completed + 1)
 
 -- | Run one engine-produced test case, recording a capture when it fails.
 --
@@ -579,12 +587,15 @@ runTestCase ctx action captures tcPtr = do
       markComplete tc status
       pure status
 
--- | Report framework aborts while preserving unrelated exceptions and cancellation.
-abortFramework :: IO Report -> IO Report
-abortFramework action =
+-- | Report framework aborts, with the stats of the cases that ran before the
+-- abort, while preserving unrelated exceptions and cancellation.
+abortFramework :: IORef Stats -> IO Report -> IO Report
+abortFramework statsRef action =
   action `catchAny` \e ->
     if isAborting e
-      then pure (aborted (Errored e))
+      then do
+        stats <- readIORef statsRef
+        pure (aborted (Errored e)) {stats}
       else throwIO (NoBacktrace e)
 
 -- | A sink collecting a run's engine output, and an action reading back every

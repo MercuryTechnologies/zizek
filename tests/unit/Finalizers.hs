@@ -115,6 +115,16 @@ spec = describe "registerFinalizer" do
       Aborted (Errored _) -> pure ()
       other -> expectationFailure ("expected Aborted Errored, got: " <> show other)
 
+  it "an aborted run keeps the stats of the cases that ran" do
+    ran <- newIORef (0 :: Int)
+    report <- check def do
+      n <- atomicModifyIORef' ran \k -> (k + 1, k + 1)
+      _ <- forAll (intR (0, 100))
+      registerFinalizer (if n == 3 then throwIO (userError "teardown boom") else pure ())
+    case report.result of
+      Aborted (Errored _) -> report.stats.valid `shouldBe` 2
+      other -> expectationFailure ("expected Aborted Errored, got: " <> show other)
+
   it "live cleanup retains the body diagnostic, location, and diff" do
     report <- check def do
       registerFinalizer (throwIO (userError "teardown boom"))

@@ -103,8 +103,8 @@ data Stats = Stats
 -- | What happened when a property was run, plus run statistics.
 data Report = Report
   { result :: Result,
-    -- | Tallies for the run. Zero when the run aborted before any test case
-    -- could run.
+    -- | Tallies for the cases that ran, including those before an abort.
+    -- Zero when the run ended before any test case could run.
     stats :: Stats,
     -- | Where a failure from this run can be found again.
     reproduction :: !Reproduction,
