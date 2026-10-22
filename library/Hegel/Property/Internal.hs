@@ -114,7 +114,7 @@ data Journal
 newRecordingJournal :: IO (Journal, IO [Note])
 newRecordingJournal = do
   ref <- newIORef Seq.empty
-  pure (Recording \n -> modifyIORef' ref (|> n), toList <$> readIORef ref)
+  pure (Recording \n -> atomicModifyIORef' ref \s -> (s |> n, ()), toList <$> readIORef ref)
 
 -- | A fresh journal for one child scope, mirroring its parent's recording
 -- state: 'Silent' stays 'Silent', a 'Recording' parent gets its own private
@@ -124,7 +124,7 @@ newChildJournal parent = do
   ref <- newIORef Seq.empty
   let childJournal = case parent of
         Silent -> Silent
-        Recording _ -> Recording \n -> modifyIORef' ref (|> n)
+        Recording _ -> Recording \n -> atomicModifyIORef' ref \s -> (s |> n, ())
   pure (childJournal, Tick.drainAndReset ref)
 
 -- | How restricted the ambient context is for primitives like 'resource'

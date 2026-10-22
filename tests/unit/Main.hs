@@ -30,6 +30,7 @@ import System.Environment (setEnv)
 import Test.Tasty (defaultMain, testGroup)
 import Test.Tasty.Hspec (testSpec)
 import TestCaseClone qualified
+import TickRecording qualified
 import TraceModel qualified
 
 main :: IO ()
@@ -58,6 +59,7 @@ main = do
   traceModel <- testSpec "trace model" TraceModel.spec
   ledger <- testSpec "event-log rendering" LogRendering.spec
   testCaseClone <- testSpec "TestCase cloning" TestCaseClone.spec
+  tickRecording <- testSpec "tick recording" TickRecording.spec
   branchProperties <- testSpec "branch combinators" BranchProperties.spec
   forkProperties <- testSpec "fork combinators" ForkProperties.spec
   sampling <- testSpec "sampling" Sampling.spec
@@ -92,6 +94,7 @@ main = do
           traceModel,
           ledger,
           testCaseClone,
+          tickRecording,
           branchProperties,
           forkProperties,
           sampling,

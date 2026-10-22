@@ -266,6 +266,7 @@ test-suite unit
     StatefulRoundInternal
     TestCaseClone
     TestSupport
+    TickRecording
     TraceFixtures
     TraceModel
 

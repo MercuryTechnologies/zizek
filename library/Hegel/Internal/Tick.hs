@@ -23,7 +23,7 @@ where
 
 import Data.Foldable (toList)
 import Data.Sequence (Seq, (|>))
-import UnliftIO.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
+import UnliftIO.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 
 -- * Stamp
 
@@ -58,7 +58,7 @@ record :: Recording -> IORef (Seq a) -> (Tick -> a) -> IO ()
 record Silent _ _ = pure ()
 record rec ref mk = do
   c <- next rec
-  modifyIORef' ref (|> mk c)
+  atomicModifyIORef' ref \s -> (s |> mk c, ())
 {-# INLINE record #-}
 
 -- | Read back a buffer's entries, in append order.

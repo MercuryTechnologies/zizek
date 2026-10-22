@@ -177,7 +177,7 @@ data TestCase = TestCase
 recordDraw :: TestCase -> Var -> IO ()
 recordDraw tc v = case tc.recording of
   Tick.Silent -> pure ()
-  Tick.Active _ -> modifyIORef' tc.draws (v :)
+  Tick.Active _ -> atomicModifyIORef' tc.draws \vs -> (v : vs, ())
 {-# INLINE recordDraw #-}
 
 -- | Take and clear the pending draw provenance, oldest-first.
@@ -191,7 +191,7 @@ takeDraws tc = case tc.recording of
 forgetDraw :: TestCase -> Var -> IO ()
 forgetDraw tc v = case tc.recording of
   Tick.Silent -> pure ()
-  Tick.Active _ -> modifyIORef' tc.draws (List.delete v)
+  Tick.Active _ -> atomicModifyIORef' tc.draws \vs -> (List.delete v vs, ())
 
 -- * Filter attempts
 
