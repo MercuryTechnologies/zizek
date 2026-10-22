@@ -38,20 +38,26 @@ import Prettyprinter qualified as PP
 -- attaches under the nearest preceding shallower note, keeping its own
 -- (deeper) stamp. The renderer indents by depth /difference/, so such
 -- orphans land at the same column as before regrouping.
+--
+-- A negative depth groups as depth 0.
 groupByDepth :: [Note] -> Forest Note
 groupByDepth = fst . go 0
   where
     -- Consume notes at @level@ or deeper; return the forest built from them
-    -- and the remaining (shallower) notes.
+    -- and the remaining (shallower) notes. Clamping at 0 keeps a negative
+    -- depth from ending the top-level loop, which would drop every later note.
     go :: Int -> [Note] -> (Forest Note, [Note])
     go level = \case
       [] -> ([], [])
       n : rest
-        | n.depth < level -> ([], n : rest)
+        | depthOf n < level -> ([], n : rest)
         | otherwise ->
-            let (children, rest') = go (n.depth + 1) rest
+            let (children, rest') = go (depthOf n + 1) rest
                 (siblings, rest'') = go level rest'
              in (Node n children : siblings, rest'')
+
+    depthOf :: Note -> Int
+    depthOf n = max 0 n.depth
 
 -- | One depth-0 subtree of a journal: a header note (or bare top-level note)
 -- plus its flattened body, draw numbers pre-assigned journal-wide so

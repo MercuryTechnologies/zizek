@@ -316,6 +316,10 @@ spec = do
       shape (groupByDepth [at 0 "s1", at 2 "deep"])
         `shouldBe` [Node "s1" [Node "deep" []]]
 
+    it "groups a negative depth as depth 0 without dropping later notes" $ do
+      shape (groupByDepth [at 0 "a", at (-1) "b", at 1 "c"])
+        `shouldBe` [Node "a" [], Node "b" [Node "c" []]]
+
     it "preserves journal order under pre-order flattening" $ do
       let ns = [at 0 "a", at 1 "b", at 2 "c", at 1 "d", at 0 "e", at 2 "f"]
       concatMap flatten (shape (groupByDepth ns)) `shouldBe` fmap (.text) ns
