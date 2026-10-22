@@ -16,7 +16,7 @@ import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import GHC.Stack (withFrozenCallStack)
 import Hegel.Collection qualified as Collection
-import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
+import Hegel.Gen.Builder (Build (..), HasMaxSize (..), HasMinSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
@@ -34,8 +34,10 @@ data IntMapBuilder v = IntMapBuilder
 intMap :: Gen Int -> Gen v -> IntMapBuilder v
 intMap k v = IntMapBuilder {mKeys = k, mValues = v, mMinSize = 0, mMaxSize = Nothing}
 
-instance HasSize (IntMapBuilder v) where
+instance HasMinSize (IntMapBuilder v) where
   minSize n b = b {mMinSize = n}
+
+instance HasMaxSize (IntMapBuilder v) where
   maxSize n b = b {mMaxSize = Just n}
 
 instance Build (IntMapBuilder v) (IntMap v) where

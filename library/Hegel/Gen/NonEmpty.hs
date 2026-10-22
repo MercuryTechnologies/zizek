@@ -16,7 +16,7 @@ import Data.Text qualified as T
 import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Collection qualified as Collection
 import Hegel.Exception (Diagnostic (..))
-import Hegel.Gen.Builder (Build (..), HasSize (..), ValidationError (..), checkSizeBounds)
+import Hegel.Gen.Builder (Build (..), HasMaxSize (..), HasMinSize (..), ValidationError (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
@@ -36,8 +36,10 @@ data NonEmptyBuilder a = NonEmptyBuilder
 nonEmpty :: Gen a -> NonEmptyBuilder a
 nonEmpty g = NonEmptyBuilder {neElement = g, neMinSize = 1, neMaxSize = Nothing}
 
-instance HasSize (NonEmptyBuilder a) where
+instance HasMinSize (NonEmptyBuilder a) where
   minSize n b = b {neMinSize = n}
+
+instance HasMaxSize (NonEmptyBuilder a) where
   maxSize n b = b {neMaxSize = Just n}
 
 instance Build (NonEmptyBuilder a) (NonEmpty a) where

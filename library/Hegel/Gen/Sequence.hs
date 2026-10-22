@@ -28,7 +28,7 @@ import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Collection (Collection)
 import Hegel.Collection qualified as Collection
 import Hegel.Exception (Diagnostic (..), ValidationError (..))
-import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
+import Hegel.Gen.Builder (Build (..), HasMaxSize (..), HasMinSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (Label (..), drawInteger, spanLabel)
 import Hegel.Internal.TestCase (TestCase)
@@ -60,8 +60,10 @@ subsequence :: [a] -> SubsequenceBuilder a
 subsequence xs =
   SubsequenceBuilder {subElements = Vector.fromList xs, subMinSize = 0, subMaxSize = Nothing}
 
-instance HasSize (SubsequenceBuilder a) where
+instance HasMinSize (SubsequenceBuilder a) where
   minSize n b = b {subMinSize = n}
+
+instance HasMaxSize (SubsequenceBuilder a) where
   maxSize n b = b {subMaxSize = Just n}
 
 instance Build (SubsequenceBuilder a) [a] where
@@ -108,8 +110,10 @@ withReplacement b = b {smpReplacement = True}
 withoutReplacement :: SampleBuilder a -> SampleBuilder a
 withoutReplacement b = b {smpReplacement = False}
 
-instance HasSize (SampleBuilder a) where
+instance HasMinSize (SampleBuilder a) where
   minSize n b = b {smpMinSize = n}
+
+instance HasMaxSize (SampleBuilder a) where
   maxSize n b = b {smpMaxSize = Just n}
 
 instance Build (SampleBuilder a) [a] where

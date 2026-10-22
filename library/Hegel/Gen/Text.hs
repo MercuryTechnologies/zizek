@@ -16,7 +16,7 @@ where
 
 import Data.Text (Text)
 import GHC.Stack (withFrozenCallStack)
-import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
+import Hegel.Gen.Builder (Build (..), HasMaxSize (..), HasMinSize (..), checkSizeBounds)
 import Hegel.Gen.Char (CharBuilder, HasAlphabet (..), buildCharTextGen)
 import Hegel.Gen.Internal (Gen (..), drawInline)
 import Hegel.Gen.Internal.String (stringGen)
@@ -34,8 +34,10 @@ data TextBuilder = TextBuilder
 text :: TextBuilder
 text = TextBuilder {bMinSize = 0, bMaxSize = Nothing, bAlphabet = Nothing}
 
-instance HasSize TextBuilder where
+instance HasMinSize TextBuilder where
   minSize n b = b {bMinSize = n}
+
+instance HasMaxSize TextBuilder where
   maxSize n b = b {bMaxSize = Just n}
 
 -- | Restrict the generated characters to those described by the given

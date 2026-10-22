@@ -80,7 +80,7 @@ The minimum supported GHC version is 9.10, enforced by the `base` bound in `zize
   - A run whose primary failure has no reproduce blob reports `Unreproducible`.
 - `library/Hegel/Gen.hs` is the generator umbrella, designed for `import Hegel.Gen qualified as Gen`.
 - `library/Hegel/Gen/Internal.hs` defines the `Gen` GADT and the combinators (`oneOf`, `element`, `frequency`, `filtered`, `mapMaybe`, `defer`, `assume`, `draw`, …).
-- `library/Hegel/Gen/Builder.hs` defines the `Build`, `HasMin`, `HasMax`, `HasSize`, and `HasYear` typeclasses. `HasAlphabet` lives in `Hegel.Gen.Char`.
+- `library/Hegel/Gen/Builder.hs` defines the `Build`, `HasMin`, `HasMax`, `HasMinSize`, `HasMaxSize`, `HasDepth`, and `HasYear` typeclasses, plus the `HasSize` constraint synonym for builders with both length bounds. `HasAlphabet` lives in `Hegel.Gen.Char`.
 - `library/Hegel/Gen/*.hs` are the per-category builders. `Hegel.Gen.Recursive` builds recursively defined data over an engine-owned depth cap, leaf budget, and retry protocol.
 - `library/Hegel/Gen/Internal/String.hs` is the shared construction pattern for string-generator leaves, which build one engine string-generator handle per `Gen` value.
 - `library/Hegel/Collection.hs` is the `libhegel`-managed variable-length collection handle that the list, set, and map generators use.
@@ -124,7 +124,7 @@ g4 = Gen.binary & Gen.minSize 4 & Gen.maxSize 64     & Gen.build
 g5 = Gen.bool                                        & Gen.build
 ```
 
-The `Build`, `HasMin`, `HasMax`, `HasSize`, and `HasYear` typeclasses in `Hegel.Gen.Builder`, plus `HasAlphabet` in `Hegel.Gen.Char` for the text and regex builders, provide the shared modifier vocabulary. Builder-specific modifiers are plain functions on their builder type:
+The `Build`, `HasMin`, `HasMax`, `HasMinSize`, `HasMaxSize`, `HasDepth`, and `HasYear` typeclasses in `Hegel.Gen.Builder`, plus `HasAlphabet` in `Hegel.Gen.Char` for the text and regex builders, provide the shared modifier vocabulary. Builder-specific modifiers are plain functions on their builder type:
 
 - float: `exclusiveMin bound`, `exclusiveMax bound`, `disallowNan`, `disallowInfinity`
 - char: `codec`, `minCodepoint`, `maxCodepoint`, `categories`, `excludeCategories`, `includeCharacters`, `excludeCharacters`
@@ -134,7 +134,7 @@ The `Build`, `HasMin`, `HasMax`, `HasSize`, and `HasYear` typeclasses in `Hegel.
 - datetime: `onDay`
 - bool: `weighted`
 - list: `unique`
-- recursive: `maxDepth`, `maxLeaves`
+- recursive: `maxLeaves`
 - sample: `withReplacement`, `withoutReplacement`
 
 The duration builder takes its bounds through `min` and `max`, and `milliseconds`, `seconds`, `minutes`, and `hours` build those bound values, as in `Gen.duration & Gen.max (Gen.minutes 5)`.

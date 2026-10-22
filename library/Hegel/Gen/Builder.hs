@@ -8,7 +8,10 @@ module Hegel.Gen.Builder
   ( Build (..),
     HasMin (..),
     HasMax (..),
-    HasSize (..),
+    HasMinSize (..),
+    HasMaxSize (..),
+    HasSize,
+    HasDepth (..),
     HasYear (..),
 
     -- * Validation
@@ -44,10 +47,20 @@ class HasMin b a | b -> a where
 class HasMax b a | b -> a where
   max :: a -> b -> b
 
--- | Builders that accept length bounds.
-class HasSize b where
+-- | Builders that accept a lower length bound.
+class HasMinSize b where
   minSize :: Int -> b -> b
+
+-- | Builders that accept an upper length bound.
+class HasMaxSize b where
   maxSize :: Int -> b -> b
+
+-- | Builders that accept both length bounds.
+type HasSize b = (HasMinSize b, HasMaxSize b)
+
+-- | Builders that accept a bound on how deeply their values nest.
+class HasDepth b where
+  maxDepth :: Int -> b -> b
 
 -- | Builders that accept bounds expressed as whole calendar years.
 class HasYear b where

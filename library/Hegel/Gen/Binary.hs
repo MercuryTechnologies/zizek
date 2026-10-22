@@ -11,7 +11,7 @@ where
 
 import Data.ByteString (ByteString)
 import GHC.Stack (withFrozenCallStack)
-import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
+import Hegel.Gen.Builder (Build (..), HasMaxSize (..), HasMinSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..))
 import Hegel.Internal.DataSource (Label (LabelBinary), drawBytes, spanLabel)
 
@@ -25,8 +25,10 @@ data BinaryBuilder = BinaryBuilder
 binary :: BinaryBuilder
 binary = BinaryBuilder {bMinSize = 0, bMaxSize = Nothing}
 
-instance HasSize BinaryBuilder where
+instance HasMinSize BinaryBuilder where
   minSize n b = b {bMinSize = n}
+
+instance HasMaxSize BinaryBuilder where
   maxSize n b = b {bMaxSize = Just n}
 
 instance Build BinaryBuilder ByteString where

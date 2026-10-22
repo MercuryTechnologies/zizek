@@ -14,7 +14,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import GHC.Stack (withFrozenCallStack)
 import Hegel.Collection qualified as Collection
-import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
+import Hegel.Gen.Builder (Build (..), HasMaxSize (..), HasMinSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
@@ -30,8 +30,10 @@ data SetBuilder a = SetBuilder
 set :: Gen a -> SetBuilder a
 set g = SetBuilder {sElement = g, sMinSize = 0, sMaxSize = Nothing}
 
-instance HasSize (SetBuilder a) where
+instance HasMinSize (SetBuilder a) where
   minSize n b = b {sMinSize = n}
+
+instance HasMaxSize (SetBuilder a) where
   maxSize n b = b {sMaxSize = Just n}
 
 instance (Ord a) => Build (SetBuilder a) (Set a) where

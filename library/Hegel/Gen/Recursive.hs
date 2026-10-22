@@ -14,7 +14,6 @@
 module Hegel.Gen.Recursive
   ( RecursiveBuilder,
     recursive,
-    maxDepth,
     maxLeaves,
     RecursionContext (..),
 
@@ -43,7 +42,7 @@ import Data.Word (Word64)
 import Foreign (Ptr)
 import GHC.Stack (HasCallStack, callStack, withFrozenCallStack)
 import Hegel.Exception (Diagnostic (..))
-import Hegel.Gen.Builder (Build (..), ValidationError (..), checkNonNegativeNamed)
+import Hegel.Gen.Builder (Build (..), HasDepth (..), ValidationError (..), checkNonNegativeNamed)
 import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.Control (AttemptMispriced (..), LeafBudgetExceeded (..))
 import Hegel.Internal.DataSource
@@ -95,9 +94,9 @@ recursive :: Gen a -> (RecursionContext -> Gen a -> Gen a) -> RecursiveBuilder a
 recursive leaf branch =
   RecursiveBuilder {rLeaf = leaf, rBranch = branch, rMaxDepth = 32, rMaxLeaves = 100}
 
--- | Set the maximum nesting depth of branches produced by a generator.
-maxDepth :: Int -> RecursiveBuilder a -> RecursiveBuilder a
-maxDepth n b = b {rMaxDepth = n}
+-- | The maximum nesting depth of branches produced by a generator.
+instance HasDepth (RecursiveBuilder a) where
+  maxDepth n b = b {rMaxDepth = n}
 
 -- | Set the maximum number of leaves the generator should produce, which must
 -- be at least 1 or drawing throws 'ValidationError'.

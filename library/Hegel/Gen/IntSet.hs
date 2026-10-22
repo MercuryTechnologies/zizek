@@ -14,7 +14,7 @@ import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import GHC.Stack (withFrozenCallStack)
 import Hegel.Collection qualified as Collection
-import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
+import Hegel.Gen.Builder (Build (..), HasMaxSize (..), HasMinSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
@@ -30,8 +30,10 @@ data IntSetBuilder = IntSetBuilder
 intSet :: Gen Int -> IntSetBuilder
 intSet g = IntSetBuilder {sElement = g, sMinSize = 0, sMaxSize = Nothing}
 
-instance HasSize IntSetBuilder where
+instance HasMinSize IntSetBuilder where
   minSize n b = b {sMinSize = n}
+
+instance HasMaxSize IntSetBuilder where
   maxSize n b = b {sMaxSize = Just n}
 
 instance Build IntSetBuilder IntSet where

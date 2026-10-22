@@ -14,7 +14,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import GHC.Stack (withFrozenCallStack)
 import Hegel.Collection qualified as Collection
-import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
+import Hegel.Gen.Builder (Build (..), HasMaxSize (..), HasMinSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 import Prelude hiding (map)
@@ -32,8 +32,10 @@ data MapBuilder k v = MapBuilder
 map :: Gen k -> Gen v -> MapBuilder k v
 map k v = MapBuilder {mKeys = k, mValues = v, mMinSize = 0, mMaxSize = Nothing}
 
-instance HasSize (MapBuilder k v) where
+instance HasMinSize (MapBuilder k v) where
   minSize n b = b {mMinSize = n}
+
+instance HasMaxSize (MapBuilder k v) where
   maxSize n b = b {mMaxSize = Just n}
 
 instance (Ord k) => Build (MapBuilder k v) (Map k v) where

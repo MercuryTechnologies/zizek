@@ -15,7 +15,7 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.Hashable (Hashable)
 import GHC.Stack (withFrozenCallStack)
 import Hegel.Collection qualified as Collection
-import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
+import Hegel.Gen.Builder (Build (..), HasMaxSize (..), HasMinSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
@@ -32,8 +32,10 @@ data HashMapBuilder k v = HashMapBuilder
 hashMap :: Gen k -> Gen v -> HashMapBuilder k v
 hashMap k v = HashMapBuilder {mKeys = k, mValues = v, mMinSize = 0, mMaxSize = Nothing}
 
-instance HasSize (HashMapBuilder k v) where
+instance HasMinSize (HashMapBuilder k v) where
   minSize n b = b {mMinSize = n}
+
+instance HasMaxSize (HashMapBuilder k v) where
   maxSize n b = b {mMaxSize = Just n}
 
 instance (Hashable k) => Build (HashMapBuilder k v) (HashMap k v) where

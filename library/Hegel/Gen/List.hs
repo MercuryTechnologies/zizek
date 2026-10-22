@@ -13,7 +13,7 @@ where
 
 import GHC.Stack (withFrozenCallStack)
 import Hegel.Collection qualified as Collection
-import Hegel.Gen.Builder (Build (..), HasSize (..), checkSizeBounds)
+import Hegel.Gen.Builder (Build (..), HasMaxSize (..), HasMinSize (..), checkSizeBounds)
 import Hegel.Gen.Internal (Gen (..), draw, labelOf)
 import Hegel.Internal.DataSource (Label (..), combineLabels, spanLabel)
 
@@ -37,8 +37,10 @@ list g = ListBuilder {lElement = g, lMinSize = 0, lMaxSize = Nothing, lUnique = 
 unique :: (a -> a -> Bool) -> ListBuilder a -> ListBuilder a
 unique eq b = b {lUnique = Just eq}
 
-instance HasSize (ListBuilder a) where
+instance HasMinSize (ListBuilder a) where
   minSize n b = b {lMinSize = n}
+
+instance HasMaxSize (ListBuilder a) where
   maxSize n b = b {lMaxSize = Just n}
 
 instance Build (ListBuilder a) [a] where

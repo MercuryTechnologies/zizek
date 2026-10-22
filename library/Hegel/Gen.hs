@@ -28,7 +28,10 @@ module Hegel.Gen
     Build (build),
     HasMin (min),
     HasMax (max),
-    HasSize (minSize, maxSize),
+    HasMinSize (minSize),
+    HasMaxSize (maxSize),
+    HasSize,
+    HasDepth (maxDepth),
     HasYear (minYear, maxYear),
     HasAlphabet (alphabet),
 
@@ -89,7 +92,6 @@ module Hegel.Gen
     -- * Recursive
     RecursiveBuilder,
     recursive,
-    maxDepth,
     maxLeaves,
     RecursionContext (..),
 
@@ -205,7 +207,7 @@ where
 
 import Hegel.Gen.Binary (BinaryBuilder, binary)
 import Hegel.Gen.Bool (BoolBuilder, bool, weighted)
-import Hegel.Gen.Builder (Build (..), HasMax (..), HasMin (..), HasSize (..), HasYear (..), ValidationError (..))
+import Hegel.Gen.Builder (Build (..), HasDepth (..), HasMax (..), HasMaxSize (..), HasMin (..), HasMinSize (..), HasSize, HasYear (..), ValidationError (..))
 import Hegel.Gen.Char
   ( CharBuilder,
     Codec (..),
@@ -271,7 +273,7 @@ import Hegel.Gen.Internal
 import Hegel.Gen.List (ListBuilder, list, unique)
 import Hegel.Gen.Map (MapBuilder, map)
 import Hegel.Gen.NonEmpty (NonEmptyBuilder, nonEmpty)
-import Hegel.Gen.Recursive (RecursionContext (..), RecursiveBuilder, maxDepth, maxLeaves, recursive)
+import Hegel.Gen.Recursive (RecursionContext (..), RecursiveBuilder, maxLeaves, recursive)
 import Hegel.Gen.Regex (RegexBuilder, fullMatch, regex)
 import Hegel.Gen.Sequence
   ( SampleBuilder,
