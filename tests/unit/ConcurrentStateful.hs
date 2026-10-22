@@ -365,6 +365,18 @@ behaviorSpec = describe "run (behavior)" do
     ("round" `T.isInfixOf` rendered) `shouldBe` True
     ("worker" `T.isInfixOf` rendered) `shouldBe` True
 
+  it "attributes a step to the group of the same-named rule that ran" do
+    let inAlpha, inBeta :: Concurrent.Rule Counter IO
+        inAlpha = Concurrent.grouped "step" "alpha" \_ -> assert False "ran alpha"
+        inBeta = Concurrent.grouped "step" "beta" \_ -> assert False "ran beta"
+        machine = Concurrent.Machine {initial = pure (Counter 0), rules = [inAlpha, inBeta], invariants = [], stepCount = Concurrent.defaultStepCount}
+    report <- check def {testCases = Just 50} (Concurrent.run (Concurrent.fixed 2) machine)
+    evidence <- expectCaptured report.result
+    let expectedGroup = if evidence.message == "ran alpha" then "alpha" else "beta"
+        groups = [g | Note {kind = StepOrigin _ _ g} <- evidence.notes]
+    groups `shouldSatisfy` (not . null)
+    groups `shouldSatisfy` all (== Just expectedGroup)
+
 -- | A model carrying both the racy shared counter and the ground-truth
 -- attempt count, for 'behaviorSpec's lost-update race.
 data RaceModel = RaceModel

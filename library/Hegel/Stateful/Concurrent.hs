@@ -194,18 +194,19 @@ mergeByClock :: [Note] -> [Event] -> [WorkerEntry]
 mergeByClock notes events = sortOn entryClock (map EntryNote notes <> map EntryEvent events)
 
 -- | Fold one worker's notes and pool events into the root journal and event
--- buffer. @groupOf@ resolves a rule's name to its concurrency group, for the
--- 'StepOrigin' note this attaches to each folded header.
-foldWorkerRound :: TestCase -> (Note -> IO ()) -> IORef Int -> Int -> Int -> (Text -> Maybe Text) -> [Note] -> [Event] -> IO ()
-foldWorkerRound rootTc sink stepCounter roundIdx workerIdx groupOf notes events =
+-- buffer. A worker's dispatch records each step's rule group in a
+-- placeholder 'StepOrigin' note after its header, which this fills in with
+-- the round and worker.
+foldWorkerRound :: TestCase -> (Note -> IO ()) -> IORef Int -> Int -> Int -> [Note] -> [Event] -> IO ()
+foldWorkerRound rootTc sink stepCounter roundIdx workerIdx notes events =
   for_ (mergeByClock notes events) \case
     EntryNote n -> case n.kind of
       StepHeader _ ruleName -> do
         idx <- atomicModifyIORef' stepCounter \i -> (i + 1, i + 1)
         headerClock <- Tick.next rootTc.recording
         sink Note {kind = StepHeader idx ruleName, text = stepText idx ruleName, loc = n.loc, depth = n.depth, clock = headerClock}
+      StepOrigin _ _ group -> do
         originClock <- Tick.next rootTc.recording
-        let group = groupOf ruleName
         sink
           Note
             { kind = StepOrigin roundIdx (workerIdx + 1) group,
@@ -257,14 +258,6 @@ run bounds machine = withFrozenCallStack $ do
   let tc = env.testCase
       (_groupNames, groupIds) = internGroups (map (.group) machine.rules)
       indexedRules = zip [0 ..] machine.rules
-
-      -- Resolves a rule's name to its concurrency group, for
-      -- 'foldWorkerRound''s 'StepOrigin' note; assumes rule names are
-      -- unique within one machine, same as every other name-keyed display
-      -- in this report.
-      groupOf :: Text -> Maybe Text
-      groupOf name = Map.findWithDefault Nothing name ruleGroups
-      ruleGroups = Map.fromList [(r.name, r.group) | r <- machine.rules]
 
       -- Every invariant's draws (and any failure) run on the root test
       -- case, ambient journal untouched: unlike a worker's dispatch, only
@@ -320,6 +313,10 @@ run bounds machine = withFrozenCallStack $ do
                         -- round once the round has run, knows this step's true
                         -- global number (see 'foldWorkerRound').
                         note (StepHeader 0 matchedRule.name) Nothing matchedRule.name
+                        -- Likewise a placeholder: the group comes from the
+                        -- dispatched rule itself, and the fold supplies the
+                        -- round and worker.
+                        note (StepOrigin 0 0 matchedRule.group) Nothing ""
                         nested (withFailureNoteIn workerJournal (withScope InStep (matchedRule.apply s0)))
                     )
                     `E.onException` void (collectLeaks workerForks)
@@ -345,7 +342,7 @@ run bounds machine = withFrozenCallStack $ do
               for_ (zip3 [0 :: Int ..] clones workerJournals) \(workerIdx, clone, (_workerJournal, drainNotes)) -> do
                 notes <- drainNotes
                 events <- Tick.drainAndReset clone.events
-                foldWorkerRound tc sink stepCounter roundIdx workerIdx groupOf notes events
+                foldWorkerRound tc sink stepCounter roundIdx workerIdx notes events
               pure (Just roundIdx)
 
           roundLoop = do
