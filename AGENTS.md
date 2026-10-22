@@ -71,6 +71,8 @@ The minimum supported GHC version is 9.10, enforced by the `base` bound in `zize
 - `library/Hegel/Profile.hs` is process-wide profile control, designed for qualified import. `register` saves a `Settings` as a named profile, `setDefault`/`clearDefault` choose the profile `default` resolves to, and `resolve` fills every engine field of a `Settings` in from the engine.
 - `library/Hegel/Replay.hs` encodes and decodes the replay tokens a failure report prints, and `library/Hegel/Internal/Replay.hs` defines the token type itself.
 - `library/Hegel/Alphabet.hs` provides curated character alphabets, such as hex digits, for `HasAlphabet` builders.
+- `library/Hegel/Grammar.hs` loads a grammar written in Lark's syntax with `readFile`, designed for qualified import. It reads the root file and every file its imports reach into an immutable `Source`, so a syntax error or a missing relative import throws `GrammarError` before any property runs. Errors only compiling can find, such as an import cycle or an undefined rule, throw `ValidationError` when the generator first draws. `Source` and the gather loop live in `library/Hegel/Internal/Grammar.hs`.
+- `library/Hegel/Gen/Grammar.hs` builds a `Gen Text` from a `Source` with `Gen.grammar`. It compiles the grammar once per `Gen` value and labels its span by the grammar's content and start symbol, so the shrinker never swaps strings between grammars.
 - `library/Hegel/Internal/Settings.hs` manages settings handles. `withResolvedSettings` resolves a profile, applies a `Settings`' overrides, and reads back what the runner acts on as `Resolved`. An unknown profile or a malformed `hegel.toml` or environment variable becomes a `SettingsError`.
 - `library/Hegel/Internal/RunnerConfig.hs` resolves the replay request and the Tasty option overrides that sit on top of a property's `Settings`.
 - `library/Hegel/Runner.hs` drives the engine: `check`, `checkWithProgress`, `replay` of a `ReplayToken`, `sample`, and `samples`.
@@ -124,11 +126,12 @@ g4 = Gen.binary & Gen.minSize 4 & Gen.maxSize 64     & Gen.build
 g5 = Gen.bool                                        & Gen.build
 ```
 
-The `Build`, `HasMin`, `HasMax`, `HasMinSize`, `HasMaxSize`, `HasDepth`, and `HasYear` typeclasses in `Hegel.Gen.Builder`, plus `HasAlphabet` in `Hegel.Gen.Char` for the text and regex builders, provide the shared modifier vocabulary. Builder-specific modifiers are plain functions on their builder type:
+The `Build`, `HasMin`, `HasMax`, `HasMinSize`, `HasMaxSize`, `HasDepth`, and `HasYear` typeclasses in `Hegel.Gen.Builder`, plus `HasAlphabet` in `Hegel.Gen.Char` for the text, regex, and grammar builders, provide the shared modifier vocabulary. Builder-specific modifiers are plain functions on their builder type:
 
 - float: `exclusiveMin bound`, `exclusiveMax bound`, `disallowNan`, `disallowInfinity`
 - char: `codec`, `minCodepoint`, `maxCodepoint`, `categories`, `excludeCategories`, `includeCharacters`, `excludeCharacters`
 - regex: `fullMatch`
+- grammar: `startSymbol`
 - uuid: `version`
 - domain: `maxLength`
 - datetime: `onDay`
@@ -141,7 +144,7 @@ The duration builder takes its bounds through `min` and `max`, and `milliseconds
 
 Applying an inapplicable modifier (e.g. `Gen.uuid & Gen.min 0`) is a type error. There are no `*Options` records on the public API.
 
-Builder families beyond the sample above: `text`, `char`, `regex`, `uuid`, `uri`/`uriText`, `domain`, `email`, `date`, `time`, `datetime`, `duration`, `recursive`, and the collections (`list`, `nonEmpty`, `set`/`hashSet`/`intSet`, `map`/`hashMap`/`intMap`), plus the sequence builders `subsequence` and `sample` over a fixed list. Choice and conditional combinators (`oneOf`, `element`, `permutation`, `frequency`, `filtered`, `mapMaybe`, `just`, `defer`, `enum`/`enumBounded`, `maybe`, `either`) are not builders. They produce `Gen` values directly, with no `& Gen.build`.
+Builder families beyond the sample above: `text`, `char`, `regex`, `grammar`, `uuid`, `uri`/`uriText`, `domain`, `email`, `date`, `time`, `datetime`, `duration`, `recursive`, and the collections (`list`, `nonEmpty`, `set`/`hashSet`/`intSet`, `map`/`hashMap`/`intMap`), plus the sequence builders `subsequence` and `sample` over a fixed list. Choice and conditional combinators (`oneOf`, `element`, `permutation`, `frequency`, `filtered`, `mapMaybe`, `just`, `defer`, `enum`/`enumBounded`, `maybe`, `either`) are not builders. They produce `Gen` values directly, with no `& Gen.build`.
 
 ## Documentation & Comment Style
 
@@ -260,7 +263,7 @@ Both integrations fill in `Settings.testLocation` from the call site, which the 
 
 ### Test Suites
 
-- `tests/unit/` is the `unit` cabal suite, tasty wrapping hspec specs. It covers generators, property checks, report, source, and event-log rendering, control signals, stateful and concurrent stateful testing, pool events, the trace IR, branches and forks, finalizers and resources, sampling, database replay, runner configuration, and the framework integrations. Its `Main` sets `HEGEL_DATABASE=disabled`, so tests that don't override the database store nothing.
+- `tests/unit/` is the `unit` cabal suite, tasty wrapping hspec specs. It covers generators, grammar loading, property checks, report, source, and event-log rendering, control signals, stateful and concurrent stateful testing, pool events, the trace IR, branches and forks, finalizers and resources, sampling, database replay, runner configuration, and the framework integrations. Its `Main` sets `HEGEL_DATABASE=disabled`, so tests that don't override the database store nothing.
 - `tests/ffi/` is the `ffi` cabal suite: wire-level checks and `hegel_string_t` round trips, plus two closed-world guards compiled with `-Werror`. `cbits/wire_enum_guard.c` fails the build if `libhegel` adds an enum variant. `cbits/ffi_signature_guard.c` copies the C prototype of every function `Raw` binds, so it fails the build if `libhegel` changes one. A new binding needs a line there.
 - `tests/string-gen-handles/` is the `string-gen-handles` cabal suite. It asserts that unreferenced string-generator handles get GC-reclaimed. Run it with `cabal test zizek:string-gen-handles --flag census`; without the flag every case is pending. It runs in its own process because the assertion is flaky inside the shared `unit` binary, as its module header explains.
 - `tests/profile/` is the `profile-hegel` executable: deterministic named workloads for profiling the Haskell-side hot paths, driven by the `just profile-*` recipes. It is not a test suite, and a completed run always exits 0. The scenario table is `scenarios` in `tests/profile/Main.hs`, which `profile-hegel --list` prints.

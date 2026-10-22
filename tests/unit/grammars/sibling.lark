@@ -1,0 +1,3 @@
+%import .letters.letter
+
+start: letter+

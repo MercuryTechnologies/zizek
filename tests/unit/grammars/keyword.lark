@@ -1,0 +1,3 @@
+start: "if" | "else" | WORD
+
+WORD: /[a-z]+/

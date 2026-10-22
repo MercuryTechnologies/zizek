@@ -181,6 +181,11 @@ module Hegel.Gen
     regex,
     fullMatch,
 
+    -- * Grammar
+    GrammarBuilder,
+    grammar,
+    startSymbol,
+
     -- * Choice
     oneOf,
     element,
@@ -235,6 +240,7 @@ import Hegel.Gen.Float
     exclusiveMin,
     float,
   )
+import Hegel.Gen.Grammar (GrammarBuilder, grammar, startSymbol)
 import Hegel.Gen.HashMap (HashMapBuilder, hashMap)
 import Hegel.Gen.HashSet (HashSetBuilder, hashSet)
 import Hegel.Gen.IntMap (IntMapBuilder, intMap)

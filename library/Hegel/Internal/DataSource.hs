@@ -3,6 +3,7 @@
 module Hegel.Internal.DataSource
   ( -- * Generation
     HegelStringGenerator,
+    HegelGrammar,
     HegelCollection,
     HegelPool,
     HegelStateMachine,
@@ -17,12 +18,14 @@ module Hegel.Internal.DataSource
     drawTime,
     drawDatetime,
     drawString,
+    drawGrammar,
     TextSpec (..),
     buildTextGen,
     buildRegexGen,
     buildEmailGen,
     buildUrlGen,
     buildDomainGen,
+    followHostUnicode,
 
     -- * String-generator handle census
     -- $census
@@ -371,15 +374,34 @@ drawString tc genFP =
   withForeignPtr genFP \genPtr ->
     withSlotOf tc.slot \outResult -> do
       hegel_generate_string tc.handle.ctx tc.handle.ptr genPtr outResult >>= handleReturnCode tc
-      -- See 'drawBytes's comment: 'finally' guards the same
-      -- draw-then-free-the-engine-buffer window against a throwing
-      -- 'BS.packCStringLen' or an async exception.
-      bs <- String.peekBytes outResult `finally` void (hegel_owned_string_free tc.handle.ctx outResult)
-      case TE.decodeUtf8' bs of
-        Right t -> pure t
-        Left err ->
-          throwIO
-            InvariantViolation {detail = "libhegel: non-UTF-8 string draw (" <> T.pack (show err) <> ")"}
+      takeOwnedText tc outResult
+
+-- | Draw a string from a compiled grammar, capped at the grammar's own
+-- maximum size.
+--
+-- Throws 'TestStopped' on exhaustion, 'AssumeRejected' when the draw rejects
+-- the test case, 'Hegel.Exception.HegelError' with 'HEGEL_E_INVALID_ARG' when
+-- the grammar can't produce any string within its cap, and
+-- 'InvariantViolation' if the engine's UTF-8 guarantee somehow doesn't hold.
+drawGrammar :: TestCase -> ForeignPtr HegelGrammar -> IO Text
+drawGrammar tc grammarFP =
+  withForeignPtr grammarFP \grammarPtr ->
+    withSlotOf tc.slot \outResult -> do
+      hegel_generate_grammar tc.handle.ctx tc.handle.ptr grammarPtr 0 outResult >>= handleReturnCode tc
+      takeOwnedText tc outResult
+
+-- | Decode and free a string a successful draw wrote into the slot.
+takeOwnedText :: TestCase -> Ptr HegelOwnedString -> IO Text
+takeOwnedText tc outResult = do
+  -- See 'drawBytes's comment: 'finally' guards the same
+  -- draw-then-free-the-engine-buffer window against a throwing
+  -- 'BS.packCStringLen' or an async exception.
+  bs <- String.peekBytes outResult `finally` void (hegel_owned_string_free tc.handle.ctx outResult)
+  case TE.decodeUtf8' bs of
+    Right t -> pure t
+    Left err ->
+      throwIO
+        InvariantViolation {detail = "libhegel: non-UTF-8 string draw (" <> T.pack (show err) <> ")"}
 
 -- * String-generator construction
 
@@ -937,6 +959,7 @@ data Label
   | LabelEmail
   | LabelUrl
   | LabelDomain
+  | LabelGrammar
   | LabelUuid
   | LabelDate
   | LabelTime
@@ -978,6 +1001,7 @@ labelName = \case
   LabelEmail -> "zizek.email"
   LabelUrl -> "zizek.url"
   LabelDomain -> "zizek.domain"
+  LabelGrammar -> "zizek.grammar"
   LabelUuid -> "zizek.uuid"
   LabelDate -> "zizek.date"
   LabelTime -> "zizek.time"

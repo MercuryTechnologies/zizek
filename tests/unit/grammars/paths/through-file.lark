@@ -1,0 +1,3 @@
+%import .notdir.x.thing
+
+start: thing

@@ -1,0 +1,3 @@
+%import .lib.broken.thing
+
+start: thing

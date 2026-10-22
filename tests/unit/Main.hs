@@ -10,6 +10,7 @@ import DiffRendering qualified
 import Finalizers qualified
 import ForkProperties qualified
 import GenValidation qualified
+import GrammarGenerators qualified
 import Integrations qualified
 import KeyedProperties qualified
 import LogRendering qualified
@@ -46,6 +47,7 @@ main = do
   basics <- testSpec "basic properties" BasicProperties.spec
   standards <- testSpec "standard generators" StandardGenerators.spec
   genValidation <- testSpec "generator validation" GenValidation.spec
+  grammarGenerators <- testSpec "grammar generators" GrammarGenerators.spec
   properties <- testSpec "property monad" PropertyChecks.spec
   replay <- testSpec "database replay" DatabaseReplay.spec
   keyed <- testSpec "keyed properties" KeyedProperties.spec
@@ -80,6 +82,7 @@ main = do
           basics,
           standards,
           genValidation,
+          grammarGenerators,
           properties,
           replay,
           keyed,

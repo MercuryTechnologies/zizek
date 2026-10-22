@@ -1,0 +1,3 @@
+%import .nowhere.thing
+
+start: thing

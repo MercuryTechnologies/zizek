@@ -6,6 +6,7 @@ module Hegel.Exception
     ValidationError (..),
     SettingsError (..),
     MalformedTest (..),
+    GrammarError (..),
     HegelError (..),
     InvariantViolation (..),
   )
@@ -38,6 +39,10 @@ newtype SettingsError = SettingsError Diagnostic
 newtype MalformedTest = MalformedTest Diagnostic
   deriving stock (Show)
 
+-- | A grammar file that could not be loaded, naming the file and the reason.
+newtype GrammarError = GrammarError Diagnostic
+  deriving stock (Show)
+
 instance Exception ValidationError where
   displayException (ValidationError d) = renderDiagnostic "ValidationError" d
 
@@ -46,6 +51,9 @@ instance Exception SettingsError where
 
 instance Exception MalformedTest where
   displayException (MalformedTest d) = renderDiagnostic "MalformedTest" d
+
+instance Exception GrammarError where
+  displayException (GrammarError d) = renderDiagnostic "GrammarError" d
 
 renderDiagnostic :: Text -> Diagnostic -> String
 renderDiagnostic category d =

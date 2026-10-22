@@ -1,0 +1,2 @@
+start: pair*
+pair: "(" start ")"

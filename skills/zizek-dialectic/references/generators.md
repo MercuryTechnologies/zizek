@@ -79,6 +79,22 @@ trees =
 
 The branch function's first argument, a `RecursionContext`, gives the current `depth` and the configured `maxDepth` for branches that should change shape as they nest.
 
+## Strings from a grammar
+
+To test a parser or printer with syntactically valid input, write the input's grammar in Lark's syntax and load it with `Hegel.Grammar.readFile`, imported qualified. `Gen.grammar` builds a `Gen Text` from it. Load the grammar once, outside the property, since loading reads files and throws on a syntax error or a missing import.
+
+```haskell
+import Hegel.Grammar qualified as Grammar
+
+spec = do
+  calc <- runIO (Grammar.readFile "tests/grammars/calc.lark")
+  it "round-trips every expression" $
+    prop (Gen.grammar calc & Gen.maxSize 200 & Gen.build) \src ->
+      (parse . render =<< parse src) `shouldBe` parse src
+```
+
+Imports resolve against the root file's directory, and `%import common.INT` and the other bundled Lark grammars need no file. `Gen.startSymbol` derives from a rule other than `start`. `Gen.maxSize` caps the string's length, `Gen.maxDepth` caps how deeply rules nest, and `Gen.alphabet` restricts its characters. A counterexample shrinks through its derivation, so it usually arrives as the shortest string that still fails. A grammar only produces valid input, so pair it with an unconstrained `Gen.text` test for the parser's error paths.
+
 ## Values from a fixed list
 
 - `Gen.permutation xs` reorders a list and shrinks toward the original order.

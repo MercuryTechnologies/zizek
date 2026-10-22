@@ -1,0 +1,3 @@
+%import .latin1.start -> other
+
+start: other
