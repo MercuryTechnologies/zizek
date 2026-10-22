@@ -387,9 +387,12 @@ spec = do
         prop (Gen.domain & Gen.maxLength 3 & Gen.build) (\_ -> pure ())
           `shouldThrow` messageContains "Hegel.Gen.Domain"
 
-      it "rejects a maxLength above RFC 1035's ceiling" $ do
-        prop (Gen.domain & Gen.maxLength 256 & Gen.build) (\_ -> pure ())
+      it "rejects a maxLength above DNS's 253-character ceiling" $ do
+        prop (Gen.domain & Gen.maxLength 254 & Gen.build) (\_ -> pure ())
           `shouldThrow` messageContains "Hegel.Gen.Domain"
+
+      it "accepts a maxLength of exactly 253" $ do
+        prop (Gen.domain & Gen.maxLength 253 & Gen.build) (\_ -> pure ())
 
     describe "Gen.double" $ do
       it "rejects an exclusive bound that empties the range" $ do

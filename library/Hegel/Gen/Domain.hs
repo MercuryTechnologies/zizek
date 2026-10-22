@@ -33,11 +33,12 @@ newtype DomainBuilder = DomainBuilder
   }
 
 -- | Generate a random fully qualified domain name. Default max length is
--- 255, RFC 1035's maximum.
+-- 253, the longest domain name DNS allows in text form.
 domain :: DomainBuilder
-domain = DomainBuilder {bMaxLength = 255}
+domain = DomainBuilder {bMaxLength = 253}
 
--- | Set the maximum total length of the generated domain name, in @[4, 255]@.
+-- | Set the maximum total length of the generated domain name, which must be in
+-- @[4, 253]@ or drawing throws 'ValidationError'.
 maxLength :: Int -> DomainBuilder -> DomainBuilder
 maxLength n b = b {bMaxLength = n}
 
@@ -52,7 +53,7 @@ instance Build DomainBuilder Text where
       domainGen = withFrozenCallStack (stringGen "Hegel.Gen.Domain" (spanLabel LabelDomain) (buildDomainGen (fromIntegral b.bMaxLength)))
       checkMaxLength :: (HasCallStack) => Int -> IO ()
       checkMaxLength n
-        | n < 4 || n > 255 =
+        | n < 4 || n > 253 =
             throwIO
-              (ValidationError Diagnostic {context = "Hegel.Gen.Domain", detail = "maxLength must be in [4, 255]", values = [("maxLength", T.pack (show n))], callStack = callStack})
+              (ValidationError Diagnostic {context = "Hegel.Gen.Domain", detail = "maxLength must be in [4, 253]", values = [("maxLength", T.pack (show n))], callStack = callStack})
         | otherwise = pure ()

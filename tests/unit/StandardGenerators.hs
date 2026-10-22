@@ -288,6 +288,10 @@ spec = do
         t `shouldSatisfy` (not . T.null)
         t `shouldSatisfy` T.isInfixOf "."
 
+    it "stays within 253 characters by default" $ do
+      prop (Gen.domain & Gen.build) $ \t ->
+        T.length t `shouldSatisfy` (<= 253)
+
     it "respects maxLength" $ do
       prop (Gen.domain & Gen.maxLength 30 & Gen.build) $ \t ->
         T.length t `shouldSatisfy` (<= 30)
